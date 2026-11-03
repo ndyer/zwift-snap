@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Stub for wine, wineboot, winetricks, winepath, wineserver, wget and gamemoderun.
+# Installed under all of these names in the test bin directory, it behaves according to
+# the variables FAKE_* and records every call in $TEST_DIR/calls.log.
+set -u
+
+cmd="$(basename "$0")"
+echo "${cmd} $*" >> "${TEST_DIR}/calls.log"
+
+install_dir="${ZWIFT_INSTALL_DIR}"
+
+write_version() {
+    mkdir -p "${install_dir}"
+    echo "<Zwift sversion=\"$1 (1)\"/>" > "${install_dir}/Zwift_ver_cur.xml"
+}
+
+case "${cmd}" in
+    wineboot)
+        mkdir -p "${WINEPREFIX}/drive_c/users/tester"
+        ;;
+    winetricks)
+        if [[ ${FAKE_WINETRICKS_FAIL:-0} -eq 1 ]]; then
+            echo "winetricks: failing as requested" >&2
+            exit 1
+        fi
+        ;;
+    wget)
+        if [[ " $* " == *"Zwift_ver_cur.xml"* ]]; then
+            if [[ -n ${FAKE_LATEST:-} ]]; then
+                echo "<Zwift sversion=\"${FAKE_LATEST} (1)\" gbranch=\"x\"/>"
+                exit 0
+            fi
+            exit 4 # no network
+        fi
+        if [[ " $* " == *"ZwiftSetup.exe"* ]]; then
+            out="${2:-}"
+            [[ ${1:-} == "-O" ]] && echo "setup" > "${out}"
+            exit 0
+        fi
+        ;;
+    wineserver)
+        if [[ ${1:-} == "-k" ]]; then touch "${TEST_DIR}/launcher-done"; fi
+        ;;
+    winepath)
+        echo "C:\\Program Files (x86)\\Zwift"
+        ;;
+    wine)
+        case "${1:-}" in
+            *ZwiftSetup.exe)
+                if [[ ${FAKE_SETUP_FAIL:-0} -eq 1 ]]; then exit 1; fi
+                mkdir -p "${install_dir}"
+                touch "${install_dir}/ZwiftApp.exe" "${install_dir}/ZwiftLauncher.exe"
+                write_version "${FAKE_INSTALLED_BY_SETUP:-1.100.0}"
+                ;;
+            start)
+                if [[ " $* " == *"ZwiftLauncher.exe"* ]]; then rm -f "${TEST_DIR}/launcher-done"; fi
+                if [[ " $* " == *"ZwiftLauncher.exe"* ]] && [[ -n ${FAKE_UPDATE_RESULT:-} ]]; then
+                    # the launcher updates Zwift in the background
+                    write_version "${FAKE_UPDATE_RESULT}"
+                fi
+                ;;
+            tasklist)
+                # the launcher and the game are running, the game stops after FAKE_GAME_POLLS checks
+                image="${*: -1}"
+                image="${image#IMAGENAME eq }"
+                if [[ ${image} == "ZwiftApp.exe" ]]; then
+                    n="$(cat "${TEST_DIR}/game-polls" 2> /dev/null || echo 0)"
+                    echo $((n + 1)) > "${TEST_DIR}/game-polls"
+                    if [[ ${n} -ge ${FAKE_GAME_POLLS:-2} ]]; then exit 0; fi
+                    echo "Image Name: ZwiftApp.exe"
+                    echo "PID: 4242"
+                elif [[ ${image} == "ZwiftLauncher.exe" ]]; then
+                    if [[ ${FAKE_LAUNCHER_STAYS:-0} -eq 1 ]] || [[ ! -f ${TEST_DIR}/launcher-done ]]; then
+                        echo "Image Name: ZwiftLauncher.exe"
+                        echo "PID: 4141"
+                    fi
+                fi
+                ;;
+            taskkill)
+                if [[ " $* " == *"ZwiftLauncher.exe"* ]]; then touch "${TEST_DIR}/launcher-done"; fi
+                ;;
+        esac
+        ;;
+esac
+exit 0

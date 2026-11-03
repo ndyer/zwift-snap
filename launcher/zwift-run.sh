@@ -1,45 +1,86 @@
 #!/usr/bin/env bash
-# Start Zwift using wine.
+# Install or update Zwift when needed, then start it using wine.
 # Adapted from https://github.com/netbrain/zwift (Unlicense).
 # Unlike upstream, there is no automatic login: the user logs in through the Zwift window.
 set -uo pipefail
 
 # shellcheck source=launcher/zwift-common.sh
 source "${SNAP}/bin/zwift-common.sh"
+# shellcheck source=launcher/zwift-gui.sh
+source "${SNAP}/bin/zwift-gui.sh"
+# shellcheck source=launcher/zwift-setup.sh
+source "${SNAP}/bin/zwift-setup.sh"
 
 readonly ZWIFT_OVERRIDE_RESOLUTION="${ZWIFT_OVERRIDE_RESOLUTION:-}"
 readonly ZWIFT_NO_GAMEMODE="${ZWIFT_NO_GAMEMODE:-1}"
 
-####################################
-#### Install Zwift on first run #####
+init_log || echo "Unable to create the log file ${ZWIFT_LOG}" >&2
 
-if ! [[ -f "${ZWIFT_INSTALL_DIR}/ZwiftApp.exe" ]]; then
-    msgbox info "Zwift is not installed yet, installing it first (this takes a while)"
-    if ! "${SNAP}/bin/zwift-update.sh" --install; then
-        msgbox error "Zwift installation failed, run zwift again to retry"
-        exit 1
-    fi
-    # the wine prefix and user directories did not exist before the installation
-    resolve_wine_user_dirs
+##########################################
+##### Automatically stop wine server #####
+
+cleanup() {
+    gui_progress_stop
+    msgbox info "Stopping wine server"
+    wineserver -k || true
+    cleanup_install_artifacts
+}
+
+trap cleanup EXIT
+# closing the progress dialog with Cancel, or Ctrl+C in a terminal, ends zwift
+trap 'exit 1' TERM INT HUP
+
+# a failure ends zwift, the error dialog was already shown by the failing step
+fail() {
+    msgbox error "${1:?}"
+    exit 1
+}
+
+#################################################
+##### Display and graphics, before any dialog #####
+
+# the wayland socket must be reachable before the first dialog opens
+if [[ ${XDG_SESSION_TYPE:-x11} == "wayland" ]]; then
+    link_wayland_socket
+fi
+gui_progress_start
+
+if ! configure_graphics; then
+    gui_failure "Zwift" "Failed to configure graphics." "" 1
+    fail "Failed to configure graphics"
 fi
 
-if ! [[ -f "${ZWIFT_INSTALL_DIR}/ZwiftApp.exe" ]]; then
-    msgbox error "ZwiftApp.exe not found after installation. Was the installer cancelled?"
-    exit 1
+###################################
+##### Install or update Zwift #####
+
+if ! zwift_installed; then
+    # A fresh installation is not updated afterwards, Zwift starts the version it installed
+    while ! install_zwift; do
+        if ! gui_failure "Zwift installation failed" \
+            "Zwift could not be installed. Check the log and your network connection." "Retry" 1; then
+            fail "Zwift installation failed"
+        fi
+    done
+    resolve_wine_user_dirs
+elif ! update_zwift_if_needed; then
+    # Zwift is installed and can still be started, so an update problem is not fatal
+    if ! gui_failure "Zwift update failed" \
+        "Zwift could not be updated. The installed version can still be started." "Launch anyway" 0; then
+        fail "Zwift update failed"
+    fi
+fi
+
+if ! zwift_installed; then
+    fail "ZwiftApp.exe not found, is Zwift installed?"
 fi
 
 readonly ZWIFT_PREFS_FILE="${ZWIFT_DATA_DIR}/prefs.xml"
 
 if ! zwift_wine_dir="$(winepath -w "${ZWIFT_INSTALL_DIR}")" || [[ -z ${zwift_wine_dir} ]]; then
-    msgbox error "Failed to convert Zwift installation path to win32 path for wine"
-    exit 1
+    gui_failure "Zwift" "Failed to find the Zwift installation." "" 1
+    fail "Failed to convert Zwift installation path to win32 path for wine"
 else
     msgbox debug "Zwift installation wine path is: ${zwift_wine_dir}"
-fi
-
-if ! configure_graphics; then
-    msgbox error "Failed to configure graphics"
-    exit 1
 fi
 
 ######################################
@@ -61,16 +102,6 @@ if [[ -n ${ZWIFT_OVERRIDE_RESOLUTION} ]]; then
     fi
 fi
 
-##########################################
-##### Automatically stop wine server #####
-
-cleanup() {
-    msgbox info "Stopping wine server"
-    wineserver -k || true
-}
-
-trap cleanup EXIT
-
 ##################################
 ##### Start Zwift using wine #####
 
@@ -83,16 +114,16 @@ trap cleanup EXIT
 # 3. Use runfromprocess to launch ZwiftApp.exe with the launcher process as parent
 # 4. Kill ZwiftLauncher.exe
 
-msgbox info "Starting Zwift launcher using wine"
+gui_progress 95 "Starting Zwift"
 
 if ! wine start /d "${zwift_wine_dir}" ZwiftLauncher.exe SilentLaunch || ! wait_until_wine_task_started ZwiftLauncher.exe; then
-    msgbox error "Failed to start Zwift launcher using wine!"
-    exit 1
+    gui_failure "Zwift failed to start" "The Zwift launcher did not start." "" 1
+    fail "Failed to start Zwift launcher using wine!"
 fi
 
 if ! launcher_pid="$(wine_task_pid ZwiftLauncher.exe)"; then
-    msgbox error "Unable to get launcher process id. Did it crash?"
-    exit 1
+    gui_failure "Zwift failed to start" "The Zwift launcher stopped right after it started." "" 1
+    fail "Unable to get launcher process id. Did it crash?"
 fi
 
 msgbox ok "Zwift launcher started using wine"
@@ -109,8 +140,8 @@ else
 fi
 
 if ! "${zwift_cmd[@]}" || ! wait_until_wine_task_started ZwiftApp.exe; then
-    msgbox error "Failed to start Zwift using wine!"
-    exit 1
+    gui_failure "Zwift failed to start" "Zwift did not start." "" 1
+    fail "Failed to start Zwift using wine!"
 fi
 
 msgbox info "Killing Zwift launcher and background tasks"
@@ -118,13 +149,16 @@ kill_wine_tasks ZwiftLauncher.exe ZwiftWindowsCrashHandler.exe
 
 msgbox ok "Zwift started using wine"
 
+# the Zwift window is up, the progress dialog is not needed any more
+gui_progress_stop
+
 ##################################
 ##### Wait for Zwift to exit #####
 
 counter=1
 while is_wine_task_running ZwiftApp.exe; do
     msgbox debug "Waiting for Zwift to exit... ($((counter++)))"
-    sleep 5
+    sleep "${ZWIFT_POLL_INTERVAL}"
 done
 
 msgbox info "Zwift closed, exiting"

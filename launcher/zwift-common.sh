@@ -25,10 +25,27 @@ fi
 
 readonly VERBOSITY="${VERBOSITY:-1}"
 readonly WINE_DISABLE_EGL="${WINE_DISABLE_EGL:-0}"
+# seconds between checks while waiting for wine tasks, only changed by the tests
+readonly ZWIFT_POLL_INTERVAL="${ZWIFT_POLL_INTERVAL:-5}"
+
+# Log with the output of the install and update commands and all messages.
+# It is shown by the Show log button of the error dialogs.
+ZWIFT_LOG="${ZWIFT_LOG:-${SNAP_USER_COMMON:-/tmp}/zwift.log}"
+export ZWIFT_LOG
+
+init_log() {
+    mkdir -p "$(dirname "${ZWIFT_LOG}")" || return 1
+    if [[ -f ${ZWIFT_LOG} ]]; then mv -f "${ZWIFT_LOG}" "${ZWIFT_LOG}.1"; fi
+    : > "${ZWIFT_LOG}"
+}
 
 msgbox() {
     local type="${1:?}" # Type: info, ok, warning, error, debug
     local msg="${2:?}"  # Message: the message to display
+
+    if [[ -f ${ZWIFT_LOG} ]]; then
+        printf '[%(%T)T] %s: %s\n' -1 "${type}" "${msg}" >> "${ZWIFT_LOG}"
+    fi
 
     local timestamp=""
     [[ ${VERBOSITY} -ge 2 ]] && printf -v timestamp '%(%T)T|' -1
