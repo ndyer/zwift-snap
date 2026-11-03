@@ -60,7 +60,8 @@ and `DEBUG`.
   scanner backends. `usr/lib/*/samba` must stay, `ntlm_auth` needs it.
 - Not tested: the build with the latest fixes, wine under `$SNAP`, the first-run installation, the update, the dialogs and gameplay.
 - `snap/gui/zwift.png` is a generated placeholder icon.
-- Smart trainers and other Bluetooth or ANT+ devices must be connected through the Zwift
-  companion app.
+- The snap plugs the `bluez` interface for Bluetooth devices, but that is untested. The
+  `joystick` interface is not plugged, so game controllers are not available. Smart trainers
+  and ANT+ devices must be connected through the Zwift companion app.
 - WineHQ removes old builds, so the pinned `wine-devel` version in `snap/snapcraft.yaml`
   will eventually need bumping.

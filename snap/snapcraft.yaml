@@ -13,8 +13,9 @@ description: |
 
   A progress window shows the installation. Every start checks for a newer
   Zwift version and updates it before Zwift starts. Log in through the Zwift
-  window. Bluetooth and ANT+ devices are not supported directly, use the Zwift
-  companion app to connect smart trainers.
+  window. The snap plugs the bluez interface for Bluetooth devices, which is
+  untested. ANT+ devices are not supported directly, use the Zwift companion
+  app to connect smart trainers.
 
   Graphics drivers come from the mesa-2404 snap through the gpu-2404 interface.
   Install it and connect the interface if it is not done automatically:
@@ -68,9 +69,9 @@ apps:
       - bin/wine-env.sh
     plugs: &plugs
       - audio-playback
+      - bluez
       - desktop
       - desktop-legacy
-      - joystick
       - network
       - network-bind
       - opengl
