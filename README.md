@@ -50,6 +50,8 @@ the `audio-playback` interface (PulseAudio or PipeWire on the host). To debug au
 
 - The snap is `devmode` and `grade: devel`. Strict confinement has not been attempted.
 - Only amd64 is supported.
+- The wine part prunes man pages, locales, package docs (copyright files are kept) and the sane
+  scanner backends. `usr/lib/*/samba` must stay, `ntlm_auth` needs it.
 - Not tested: the build with the latest fixes, wine under `$SNAP`, `zwift.install` and gameplay.
 - `snap/gui/zwift.png` is a generated placeholder icon.
 - Smart trainers and other Bluetooth or ANT+ devices must be connected through the Zwift

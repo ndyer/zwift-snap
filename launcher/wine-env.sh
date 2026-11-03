@@ -7,6 +7,11 @@ export WINE_ROOT="${SNAP}/opt/wine-devel"
 export PATH="${SNAP}/bin:${WINE_ROOT}/bin:${SNAP}/usr/bin:${SNAP}/usr/games:${PATH}"
 
 # wine is a multilib install: 64-bit and 32-bit libraries must both be found
+#
+# Some Ubuntu libraries find their private helper libraries through an absolute RUNPATH such as
+# /usr/lib/x86_64-linux-gnu/pulseaudio, which does not exist inside the snap:
+# - pulseaudio: libpulse needs libpulsecommon, without it wine has no audio
+# - samba: ntlm_auth (needed by zwift/wine) and its libraries
 libs=(
     "${WINE_ROOT}/lib"
     "${WINE_ROOT}/lib64"
@@ -14,6 +19,9 @@ libs=(
     "${SNAP}/usr/lib/i386-linux-gnu"
     "${SNAP}/lib/x86_64-linux-gnu"
     "${SNAP}/lib/i386-linux-gnu"
+    "${SNAP}/usr/lib/x86_64-linux-gnu/pulseaudio"
+    "${SNAP}/usr/lib/i386-linux-gnu/pulseaudio"
+    "${SNAP}/usr/lib/x86_64-linux-gnu/samba"
 )
 ld_path="$(IFS=:; echo "${libs[*]}")"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}${ld_path}"

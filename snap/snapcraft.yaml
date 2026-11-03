@@ -23,7 +23,7 @@ description: |
 
       sudo snap install mesa-2404
       sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
-version: "0.1"
+version: "0.2"
 license: Unlicense
 contact: https://github.com/netbrain/zwift/issues
 website: https://github.com/netbrain/zwift
@@ -119,6 +119,20 @@ parts:
       - xdg-utils
       # keyboard layouts, without them wine's wayland driver gets no keyboard input
       - xkb-data
+    # Prune files that are not needed at runtime. Do not prune usr/lib/*/samba, it
+    # holds libraries that ntlm_auth needs.
+    prime:
+      - -usr/share/man
+      - -usr/share/info
+      - -usr/share/lintian
+      - -usr/share/locale
+      # sane scanner backends, only pulled in because wine links against libsane
+      - -usr/lib/*/sane
+    override-prime: |
+      craftctl default
+      # keep the copyright files for license compliance, drop the rest of the package docs
+      find "${CRAFT_PRIME}/usr/share/doc" -mindepth 2 ! -name copyright \( -type f -o -type l \) -delete
+      find "${CRAFT_PRIME}/usr/share/doc" -mindepth 1 -type d -empty -delete
 
   winetricks:
     plugin: nil
