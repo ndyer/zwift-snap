@@ -11,16 +11,17 @@ description: |
 
       zwift
 
-  Click through the Zwift installer window, then log in through the Zwift window.
-  Update Zwift later with zwift.update. Bluetooth and ANT+ devices are not
-  supported directly, use the Zwift companion app to connect smart trainers.
+  A progress window shows the installation. Every start checks for a newer
+  Zwift version and updates it before Zwift starts. Log in through the Zwift
+  window. Bluetooth and ANT+ devices are not supported directly, use the Zwift
+  companion app to connect smart trainers.
 
   Graphics drivers come from the mesa-2404 snap through the gpu-2404 interface.
   Install it and connect the interface if it is not done automatically:
 
       sudo snap install mesa-2404
       sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
-version: "0.3"
+version: "0.5"
 license: Unlicense
 contact: https://github.com/netbrain/zwift/issues
 website: https://github.com/netbrain/zwift
@@ -74,10 +75,6 @@ apps:
       - opengl
       - wayland
       - x11
-  update:
-    command: bin/zwift-update.sh --update
-    command-chain: *chain
-    plugs: *plugs
   wine:
     command: opt/wine-devel/bin/wine
     command-chain: *chain
@@ -110,6 +107,8 @@ parts:
       - libdecor-0-0
       - libdecor-0-plugin-1-gtk
       - xdg-utils
+      # progress and error dialogs of the launcher
+      - yad
       # keyboard layouts, without them wine's wayland driver gets no keyboard input
       - xkb-data
     # Prune files that are not needed at runtime. Do not prune usr/lib/*/samba, it

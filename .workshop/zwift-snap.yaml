@@ -16,7 +16,10 @@ actions:
   install: |
     cd /project
     sudo snap install --dangerous --devmode ./zwift_*_amd64.snap
+  test: |
+    cd /project
+    tests/run-tests.sh
   lint: |
     cd /project
-    shellcheck -x launcher/*.sh
+    shellcheck -x launcher/*.sh tests/run-tests.sh tests/scenarios.sh tests/stubs/*
     yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' snap/snapcraft.yaml .workshop/zwift-snap.yaml

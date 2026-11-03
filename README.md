@@ -7,6 +7,13 @@ wine.
 Zwift is proprietary and is **not** included in the snap. It is downloaded from Zwift's
 servers into a wine prefix under `$SNAP_USER_COMMON` the first time you run `zwift`.
 
+Every `zwift` run first makes sure Zwift is installed and up to date, with a progress window
+(yad), and then starts it. The first run installs wine prerequisites and Zwift without any
+prompts, which takes several minutes. Later runs check for a newer Zwift version and update
+it when needed. If the check or update fails you can still launch the installed version.
+The output of all steps is in `$SNAP_USER_COMMON/zwift.log`; the error dialogs have a
+`Show log` button.
+
 There is no automatic login. Log in through the Zwift window.
 
 ## Build
@@ -30,21 +37,20 @@ workshop itself, so use a throwaway workshop.
 workshop run zwift-snap install   # sudo snap install --dangerous --devmode ./zwift_*.snap
 sudo snap install mesa-2404       # graphics userspace, if not installed already
 sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
-zwift                             # first run: wine prefix, winetricks, Zwift installer wizard; then starts Zwift
-zwift.update                      # update Zwift
+zwift                             # installs or updates Zwift when needed, then starts it
 ```
 
 Other apps: `zwift.wine` and `zwift.winecfg`.
 
-The first `zwift` run shows the normal Zwift installer window, click through it. If the
-installation fails or is cancelled, run `zwift` again to retry. Sound goes through
+If the installation fails, the error dialog offers `Retry`. Sound goes through
 the `audio-playback` interface (PulseAudio or PipeWire on the host). To debug audio run
 `WINEDEBUG=+pulse,+mmdevapi zwift`.
 
 ## Environment variables
 
 `ZWIFT_OVERRIDE_RESOLUTION` (for example `1920x1080`), `ZWIFT_NO_GAMEMODE` (default `1`),
-`WINE_DISABLE_EGL`, `ZWIFT_PERMISSIVE_UPDATE`, `VERBOSITY` and `DEBUG`.
+`WINE_DISABLE_EGL`, `ZWIFT_NO_GUI` (set to `1` for no dialogs, only terminal output), `VERBOSITY`
+and `DEBUG`.
 
 ## Status and limitations
 
@@ -52,7 +58,7 @@ the `audio-playback` interface (PulseAudio or PipeWire on the host). To debug au
 - Only amd64 is supported.
 - The wine part prunes man pages, locales, package docs (copyright files are kept) and the sane
   scanner backends. `usr/lib/*/samba` must stay, `ntlm_auth` needs it.
-- Not tested: the build with the latest fixes, wine under `$SNAP`, the first-run installation and gameplay.
+- Not tested: the build with the latest fixes, wine under `$SNAP`, the first-run installation, the update, the dialogs and gameplay.
 - `snap/gui/zwift.png` is a generated placeholder icon.
 - Smart trainers and other Bluetooth or ANT+ devices must be connected through the Zwift
   companion app.
