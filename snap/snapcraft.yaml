@@ -1,0 +1,166 @@
+name: zwift
+title: Zwift
+summary: Run Zwift on Linux using wine
+description: |
+  Unofficial snap packaging of Zwift for Linux, based on the docker image from
+  https://github.com/netbrain/zwift.
+
+  Zwift itself is proprietary and is NOT part of this snap. It is downloaded
+  from Zwift's servers into a wine prefix in your snap data directory the first
+  time you run:
+
+      zwift.install
+
+  After that, start the game with:
+
+      zwift
+
+  and log in through the Zwift window. Bluetooth and ANT+ devices are not
+  supported directly, use the Zwift companion app to connect smart trainers.
+
+  Graphics drivers come from the mesa-2404 snap through the gpu-2404 interface.
+  Install it and connect the interface if it is not done automatically:
+
+      sudo snap install mesa-2404
+      sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
+version: "0.1"
+license: Unlicense
+contact: https://github.com/netbrain/zwift/issues
+website: https://github.com/netbrain/zwift
+base: core24
+grade: devel
+confinement: devmode
+
+platforms:
+  amd64:
+    build-on: [amd64]
+    build-for: [amd64]
+
+package-repositories:
+  # WineHQ repository for Ubuntu 24.04 (key: snap/keys/F987672F.asc)
+  - type: apt
+    architectures: [amd64, i386]
+    url: https://dl.winehq.org/wine-builds/ubuntu
+    suites: [noble]
+    components: [main]
+    key-id: D43F640145369C51D786DDEA76F1A20FF987672F
+
+plugs:
+  gpu-2404:
+    interface: content
+    target: $SNAP/gpu-2404
+    default-provider: mesa-2404
+
+layout:
+  /usr/share/X11/XErrorDB:
+    symlink: $SNAP/gpu-2404/X11/XErrorDB
+
+environment:
+  # winetricks and wine look for helper programs (cabextract, ntlm_auth) in PATH
+  PATH: $SNAP/bin:$SNAP/usr/bin:$SNAP/usr/sbin:$PATH
+
+apps:
+  zwift:
+    command: bin/zwift-run.sh
+    command-chain: &chain
+      - bin/gpu-2404-wrapper
+      - bin/wine-env.sh
+    plugs: &plugs
+      - audio-playback
+      - desktop
+      - desktop-legacy
+      - joystick
+      - network
+      - network-bind
+      - opengl
+      - pulseaudio
+      - wayland
+      - x11
+  install:
+    command: bin/zwift-update.sh --install
+    command-chain: *chain
+    plugs: *plugs
+  update:
+    command: bin/zwift-update.sh --update
+    command-chain: *chain
+    plugs: *plugs
+  wine:
+    command: opt/wine-devel/bin/wine
+    command-chain: *chain
+    plugs: *plugs
+  winecfg:
+    command: opt/wine-devel/bin/wine winecfg
+    command-chain: *chain
+    plugs: *plugs
+
+parts:
+  wine:
+    plugin: nil
+    # Versions are pinned to match the upstream docker image. WineHQ removes
+    # old builds, so bump these together when the build starts failing.
+    stage-packages:
+      - wine-devel=11.21~noble-1
+      - wine-devel-amd64=11.21~noble-1
+      - wine-devel-i386:i386=11.21~noble-1
+      # needed by winetricks
+      - cabextract
+      - ca-certificates
+      - unzip
+      - wget
+      # ntlm_auth, required by zwift/wine
+      - winbind
+      # h264 decoding in video routes (wine needs h264parse)
+      - gstreamer1.0-libav
+      - gstreamer1.0-plugins-bad
+      # wayland client-side window decorations
+      - libdecor-0-0
+      - libdecor-0-plugin-1-gtk
+      - xdg-utils
+
+  winetricks:
+    plugin: nil
+    source: https://raw.githubusercontent.com/Winetricks/winetricks/f3890f670867b5ffbc3938726db45c0f7d16c8ba/src/winetricks
+    source-type: file
+    source-checksum: sha256/672a1ff4442e8691a3ffc0e6860137e201a1d1227e9b3044245f1731e9e9837e
+    override-build: |
+      install -Dm755 "${CRAFT_PART_SRC}/winetricks" "${CRAFT_PART_INSTALL}/bin/winetricks"
+
+  runfromprocess:
+    # Windows helper that starts ZwiftApp.exe with the launcher as parent process.
+    # Ubuntu has no rust windows target packaged, so use rustup for the cross compile.
+    plugin: nil
+    source: https://github.com/quietvoid/runfromprocess-rs.git
+    source-type: git
+    source-commit: a3d003c07d1bd11ff93c4cac96d2c3aa5deb8471
+    build-packages:
+      - ca-certificates
+      - curl
+      - gcc-mingw-w64-x86-64
+    override-build: |
+      export RUSTUP_HOME="${CRAFT_PART_BUILD}/.rustup"
+      export CARGO_HOME="${CRAFT_PART_BUILD}/.cargo"
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --profile minimal --default-toolchain 1.85.0 --target x86_64-pc-windows-gnu
+      "${CARGO_HOME}/bin/cargo" build --target x86_64-pc-windows-gnu --release
+      install -Dm755 target/x86_64-pc-windows-gnu/release/runfromprocess-rs.exe \
+        "${CRAFT_PART_INSTALL}/bin/runfromprocess-rs.exe"
+
+  launcher:
+    plugin: dump
+    source: launcher
+    organize:
+      "*.sh": bin/
+
+  gpu-2404:
+    # Helpers for the gpu-2404 content interface. Pruning is done after all
+    # other parts staged their libraries so nothing shadows the mesa provider.
+    after: [wine, launcher]
+    plugin: dump
+    source: https://github.com/canonical/gpu-snap.git
+    source-type: git
+    source-commit: 84e56217ec137c3f8d7a0e773bb7c39c8fc40f28
+    override-prime: |
+      craftctl default
+      "${CRAFT_PART_SRC}/bin/gpu-2404-cleanup" mesa-2404
+    prime:
+      - bin/gpu-2404-wrapper

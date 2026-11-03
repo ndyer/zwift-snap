@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Zwift
+Comment=Indoor cycling and running virtual training
+Exec=zwift
+Icon=${SNAP}/meta/gui/zwift.png
+Terminal=false
+Categories=Game;Sports;
+StartupWMClass=zwiftapp.exe

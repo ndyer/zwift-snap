@@ -1,2 +1,22 @@
 name: zwift-snap
 base: ubuntu@24.04
+actions:
+  setup: |
+    # snapcraft is installed from the snap store, destructive mode builds in this workshop
+    if ! snap list snapcraft > /dev/null 2>&1; then
+      sudo snap install snapcraft --classic
+    fi
+    sudo apt-get install -y shellcheck yamllint
+  build: |
+    cd /project
+    sudo snapcraft pack --destructive-mode --verbosity=brief "$@"
+  clean: |
+    cd /project
+    sudo snapcraft clean --destructive-mode
+  install: |
+    cd /project
+    sudo snap install --dangerous --devmode ./zwift_*_amd64.snap
+  lint: |
+    cd /project
+    shellcheck -x launcher/*.sh
+    yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' snap/snapcraft.yaml .workshop/zwift-snap.yaml
