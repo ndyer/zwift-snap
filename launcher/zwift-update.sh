@@ -111,11 +111,19 @@ install_zwift() {
     msgbox info "Enabling vulkan renderer for video routes"
     winetricks -q renderer=vulkan || return 1
 
-    msgbox info "Downloading and installing Zwift"
+    msgbox info "Downloading Zwift"
     wget -O "${SETUP_EXE}" https://cdn.zwift.com/app/ZwiftSetup.exe || return 1
-    wine "${SETUP_EXE}" /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL || return 1
+
+    # run the installer with its normal GUI, the user clicks through the wizard
+    msgbox info "Starting the Zwift installer, follow the steps in its window"
+    wine "${SETUP_EXE}" /SP- /NORESTART || return 1
 
     wineserver -k || true # workaround for issue 420, ZwiftLauncher v1.2.0 crashes immediately
+
+    if ! [[ -f "${ZWIFT_INSTALL_DIR}/ZwiftLauncher.exe" ]]; then
+        msgbox error "The installer finished but Zwift is not installed. Was it cancelled?"
+        return 1
+    fi
 }
 
 #########################################
