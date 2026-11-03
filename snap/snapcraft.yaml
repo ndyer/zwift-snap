@@ -21,8 +21,6 @@ description: |
       sudo snap install mesa-2404
       sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
       sudo snap connect zwift:bluez
-      sudo snap connect zwift:hardware-observe
-      sudo snap connect zwift:process-control
 
   The snap plugs the bluez interface for Bluetooth devices, which is
   untested. ANT+ devices are not supported directly, use the Zwift companion
@@ -79,13 +77,9 @@ apps:
       - bluez
       - desktop
       - desktop-legacy
-      # wine reads the power supply and network link state in /sys
-      - hardware-observe
       - network
       - network-bind
       - opengl
-      # wineserver sets the cpu affinity of other threads, the default seccomp policy only allows its own
-      - process-control
       - wayland
       - x11
   wine:

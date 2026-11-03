@@ -38,13 +38,10 @@ workshop run zwift-snap install   # sudo snap install --dangerous ./zwift_*.snap
 sudo snap install mesa-2404       # graphics userspace, if not installed already
 sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
 sudo snap connect zwift:bluez
-sudo snap connect zwift:hardware-observe
-sudo snap connect zwift:process-control
 zwift                             # installs or updates Zwift when needed, then starts it
 ```
 
-`bluez`, `hardware-observe` and `process-control` are not connected automatically. Other apps:
-`zwift.wine` and `zwift.winecfg`.
+`bluez` is not connected automatically. Other apps: `zwift.wine` and `zwift.winecfg`.
 
 To debug confinement problems, install with `workshop run zwift-snap install --devmode` (the
 violations are only logged) and watch them with `snappy-debug`.
@@ -66,17 +63,18 @@ and `DEBUG`.
 
 ## Status and limitations
 
-- The snap is `strict` and `grade: devel`. Strict confinement is untested: it was prepared from
-  the `devmode` violations of `zwift`, the first-run installation was not observed. Wine may
-  be blocked by seccomp, `userfaultfd` (32-bit wine) and `sched_setaffinity` were logged. If it is,
-  install with `--devmode` and report the denials from `snappy-debug`.
+- The snap is `strict` and `grade: devel`. Wine, the first-run installation and audio work under
+  strict confinement without the `home`, `hardware-observe` and `process-control` interfaces,
+  although `userfaultfd` and `sched_setaffinity` show up as seccomp log entries in `devmode`.
+  If something is blocked, install with `--devmode` and report the denials from `snappy-debug`.
 - Only amd64 is supported.
 - The wine part prunes man pages, locales, package docs (copyright files are kept) and the sane
   scanner backends. `usr/lib/*/samba` must stay, `ntlm_auth` needs it.
-- Not tested: the build with the latest fixes, wine under `$SNAP`, the first-run installation, the update, the dialogs and gameplay.
+- Not tested: the update, the dialogs after the first run and gameplay (a ride).
 - `snap/gui/zwift.png` is a generated placeholder icon.
-- The snap plugs the `bluez` interface for Bluetooth devices, but that is untested. The
-  `joystick` interface is not plugged, so game controllers are not available. Smart trainers
-  and ANT+ devices must be connected through the Zwift companion app.
+- Bluetooth does not work yet: with the `bluez` interface connected Zwift reports that the
+  Bluetooth receiver is turned off. The `joystick` interface is not plugged, so game controllers
+  are not available. Smart trainers and ANT+ devices must be connected through the Zwift
+  companion app.
 - WineHQ removes old builds, so the pinned `wine-devel` version in `snap/snapcraft.yaml`
   will eventually need bumping.
