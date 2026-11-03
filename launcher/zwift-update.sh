@@ -2,6 +2,7 @@
 # Install or update Zwift inside the wine prefix.
 # Adapted from https://github.com/netbrain/zwift (Unlicense).
 # Usage: zwift-update.sh --install | --update
+# --install is run by zwift-run.sh the first time zwift is started.
 set -uo pipefail
 
 # shellcheck source=launcher/zwift-common.sh
@@ -105,7 +106,7 @@ install_zwift() {
     resolve_wine_user_dirs
 
     msgbox info "Installing prerequisites using winetricks"
-    winetricks -q corefonts dotnet48 d3dcompiler_47 webview2 || return 1
+    winetricks -q dotnet48 d3dcompiler_47 webview2 || return 1
 
     # video routes need a d3d11 device with video support, wine only provides that with the vulkan renderer
     msgbox info "Enabling vulkan renderer for video routes"
@@ -164,7 +165,7 @@ fi
 msgbox info "Updating Zwift..."
 
 if ! [[ -f "${ZWIFT_INSTALL_DIR}/ZwiftLauncher.exe" ]]; then
-    msgbox error "ZwiftLauncher.exe not found. Is Zwift installed? Run 'zwift.install' first."
+    msgbox error "ZwiftLauncher.exe not found. Is Zwift installed? Run 'zwift' to install it."
     exit 1
 fi
 

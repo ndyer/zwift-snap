@@ -5,7 +5,7 @@ docker image from [netbrain/zwift](https://github.com/netbrain/zwift) and runs Z
 wine.
 
 Zwift is proprietary and is **not** included in the snap. It is downloaded from Zwift's
-servers into a wine prefix under `$SNAP_USER_COMMON` the first time you run `zwift.install`.
+servers into a wine prefix under `$SNAP_USER_COMMON` the first time you run `zwift`.
 
 There is no automatic login. Log in through the Zwift window.
 
@@ -30,14 +30,14 @@ workshop itself, so use a throwaway workshop.
 workshop run zwift-snap install   # sudo snap install --dangerous --devmode ./zwift_*.snap
 sudo snap install mesa-2404       # graphics userspace, if not installed already
 sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
-zwift.install                     # first run only: wine prefix, winetricks, then the Zwift installer wizard
-zwift                             # start Zwift
+zwift                             # first run: wine prefix, winetricks, Zwift installer wizard; then starts Zwift
 zwift.update                      # update Zwift
 ```
 
 Other apps: `zwift.wine` and `zwift.winecfg`.
 
-`zwift.install` shows the normal Zwift installer window, click through it. Sound goes through
+The first `zwift` run shows the normal Zwift installer window, click through it. If the
+installation fails or is cancelled, run `zwift` again to retry. Sound goes through
 the `audio-playback` interface (PulseAudio or PipeWire on the host). To debug audio run
 `WINEDEBUG=+pulse,+mmdevapi zwift`.
 
@@ -52,7 +52,7 @@ the `audio-playback` interface (PulseAudio or PipeWire on the host). To debug au
 - Only amd64 is supported.
 - The wine part prunes man pages, locales, package docs (copyright files are kept) and the sane
   scanner backends. `usr/lib/*/samba` must stay, `ntlm_auth` needs it.
-- Not tested: the build with the latest fixes, wine under `$SNAP`, `zwift.install` and gameplay.
+- Not tested: the build with the latest fixes, wine under `$SNAP`, the first-run installation and gameplay.
 - `snap/gui/zwift.png` is a generated placeholder icon.
 - Smart trainers and other Bluetooth or ANT+ devices must be connected through the Zwift
   companion app.

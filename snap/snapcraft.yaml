@@ -7,15 +7,12 @@ description: |
 
   Zwift itself is proprietary and is NOT part of this snap. It is downloaded
   from Zwift's servers into a wine prefix in your snap data directory the first
-  time you run:
-
-      zwift.install
-
-  After that, start the game with:
+  time you start it with:
 
       zwift
 
-  and log in through the Zwift window. Bluetooth and ANT+ devices are not
+  Click through the Zwift installer window, then log in through the Zwift window.
+  Update Zwift later with zwift.update. Bluetooth and ANT+ devices are not
   supported directly, use the Zwift companion app to connect smart trainers.
 
   Graphics drivers come from the mesa-2404 snap through the gpu-2404 interface.
@@ -23,7 +20,7 @@ description: |
 
       sudo snap install mesa-2404
       sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
-version: "0.2"
+version: "0.3"
 license: Unlicense
 contact: https://github.com/netbrain/zwift/issues
 website: https://github.com/netbrain/zwift
@@ -77,10 +74,6 @@ apps:
       - opengl
       - wayland
       - x11
-  install:
-    command: bin/zwift-update.sh --install
-    command-chain: *chain
-    plugs: *plugs
   update:
     command: bin/zwift-update.sh --update
     command-chain: *chain

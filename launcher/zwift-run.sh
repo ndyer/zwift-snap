@@ -9,15 +9,26 @@ source "${SNAP}/bin/zwift-common.sh"
 
 readonly ZWIFT_OVERRIDE_RESOLUTION="${ZWIFT_OVERRIDE_RESOLUTION:-}"
 readonly ZWIFT_NO_GAMEMODE="${ZWIFT_NO_GAMEMODE:-1}"
-readonly ZWIFT_PREFS_FILE="${ZWIFT_DATA_DIR}/prefs.xml"
 
 ####################################
-#### Verify Zwift is installed #####
+#### Install Zwift on first run #####
 
 if ! [[ -f "${ZWIFT_INSTALL_DIR}/ZwiftApp.exe" ]]; then
-    msgbox error "ZwiftApp.exe not found. Is Zwift installed? Run 'zwift.install' first."
+    msgbox info "Zwift is not installed yet, installing it first (this takes a while)"
+    if ! "${SNAP}/bin/zwift-update.sh" --install; then
+        msgbox error "Zwift installation failed, run zwift again to retry"
+        exit 1
+    fi
+    # the wine prefix and user directories did not exist before the installation
+    resolve_wine_user_dirs
+fi
+
+if ! [[ -f "${ZWIFT_INSTALL_DIR}/ZwiftApp.exe" ]]; then
+    msgbox error "ZwiftApp.exe not found after installation. Was the installer cancelled?"
     exit 1
 fi
+
+readonly ZWIFT_PREFS_FILE="${ZWIFT_DATA_DIR}/prefs.xml"
 
 if ! zwift_wine_dir="$(winepath -w "${ZWIFT_INSTALL_DIR}")" || [[ -z ${zwift_wine_dir} ]]; then
     msgbox error "Failed to convert Zwift installation path to win32 path for wine"
