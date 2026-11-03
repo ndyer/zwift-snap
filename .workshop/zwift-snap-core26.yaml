@@ -1,5 +1,5 @@
-name: zwift-snap
-base: ubuntu@24.04
+name: zwift-snap-core26
+base: ubuntu@26.04
 actions:
   setup: |
     # snapcraft is installed from the snap store, destructive mode builds in this workshop
@@ -23,4 +23,4 @@ actions:
   lint: |
     cd /project
     shellcheck -x launcher/*.sh tests/run-tests.sh tests/scenarios.sh tests/stubs/*
-    yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' snap/snapcraft.yaml .workshop/zwift-snap.yaml
+    yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' snap/snapcraft.yaml .workshop/zwift-snap-core26.yaml

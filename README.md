@@ -20,10 +20,10 @@ The snap is built in destructive mode inside a [Workshop](https://ubuntu.com/wor
 workshop (Ubuntu 24.04).
 
 ```shell
-workshop launch zwift-snap
-workshop run zwift-snap setup     # installs snapcraft (snap store), shellcheck, yamllint
-workshop run zwift-snap build     # sudo snapcraft pack --destructive-mode
-workshop run zwift-snap lint      # shellcheck + yamllint
+workshop launch zwift-snap-core26
+workshop run zwift-snap-core26 setup     # installs snapcraft (snap store), shellcheck, yamllint
+workshop run zwift-snap-core26 build     # sudo snapcraft pack --destructive-mode
+workshop run zwift-snap-core26 lint      # shellcheck + yamllint
 ```
 
 Destructive mode installs build packages (including the WineHQ apt repository) into the
@@ -32,7 +32,7 @@ workshop itself, so use a throwaway workshop.
 ## Install and run
 
 ```shell
-workshop run zwift-snap install   # sudo snap install --dangerous ./zwift_*.snap
+workshop run zwift-snap-core26 install   # sudo snap install --dangerous ./zwift_*.snap
 sudo snap install mesa-2404       # graphics userspace, if not installed already
 sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
 sudo snap connect zwift:bluez
@@ -41,7 +41,7 @@ zwift                             # installs or updates Zwift when needed, then 
 
 `bluez` is not connected automatically. Other apps: `zwift.wine` and `zwift.winecfg`.
 
-To debug confinement problems, install with `workshop run zwift-snap install --devmode` (the
+To debug confinement problems, install with `workshop run zwift-snap-core26 install --devmode` (the
 violations are only logged) and watch them with `snappy-debug`.
 
 The snap has no `home` plug. The folders of the wine user (Desktop, Documents, Downloads, Music,
