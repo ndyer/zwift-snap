@@ -66,6 +66,7 @@ install_zwift() {
 
     # the wine user is only known after the prefix exists
     resolve_wine_user_dirs
+    private_user_dirs || return 1
 
     gui_progress 8 "Installing .NET Framework 4.8, this takes several minutes"
     run_logged winetricks -q dotnet48 || return 1

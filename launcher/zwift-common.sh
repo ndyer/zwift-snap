@@ -97,6 +97,23 @@ resolve_wine_user_dirs() {
 
 resolve_wine_user_dirs
 
+# Wine links the shell folders of the wine user (Desktop, Documents, Downloads, Music, Pictures,
+# Videos) to the folders in the real home directory. The snap has no access to the home
+# directory, so replace these links by plain directories in the wine prefix. Nothing behind a
+# link is touched, only the link itself is removed. Wine creates the links when it creates or
+# updates a prefix, so this runs again at every start.
+private_user_dirs() {
+    local entry
+
+    [[ -n ${WINE_USER_HOME:-} ]] || return 0
+    for entry in "${WINE_USER_HOME}"/*; do
+        [[ -L ${entry} ]] || continue
+        msgbox info "Keeping ${entry##*/} private in the wine prefix instead of linking to $(readlink "${entry}")"
+        rm -f -- "${entry}" || return 1
+        mkdir -p -- "${entry}" || return 1
+    done
+}
+
 #####################################
 ##### Wine task helper functions #####
 

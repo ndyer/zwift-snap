@@ -36,6 +36,21 @@ check "the log file has the messages" has_line "Zwift started using wine" "${ZWI
 check "the installer was asked for a log" has_line "ZwiftSetup.exe .* /LOG=Z:.*ZwiftSetup.log" "${T}/calls.log"
 check "the installer log is in the log file" has_line "Fake Inno Setup log" "${ZWIFT_LOG_FILE}"
 check "the installer log is on the terminal" has_line "Fake Inno Setup log" "${T}/out.log"
+check "the wine Documents folder is private, not a link" test -d "${T}/data/.wine/drive_c/users/tester/Documents" -a ! -L "${T}/data/.wine/drive_c/users/tester/Documents"
+check "the folder behind the old link was not touched" has_line "keep" "${T}/hostdocs/keep.txt"
+
+echo "installed with a prefix that links Documents to the home directory"
+new_env
+install_fake_zwift 1.124.0
+mkdir -p "${T}/hostdocs"
+echo "keep" > "${T}/hostdocs/keep.txt"
+ln -s "${T}/hostdocs" "${T}/data/.wine/drive_c/users/tester/Documents"
+run_zwift FAKE_LATEST=1.124.0
+check "exit code is 0" test "${RC}" -eq 0
+check "the wine Documents folder is private, not a link" test -d "${T}/data/.wine/drive_c/users/tester/Documents" -a ! -L "${T}/data/.wine/drive_c/users/tester/Documents"
+check "the folder behind the old link was not touched" has_line "keep" "${T}/hostdocs/keep.txt"
+check "the change was logged" has_line "Keeping Documents private" "${ZWIFT_LOG_FILE}"
+check "zwift was started" has_line "runfromprocess-rs.exe" "${T}/calls.log"
 
 echo "fresh install: the installer works but the launcher does not download Zwift"
 new_env

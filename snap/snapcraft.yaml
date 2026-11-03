@@ -13,15 +13,22 @@ description: |
 
   A progress window shows the installation. Every start checks for a newer
   Zwift version and updates it before Zwift starts. Log in through the Zwift
-  window. The snap plugs the bluez interface for Bluetooth devices, which is
-  untested. ANT+ devices are not supported directly, use the Zwift companion
-  app to connect smart trainers.
+  window.
 
   Graphics drivers come from the mesa-2404 snap through the gpu-2404 interface.
-  Install it and connect the interface if it is not done automatically:
+  Install it and connect the interfaces that are not connected automatically:
 
       sudo snap install mesa-2404
       sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
+      sudo snap connect zwift:bluez
+      sudo snap connect zwift:hardware-observe
+      sudo snap connect zwift:process-control
+
+  The snap plugs the bluez interface for Bluetooth devices, which is
+  untested. ANT+ devices are not supported directly, use the Zwift companion
+  app to connect smart trainers. The snap has no access to your home
+  directory: the Zwift files (Documents, screenshots, logs) stay in the snap
+  data directory under ~/snap/zwift/common.
 # The version comes from the git tags, see the override-pull of the launcher part
 adopt-info: launcher
 license: Unlicense
@@ -29,7 +36,7 @@ contact: https://github.com/netbrain/zwift/issues
 website: https://github.com/netbrain/zwift
 base: core24
 grade: devel
-confinement: devmode
+confinement: strict
 
 platforms:
   amd64:
@@ -72,9 +79,13 @@ apps:
       - bluez
       - desktop
       - desktop-legacy
+      # wine reads the power supply and network link state in /sys
+      - hardware-observe
       - network
       - network-bind
       - opengl
+      # wineserver sets the cpu affinity of other threads, the default seccomp policy only allows its own
+      - process-control
       - wayland
       - x11
   wine:

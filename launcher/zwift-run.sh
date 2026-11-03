@@ -53,6 +53,9 @@ fi
 ###################################
 ##### Install or update Zwift #####
 
+# a prefix from an earlier run can still link its folders to the home directory
+private_user_dirs || fail "Unable to make the wine user folders private"
+
 if ! zwift_installed; then
     # The installation includes the download of Zwift by the launcher, so it is up to date afterwards
     while ! install_zwift; do

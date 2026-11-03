@@ -17,6 +17,10 @@ write_version() {
 case "${cmd}" in
     wineboot)
         mkdir -p "${WINEPREFIX}/drive_c/users/tester"
+        # like wine: the Documents folder of the wine user is a link to the real home directory
+        mkdir -p "${TEST_DIR}/hostdocs"
+        echo "keep" > "${TEST_DIR}/hostdocs/keep.txt"
+        ln -sfn "${TEST_DIR}/hostdocs" "${WINEPREFIX}/drive_c/users/tester/Documents"
         ;;
     winetricks)
         if [[ ${FAKE_WINETRICKS_FAIL:-0} -eq 1 ]]; then

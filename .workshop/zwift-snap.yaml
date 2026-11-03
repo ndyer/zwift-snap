@@ -15,7 +15,8 @@ actions:
     sudo snapcraft clean --destructive-mode
   install: |
     cd /project
-    sudo snap install --dangerous --devmode ./zwift_*_amd64.snap
+    # pass --devmode to install the strict snap without confinement, for debugging
+    sudo snap install --dangerous "$@" ./zwift_*_amd64.snap
   test: |
     cd /project
     tests/run-tests.sh
