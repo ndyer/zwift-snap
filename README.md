@@ -72,11 +72,15 @@ and `DEBUG`.
   scanner backends. `usr/lib/*/samba` must stay, `ntlm_auth` needs it.
 - Not tested: the update, the dialogs after the first run and gameplay (a ride).
 - `snap/gui/zwift.png` is a generated placeholder icon.
-- Bluetooth does not work in Zwift yet. With the `bluez` interface connected, wine's Bluetooth
+- Bluetooth does not work in Zwift. With the `bluez` interface connected, wine's Bluetooth
   driver (`winebth`) reaches BlueZ and finds the adapter and the nearby devices
-  (`WINEDEBUG=+winebth zwift`), but Zwift still reports that the Bluetooth receiver is turned
-  off. The cause is not known. The `joystick` interface is not plugged, so game controllers
-  are not available. Smart trainers and ANT+ devices must be connected through the Zwift
-  companion app.
+  (`WINEDEBUG=+winebth zwift`), but wine 11.21 does not implement the BLE advertisement watcher
+  (`BluetoothLEAdvertisementWatcher`, `Start`, `put_ScanningMode` and `add_Received` are stubs
+  that return `E_NOTIMPL`) that Zwift uses to scan for devices. Zwift then reports that the
+  Bluetooth receiver is turned off. This is a wine limitation, not a confinement problem. The
+  `bluez` plug is kept so Bluetooth can be tried again with a newer wine: check whether
+  `adv_watcher_Start` in `dlls/windows.devices.bluetooth/advertisement.c` of wine is still a
+  stub. The `joystick` interface is not plugged, so game controllers are not available. Smart
+  trainers and ANT+ devices must be connected through the Zwift companion app.
 - WineHQ removes old builds, so the pinned `wine-devel` version in `snap/snapcraft.yaml`
   will eventually need bumping.
