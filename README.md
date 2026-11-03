@@ -72,8 +72,10 @@ and `DEBUG`.
   scanner backends. `usr/lib/*/samba` must stay, `ntlm_auth` needs it.
 - Not tested: the update, the dialogs after the first run and gameplay (a ride).
 - `snap/gui/zwift.png` is a generated placeholder icon.
-- Bluetooth does not work yet: with the `bluez` interface connected Zwift reports that the
-  Bluetooth receiver is turned off. The `joystick` interface is not plugged, so game controllers
+- Bluetooth does not work in Zwift yet. With the `bluez` interface connected, wine's Bluetooth
+  driver (`winebth`) reaches BlueZ and finds the adapter and the nearby devices
+  (`WINEDEBUG=+winebth zwift`), but Zwift still reports that the Bluetooth receiver is turned
+  off. The cause is not known. The `joystick` interface is not plugged, so game controllers
   are not available. Smart trainers and ANT+ devices must be connected through the Zwift
   companion app.
 - WineHQ removes old builds, so the pinned `wine-devel` version in `snap/snapcraft.yaml`
