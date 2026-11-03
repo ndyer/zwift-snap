@@ -135,6 +135,9 @@ parts:
     build-packages:
       - ca-certificates
       - curl
+      # host linker and C runtime objects (crti.o, Scrt1.o), cargo needs them for build scripts
+      - gcc
+      - libc6-dev
       - gcc-mingw-w64-x86-64
     override-build: |
       export RUSTUP_HOME="${CRAFT_PART_BUILD}/.rustup"

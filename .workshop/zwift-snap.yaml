@@ -9,7 +9,7 @@ actions:
     sudo apt-get install -y shellcheck yamllint
   build: |
     cd /project
-    sudo snapcraft pack --destructive-mode --verbosity=brief "$@"
+    sudo snapcraft pack --destructive-mode "$@"
   clean: |
     cd /project
     sudo snapcraft clean --destructive-mode
