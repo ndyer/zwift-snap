@@ -1,0 +1,7 @@
+*.snap
+parts/
+stage/
+prime/
+.craft/
+snap/.snapcraft/
+.workshop.lock
