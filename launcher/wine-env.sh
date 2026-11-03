@@ -46,4 +46,48 @@ export PULSE_CLIENTCONFIG="${PULSE_CLIENTCONFIG:-${SNAP}/etc/zwift/pulse-client.
 
 mkdir -p "${SNAP_USER_COMMON}" || exit 1
 
+# gdk-pixbuf loaders (yad), same fix as ubuntu/snapcraft-desktop-helpers common/desktop-exports.
+# The loaders.cache that Debian creates in a postinst script is not part of the staged
+# packages, and it holds absolute paths, so it is generated here. It is regenerated when it is
+# missing or points to another snap revision.
+pixbuf_dir="${SNAP}/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0"
+export GDK_PIXBUF_MODULE_FILE="${XDG_CACHE_HOME:-${SNAP_USER_COMMON}/.cache}/gdk-pixbuf-loaders.cache"
+export GDK_PIXBUF_MODULEDIR="${pixbuf_dir}/2.10.0/loaders"
+if [[ -x ${pixbuf_dir}/gdk-pixbuf-query-loaders ]] \
+    && ! grep -qxF "# LoaderDir = ${GDK_PIXBUF_MODULEDIR}" "${GDK_PIXBUF_MODULE_FILE}" 2> /dev/null; then
+    mkdir -p "$(dirname "${GDK_PIXBUF_MODULE_FILE}")" || exit 1
+    # write to a temporary file first so that parallel starts never see a half written cache
+    if "${pixbuf_dir}/gdk-pixbuf-query-loaders" > "${GDK_PIXBUF_MODULE_FILE}.$$"; then
+        mv -f "${GDK_PIXBUF_MODULE_FILE}.$$" "${GDK_PIXBUF_MODULE_FILE}"
+    else
+        rm -f "${GDK_PIXBUF_MODULE_FILE}.$$"
+    fi
+fi
+
+# MIME database, same recipe as ubuntu/snapcraft-desktop-helpers common/desktop-exports.
+# gdk-pixbuf and GTK use it to recognise image files (the png loader, the symbolic icons of the
+# window buttons). The staged shared-mime-info package only has the source files, the
+# mime.cache that update-mime-database builds from them is missing. The database is built in a
+# per revision directory (SNAP_USER_DATA) that is added to XDG_DATA_DIRS. XDG_DATA_HOME is not
+# changed because wine uses it too.
+mime_data_dir="${SNAP_USER_DATA:-${SNAP_USER_COMMON}}/.local/share"
+if [[ ! -f ${SNAP}/usr/share/mime/mime.cache ]] && command -v update-mime-database > /dev/null; then
+    if [[ ! -f ${mime_data_dir}/mime/mime.cache ]]; then
+        mkdir -p "${mime_data_dir}" || exit 1
+        # build in a temporary directory first so that parallel starts never see a half built cache
+        mime_tmp="${mime_data_dir}/mime.$$"
+        rm -rf "${mime_tmp}"
+        if cp -dR --preserve=timestamps "${SNAP}/usr/share/mime" "${mime_tmp}" \
+            && update-mime-database "${mime_tmp}" > /dev/null 2>&1; then
+            rm -rf "${mime_data_dir}/mime"
+            mv -f "${mime_tmp}" "${mime_data_dir}/mime"
+        else
+            rm -rf "${mime_tmp}"
+        fi
+    fi
+    if [[ -f ${mime_data_dir}/mime/mime.cache ]]; then
+        export XDG_DATA_DIRS="${mime_data_dir}${XDG_DATA_DIRS:+:${XDG_DATA_DIRS}}"
+    fi
+fi
+
 exec "$@"

@@ -21,7 +21,7 @@ description: |
 
       sudo snap install mesa-2404
       sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
-version: "0.5"
+version: "0.8"
 license: Unlicense
 contact: https://github.com/netbrain/zwift/issues
 website: https://github.com/netbrain/zwift
