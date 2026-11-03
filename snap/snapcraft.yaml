@@ -2,8 +2,7 @@ name: zwift
 title: Zwift
 summary: Run Zwift on Linux using wine
 description: |
-  Unofficial snap packaging of Zwift for Linux, based on the docker image from
-  https://github.com/netbrain/zwift.
+  Unofficial snap packaging of Zwift for Linux
 
   Zwift itself is proprietary and is NOT part of this snap. It is downloaded
   from Zwift's servers into a wine prefix in your snap data directory the first
@@ -14,24 +13,11 @@ description: |
   A progress window shows the installation. Every start checks for a newer
   Zwift version and updates it before Zwift starts. Log in through the Zwift
   window.
-
-  Graphics drivers come from the mesa-2404 snap through the gpu-2404 interface.
-  Install it and connect the interfaces that are not connected automatically:
-
-      sudo snap install mesa-2404
-      sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
-      sudo snap connect zwift:bluez
-
-  The snap plugs the bluez interface for Bluetooth devices, which is
-  untested. ANT+ devices are not supported directly, use the Zwift companion
-  app to connect smart trainers. The snap has no access to your home
-  directory: the Zwift files (Documents, screenshots, logs) stay in the snap
-  data directory under ~/snap/zwift/common.
 # The version comes from the git tags, see the override-pull of the launcher part
 adopt-info: launcher
 license: Unlicense
-contact: https://github.com/netbrain/zwift/issues
-website: https://github.com/netbrain/zwift
+contact: https://github.com/ndyer/zwift-snap/issues
+website: https://github.com/ndyer/zwift-snap
 base: core24
 grade: devel
 confinement: strict

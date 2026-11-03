@@ -1,14 +1,12 @@
 # Zwift snap
 
-Unofficial snap packaging of [Zwift](https://zwift.com) for Linux. It is based on the
-docker image from [netbrain/zwift](https://github.com/netbrain/zwift) and runs Zwift with
-wine.
+Unofficial snap packaging of [Zwift](https://zwift.com) for Linux.
 
 Zwift is proprietary and is **not** included in the snap. It is downloaded from Zwift's
 servers into a wine prefix under `$SNAP_USER_COMMON` the first time you run `zwift`.
 
-Every `zwift` run first makes sure Zwift is installed and up to date, with a progress window
-(yad), and then starts it. The first run installs wine prerequisites and Zwift without any
+Every `zwift` run first makes sure Zwift is installed and up to date, with a yad progress window,
+and then starts it. The first run installs wine prerequisites and Zwift without any
 prompts, which takes several minutes. Later runs check for a newer Zwift version and update
 it when needed. If the check or update fails you can still launch the installed version.
 The output of all steps is in `$SNAP_USER_COMMON/zwift.log`; the error dialogs have a
@@ -51,9 +49,10 @@ Pictures, Videos) are plain directories in the wine prefix, so the Zwift files a
 `~/snap/zwift/common/.wine/drive_c/users/<user>/`. The launcher replaces the links that wine
 creates to the real home directory, at every start.
 
-If the installation fails, the error dialog offers `Retry`. Sound goes through
-the `audio-playback` interface (PulseAudio or PipeWire on the host). To debug audio run
-`WINEDEBUG=+pulse,+mmdevapi zwift`.
+If the installation fails, the error dialog offers `Retry`.
+
+Sound goes through the `audio-playback` interface (PulseAudio or PipeWire on the host). To
+debug audio run `WINEDEBUG=+pulse,+mmdevapi zwift`.
 
 ## Environment variables
 
