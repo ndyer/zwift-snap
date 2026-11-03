@@ -54,10 +54,17 @@ plugs:
 layout:
   /usr/share/X11/XErrorDB:
     symlink: $SNAP/gpu-2404/X11/XErrorDB
+  # alsa-lib has these paths compiled in, so they must exist at the host locations
+  /usr/share/alsa:
+    bind: $SNAP/usr/share/alsa
+  /usr/lib/x86_64-linux-gnu/alsa-lib:
+    bind: $SNAP/usr/lib/x86_64-linux-gnu/alsa-lib
 
 environment:
   # winetricks and wine look for helper programs (cabextract, ntlm_auth) in PATH
   PATH: $SNAP/bin:$SNAP/usr/bin:$SNAP/usr/sbin:$PATH
+  # keyboard layout data for wine's wayland driver (libxkbcommon)
+  XKB_CONFIG_ROOT: $SNAP/usr/share/X11/xkb
 
 apps:
   zwift:
@@ -116,6 +123,8 @@ parts:
       - libdecor-0-0
       - libdecor-0-plugin-1-gtk
       - xdg-utils
+      # keyboard layouts, without them wine's wayland driver gets no keyboard input
+      - xkb-data
 
   winetricks:
     plugin: nil
