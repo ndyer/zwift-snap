@@ -54,7 +54,7 @@ fi
 ##### Install or update Zwift #####
 
 if ! zwift_installed; then
-    # A fresh installation is not updated afterwards, Zwift starts the version it installed
+    # The installation includes the download of Zwift by the launcher, so it is up to date afterwards
     while ! install_zwift; do
         if ! gui_failure "Zwift installation failed" \
             "Zwift could not be installed. Check the log and your network connection." "Retry" 1; then

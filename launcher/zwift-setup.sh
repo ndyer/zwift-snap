@@ -5,6 +5,8 @@
 
 SETUP_EXE="${SNAP_USER_COMMON:-/tmp}/ZwiftSetup.exe"
 readonly SETUP_EXE
+# After the installation the launcher downloads the game, at most this many polls (240 * 5s = 20 minutes)
+readonly ZWIFT_DOWNLOAD_ITERATIONS="${ZWIFT_DOWNLOAD_ITERATIONS:-240}"
 
 # Run a command with its output in the log and on the terminal. The command runs in the
 # background and is waited for, so the cancel trap of zwift-run.sh runs without delay.
@@ -31,6 +33,8 @@ get_current_version() {
     # if Zwift_ver_cur_filename.txt exists, it holds the true current version filename
     # if it does not exist, use Zwift_ver_cur.xml as fallback
     # if neither exist or contain a valid version, use none (Zwift not installed)
+    # The installer only writes <Zwift version="0.0.0" .../>, a placeholder without sversion,
+    # which also gives none: the game is not downloaded yet.
 
     local version_filename="Zwift_ver_cur.xml"
     if [[ -f "${ZWIFT_INSTALL_DIR}/Zwift_ver_cur_filename.txt" ]]; then
@@ -90,12 +94,35 @@ install_zwift() {
 
     wineserver -k || true # workaround for issue 420, ZwiftLauncher v1.2.0 crashes immediately
 
-    if ! zwift_installed; then
-        msgbox error "The installer finished but Zwift is not installed"
-        msgbox info "Zwift files in the wine prefix:"
-        run_logged find "${WINEPREFIX}/drive_c" -maxdepth 4 -iname '*zwift*' || true
+    # The installer only installs the launcher, with version 0.0.0 as a placeholder. It does not
+    # contain the game, the launcher downloads that, so it is updated like any other update.
+    if [[ ! -f "${ZWIFT_INSTALL_DIR}/ZwiftLauncher.exe" ]]; then
+        msgbox error "The installer finished but the Zwift launcher is not installed"
+        list_zwift_files
         return 1
     fi
+
+    local zwift_latest_version
+    if ! zwift_latest_version="$(get_latest_version)"; then
+        msgbox error "Unable to retrieve the latest Zwift version number, Zwift cannot be downloaded"
+        return 1
+    fi
+
+    msgbox info "Zwift launcher installed, downloading Zwift ${zwift_latest_version}"
+    update_zwift_using_launcher "${zwift_latest_version}" "$(get_current_version)" "${ZWIFT_DOWNLOAD_ITERATIONS}" 90 9 \
+        || return 1
+
+    if ! zwift_installed; then
+        msgbox error "The launcher finished but Zwift is not installed"
+        list_zwift_files
+        return 1
+    fi
+}
+
+# Print the Zwift files in the wine prefix, to see what an installation left behind
+list_zwift_files() {
+    msgbox info "Zwift files in the wine prefix:"
+    run_logged find "${WINEPREFIX}/drive_c" -maxdepth 4 -iname '*zwift*' || true
 }
 
 # Print the log of the Zwift installer, so it is on the terminal and in the zwift log
@@ -110,13 +137,24 @@ show_installer_log() {
     fi
 }
 
-# Update Zwift by letting the Zwift launcher do it. Only called when Zwift is older than the latest version.
+# update_zwift_using_launcher LATEST ORIGINAL [ITERATIONS [PERCENT_START [PERCENT_SPAN]]]
+# Update Zwift by letting the Zwift launcher do it. Only called when Zwift is older than the latest
+# version, or when Zwift was just installed and the launcher has to download it (ORIGINAL is none).
+# The launcher is checked every ZWIFT_POLL_INTERVAL seconds for at most ITERATIONS times, and the
+# progress bar moves from PERCENT_START by PERCENT_SPAN.
 update_zwift_using_launcher() {
     local zwift_latest_version="${1:?}"
     local zwift_original_version="${2:?}"
+    local max_iterations="${3:-60}" # 60 * 5s = 5 minutes max
+    local percent_start="${4:-10}"
+    local percent_span="${5:-80}"
     local zwift_current_version="${zwift_original_version}"
 
-    gui_progress 10 "Updating Zwift from version ${zwift_original_version} to ${zwift_latest_version}"
+    if [[ ${zwift_original_version} == "none" ]]; then
+        gui_progress "${percent_start}" "Downloading Zwift ${zwift_latest_version}, this takes several minutes"
+    else
+        gui_progress "${percent_start}" "Updating Zwift from version ${zwift_original_version} to ${zwift_latest_version}"
+    fi
 
     local zwift_wine_dir
     if ! zwift_wine_dir="$(winepath -w "${ZWIFT_INSTALL_DIR}")" || [[ -z ${zwift_wine_dir} ]]; then
@@ -130,11 +168,10 @@ update_zwift_using_launcher() {
     msgbox ok "Zwift launcher started using wine"
 
     local counter=1
-    local max_iterations=60 # 60 * 5s = 5 minutes max
 
     # also stop if launcher exits before update finishes, so we don't hang forever
     while [[ ${zwift_current_version} == "${zwift_original_version}" ]] && [[ ${counter} -le ${max_iterations} ]] && is_wine_task_running ZwiftLauncher.exe; do
-        gui_progress $((10 + counter * 80 / max_iterations)) "Updating Zwift to version ${zwift_latest_version} (${counter}/${max_iterations})"
+        gui_progress $((percent_start + counter * percent_span / max_iterations)) "Updating Zwift to version ${zwift_latest_version} (${counter}/${max_iterations})"
         sleep "${ZWIFT_POLL_INTERVAL}"
         zwift_current_version="$(get_current_version)"
         ((counter++))
