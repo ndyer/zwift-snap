@@ -78,13 +78,35 @@ install_zwift() {
     run_logged wget -O "${SETUP_EXE}" https://cdn.zwift.com/app/ZwiftSetup.exe || return 1
 
     gui_progress 88 "Installing Zwift"
-    run_logged wine "${SETUP_EXE}" /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL || return 1
+    # The installer is silent, so its own log (Inno Setup /LOG, wine maps Z: to /) is the only way
+    # to see what it did. It is printed below, also when the installer fails.
+    local setup_log="${SNAP_USER_COMMON:-/tmp}/ZwiftSetup.log"
+    local setup_rc=0
+    rm -f -- "${setup_log}"
+    run_logged wine "${SETUP_EXE}" /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL \
+        /LOG="Z:${setup_log//\//\\}" || setup_rc=$?
+    show_installer_log "${setup_log}"
+    [[ ${setup_rc} -eq 0 ]] || return 1
 
     wineserver -k || true # workaround for issue 420, ZwiftLauncher v1.2.0 crashes immediately
 
     if ! zwift_installed; then
         msgbox error "The installer finished but Zwift is not installed"
+        msgbox info "Zwift files in the wine prefix:"
+        run_logged find "${WINEPREFIX}/drive_c" -maxdepth 4 -iname '*zwift*' || true
         return 1
+    fi
+}
+
+# Print the log of the Zwift installer, so it is on the terminal and in the zwift log
+show_installer_log() {
+    local file="${1:?}"
+
+    if [[ -s ${file} ]]; then
+        msgbox info "Zwift installer log:"
+        run_logged cat "${file}" || true
+    else
+        msgbox warning "The Zwift installer wrote no log (${file})"
     fi
 }
 

@@ -48,6 +48,13 @@ case "${cmd}" in
         case "${1:-}" in
             *ZwiftSetup.exe)
                 if [[ ${FAKE_SETUP_FAIL:-0} -eq 1 ]]; then exit 1; fi
+                # like Inno Setup: write the log to the /LOG=Z:\unix\path given
+                for a in "$@"; do
+                    if [[ ${a} == /LOG=Z:* ]]; then
+                        log="${a#/LOG=Z:}"
+                        echo "Fake Inno Setup log" > "${log//\\//}"
+                    fi
+                done
                 mkdir -p "${install_dir}"
                 touch "${install_dir}/ZwiftApp.exe" "${install_dir}/ZwiftLauncher.exe"
                 write_version "${FAKE_INSTALLED_BY_SETUP:-1.100.0}"

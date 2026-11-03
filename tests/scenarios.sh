@@ -31,6 +31,9 @@ check "the progress dialog was closed" has_line "progress-closed" "${T}/yad.log"
 check "no error dialog" lacks_line "dialog:" "${T}/yad.log"
 check "progress text names the steps" has_line "progress: #Installing .NET Framework 4.8" "${T}/yad.log"
 check "the log file has the messages" has_line "Zwift started using wine" "${ZWIFT_LOG_FILE}"
+check "the installer was asked for a log" has_line "ZwiftSetup.exe .* /LOG=Z:.*ZwiftSetup.log" "${T}/calls.log"
+check "the installer log is in the log file" has_line "Fake Inno Setup log" "${ZWIFT_LOG_FILE}"
+check "the installer log is on the terminal" has_line "Fake Inno Setup log" "${T}/out.log"
 
 echo "installed and up to date: no update, launch"
 new_env
