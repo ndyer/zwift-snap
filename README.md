@@ -30,12 +30,16 @@ workshop itself, so use a throwaway workshop.
 workshop run zwift-snap install   # sudo snap install --dangerous --devmode ./zwift_*.snap
 sudo snap install mesa-2404       # graphics userspace, if not installed already
 sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
-zwift.install                     # first run only: wine prefix, winetricks, Zwift
+zwift.install                     # first run only: wine prefix, winetricks, then the Zwift installer wizard
 zwift                             # start Zwift
 zwift.update                      # update Zwift
 ```
 
 Other apps: `zwift.wine` and `zwift.winecfg`.
+
+`zwift.install` shows the normal Zwift installer window, click through it. Sound goes through
+the `audio-playback` interface (PulseAudio or PipeWire on the host). To debug audio run
+`WINEDEBUG=+pulse,+mmdevapi zwift`.
 
 ## Environment variables
 

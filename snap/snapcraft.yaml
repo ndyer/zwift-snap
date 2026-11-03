@@ -54,11 +54,6 @@ plugs:
 layout:
   /usr/share/X11/XErrorDB:
     symlink: $SNAP/gpu-2404/X11/XErrorDB
-  # alsa-lib has these paths compiled in, so they must exist at the host locations
-  /usr/share/alsa:
-    bind: $SNAP/usr/share/alsa
-  /usr/lib/x86_64-linux-gnu/alsa-lib:
-    bind: $SNAP/usr/lib/x86_64-linux-gnu/alsa-lib
 
 environment:
   # winetricks and wine look for helper programs (cabextract, ntlm_auth) in PATH
@@ -80,7 +75,6 @@ apps:
       - network
       - network-bind
       - opengl
-      - pulseaudio
       - wayland
       - x11
   install:
@@ -162,6 +156,7 @@ parts:
     source: launcher
     organize:
       "*.sh": bin/
+      pulse-client.conf: etc/zwift/pulse-client.conf
 
   gpu-2404:
     # Helpers for the gpu-2404 content interface. Pruning is done after all

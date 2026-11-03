@@ -30,6 +30,12 @@ export RADV_EXPERIMENTAL="${RADV_EXPERIMENTAL:-video_decode}"
 export GST_PLUGIN_SYSTEM_PATH="${SNAP}/usr/lib/x86_64-linux-gnu/gstreamer-1.0"
 export GST_PLUGIN_SCANNER="${SNAP}/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner"
 
+# Audio goes through the audio-playback interface, which allows the host pulseaudio socket.
+# Inside a snap XDG_RUNTIME_DIR is /run/user/<uid>/snap.<name>, where libpulse would look
+# for the socket, so point it at the real one.
+export PULSE_SERVER="${PULSE_SERVER:-unix:/run/user/$(id -u)/pulse/native}"
+export PULSE_CLIENTCONFIG="${PULSE_CLIENTCONFIG:-${SNAP}/etc/zwift/pulse-client.conf}"
+
 mkdir -p "${SNAP_USER_COMMON}" || exit 1
 
 exec "$@"
