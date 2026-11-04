@@ -18,7 +18,7 @@ adopt-info: launcher
 license: Unlicense
 contact: https://github.com/ndyer/zwift-snap/issues
 website: https://github.com/ndyer/zwift-snap
-base: core24
+base: core26
 grade: devel
 confinement: strict
 
@@ -28,23 +28,20 @@ platforms:
     build-for: [amd64]
 
 package-repositories:
-  # WineHQ repository for Ubuntu 24.04 (key: snap/keys/F987672F.asc)
+  # WineHQ repository for Ubuntu 26.04 (key: snap/keys/F987672F.asc). The resolute suite
+  # only has amd64, there is no i386 repository.
   - type: apt
-    architectures: [amd64, i386]
+    architectures: [amd64]
     url: https://dl.winehq.org/wine-builds/ubuntu
-    suites: [noble]
+    suites: [resolute]
     components: [main]
     key-id: D43F640145369C51D786DDEA76F1A20FF987672F
 
 plugs:
-  gpu-2404:
+  gpu-2604:
     interface: content
-    target: $SNAP/gpu-2404
-    default-provider: mesa-2404
-
-layout:
-  /usr/share/X11/XErrorDB:
-    symlink: $SNAP/gpu-2404/X11/XErrorDB
+    target: $SNAP/gpu-2604
+    default-provider: mesa-2604
 
 environment:
   # winetricks and wine look for helper programs (cabextract, ntlm_auth) in PATH
@@ -56,7 +53,7 @@ apps:
   zwift:
     command: bin/zwift-run.sh
     command-chain: &chain
-      - bin/gpu-2404-wrapper
+      - bin/gpu-2604-wrapper
       - bin/wine-env.sh
     plugs: &plugs
       - audio-playback
@@ -80,12 +77,12 @@ apps:
 parts:
   wine:
     plugin: nil
-    # Versions are pinned to match the upstream docker image. WineHQ removes
-    # old builds, so bump these together when the build starts failing.
+    # The version is pinned to match the upstream docker image. WineHQ removes
+    # old builds, so bump it when the build starts failing. On resolute wine-devel is
+    # one package with new style WoW64: 64-bit unix libraries plus 32-bit PE files, so
+    # there are no wine-devel-amd64 and wine-devel-i386 packages and no i386 libraries.
     stage-packages:
-      - wine-devel=11.21~noble-1
-      - wine-devel-amd64=11.21~noble-1
-      - wine-devel-i386:i386=11.21~noble-1
+      - wine-devel=11.21~resolute-1
       # needed by winetricks
       - cabextract
       - ca-certificates
@@ -168,8 +165,8 @@ parts:
       "*.sh": bin/
       pulse-client.conf: etc/zwift/pulse-client.conf
 
-  gpu-2404:
-    # Helpers for the gpu-2404 content interface. Pruning is done after all
+  gpu-2604:
+    # Helpers for the gpu-2604 content interface. Pruning is done after all
     # other parts staged their libraries so nothing shadows the mesa provider.
     after: [wine, launcher]
     plugin: dump
@@ -178,6 +175,6 @@ parts:
     source-commit: 84e56217ec137c3f8d7a0e773bb7c39c8fc40f28
     override-prime: |
       craftctl default
-      "${CRAFT_PART_SRC}/bin/gpu-2404-cleanup" mesa-2404
+      "${CRAFT_PART_SRC}/bin/gpu-2604-cleanup" mesa-2604
     prime:
-      - bin/gpu-2404-wrapper
+      - bin/gpu-2604-wrapper

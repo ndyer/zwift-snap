@@ -17,7 +17,7 @@ There is no automatic login. Log in through the Zwift window.
 ## Build
 
 The snap is built in destructive mode inside a [Workshop](https://ubuntu.com/workshop/docs/)
-workshop (Ubuntu 24.04).
+workshop (Ubuntu 26.04). The snap uses `core26`, the `core24` version is on the `main` branch.
 
 ```shell
 workshop launch zwift-snap-core26
@@ -33,8 +33,8 @@ workshop itself, so use a throwaway workshop.
 
 ```shell
 workshop run zwift-snap-core26 install   # sudo snap install --dangerous ./zwift_*.snap
-sudo snap install mesa-2404       # graphics userspace, if not installed already
-sudo snap connect zwift:gpu-2404 mesa-2404:gpu-2404
+sudo snap install mesa-2604       # graphics userspace, if not installed already
+sudo snap connect zwift:gpu-2604 mesa-2604:gpu-2604
 sudo snap connect zwift:bluez
 zwift                             # installs or updates Zwift when needed, then starts it
 ```
@@ -83,3 +83,11 @@ and `DEBUG`.
   trainers and ANT+ devices must be connected through the Zwift companion app.
 - WineHQ removes old builds, so the pinned `wine-devel` version in `snap/snapcraft.yaml`
   will eventually need bumping.
+- The WineHQ `resolute` repository is amd64 only and has a single `wine-devel` package. It is a
+  new style WoW64 build: there is no `wine64` binary and no 32-bit unix libraries, 32-bit
+  Windows programs run through the PE files in `lib/wine/i386-windows`. The snap has no i386
+  packages. The winetricks steps (`dotnet48`, `d3dcompiler_47`, `webview2`) have to be checked
+  on a desktop, winetricks prints a warning that new style WoW64 is experimental.
+- A wine prefix made by the `core24` snap (wine with separate 32-bit and 64-bit packages) is
+  in the same folder, `$SNAP_USER_COMMON/.wine`. Whether wine updates it cleanly is not tested.
+  Back it up before the first run, or set `WINEPREFIX` to start with a fresh one.

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Command wrapper for the snap: sets up the environment for wine and runs the given command.
-# Used as the command-chain of every app so wine, winetricks and the i386 libraries are found.
+# Used as the command-chain of every app so wine, winetricks and the libraries are found.
 set -uo pipefail
 
 export WINE_ROOT="${SNAP}/opt/wine-devel"
 export PATH="${SNAP}/bin:${WINE_ROOT}/bin:${SNAP}/usr/bin:${SNAP}/usr/games:${PATH}"
 
-# wine is a multilib install: 64-bit and 32-bit libraries must both be found
+# wine is a new style WoW64 build: only 64-bit unix libraries are needed, 32-bit Windows
+# programs run through the PE files in lib/wine/i386-windows
 #
 # Some Ubuntu libraries find their private helper libraries through an absolute RUNPATH such as
 # /usr/lib/x86_64-linux-gnu/pulseaudio, which does not exist inside the snap:
@@ -14,13 +15,9 @@ export PATH="${SNAP}/bin:${WINE_ROOT}/bin:${SNAP}/usr/bin:${SNAP}/usr/games:${PA
 # - samba: ntlm_auth (needed by zwift/wine) and its libraries
 libs=(
     "${WINE_ROOT}/lib"
-    "${WINE_ROOT}/lib64"
     "${SNAP}/usr/lib/x86_64-linux-gnu"
-    "${SNAP}/usr/lib/i386-linux-gnu"
     "${SNAP}/lib/x86_64-linux-gnu"
-    "${SNAP}/lib/i386-linux-gnu"
     "${SNAP}/usr/lib/x86_64-linux-gnu/pulseaudio"
-    "${SNAP}/usr/lib/i386-linux-gnu/pulseaudio"
     "${SNAP}/usr/lib/x86_64-linux-gnu/samba"
 )
 ld_path="$(IFS=:; echo "${libs[*]}")"
