@@ -75,7 +75,7 @@ connected() {
 
 ensure_snaps() {
     snap list zwift > /dev/null 2>&1 \
-        || die "the zwift snap is not installed, run: workshop run zwift-snap-core26 build && workshop run zwift-snap-core26 install"
+        || die "the zwift snap is not installed, run: workshop run zwift-snap build && workshop run zwift-snap install"
 
     # the gpu-2604-wrapper in the command chain refuses to run without a provider
     if ! connected gpu-2604 mesa-2604; then

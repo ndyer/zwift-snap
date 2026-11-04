@@ -20,7 +20,7 @@ snap/snapcraft.yaml     the snap definition (parts, prune filters, plugs, layout
 snap/prune-closure.sh   DT_NEEDED closure walk that prunes unreachable libraries
 snap/keys/              WineHQ apt repo signing key
 tests/             unit tests (run-tests.sh + scenarios.sh + stubs) and the visual smoke test
-.workshop/         workshop definition (build environment) + in-project SDK zwift-dev-gui
+  .workshop/         workshop definition (build environment) + in-project SDK zwift-snap-sdk
 overlay/, prime/, stage/, parts/   build trees, gitignored, never edit by hand
 ```
 
@@ -34,24 +34,36 @@ Builds happen in a [Workshop](https://ubuntu.com/workshop/docs/) VM in destructi
 mode. All commands run from the project root:
 
 ```shell
-workshop run zwift-snap-core26 setup    # snapcraft, shellcheck, yamllint, pkgproxy cache
-workshop run zwift-snap-core26 build    # sudo snapcraft pack --destructive-mode
-workshop run zwift-snap-core26 test     # unit tests of the launcher scripts (fast, no GUI)
-workshop run zwift-snap-core26 smoke    # visual smoke test with yarf, ~2 min warm, see below
-workshop run zwift-snap-core26 install  # sudo snap install --dangerous ./zwift_*.snap
-workshop run zwift-snap-core26 lint     # shellcheck + yamllint
-workshop run zwift-snap-core26 size     # where the bytes are
-workshop run zwift-snap-core26 stats    # pkgproxy cache savings
+workshop run zwift-snap build    # sudo snapcraft pack --destructive-mode
+workshop run zwift-snap test     # unit tests of the launcher scripts (fast, no GUI)
+workshop run zwift-snap smoke    # visual smoke test with yarf, ~2 min warm, see below
+workshop run zwift-snap install  # sudo snap install --dangerous ./zwift_*.snap
+workshop run zwift-snap lint     # shellcheck + yamllint
+workshop run zwift-snap size     # where the bytes are
+workshop run zwift-snap stats    # pkgproxy cache savings
 ```
+
+There is no `setup` action: snapcraft, shellcheck, yamllint and the pkgproxy cache
+are installed by the `setup-base` hook of the `zwift-snap-sdk` SDK at launch and
+refresh (see `.workshop/zwift-snap-sdk/hooks/setup-base`).
+
+The canonical agent documentation for operating Workshop is the vendored skill under
+`.github/skills/` (`use-workshop`, `onboard-workshop`, `design-sdk`, imported from
+github.com/canonical/use-workshop-skill). Route Workshop CLI questions there — in
+particular `.github/skills/use-workshop/references/in-project-sdk.md` for the SDK
+layout and hook rules used by this project.
 
 Before declaring a task done run `lint` and `test`. Run `smoke` when the change
 affects anything the launcher does at runtime (plugs, command-chain, wine
 environment, dialogs).
 
-The workshop definition is `.workshop/zwift-snap-core26.yaml`; actions are plain bash
-with `errexit`/`pipefail` set. In-project SDKs are referenced with a `project-` prefix
-(`project-zwift-dev-gui` for `.workshop/zwift-dev-gui/sdk.yaml`); the workshop desktop
-interface is NOT auto-connected, the `connections:` entry is required.
+The workshop definition is `.workshop/zwift-snap.yaml`; actions are plain bash
+with `errexit`/`pipefail` set. In-project SDKs are listed with a `project-` prefix in
+`sdks:` (`project-zwift-snap-sdk` for `.workshop/zwift-snap-sdk/sdk.yaml`), but plug and
+slot references elsewhere (e.g. `connections:`) use the bare name (`zwift-snap-sdk`),
+because the `project-` prefix only selects the source and is not part of the name.
+The workshop desktop interface is NOT auto-connected, the `connections:` entry is
+required.
 
 ## Visual smoke test (yarf)
 
@@ -93,7 +105,7 @@ Yarf gotchas that cost time to discover (all verified live):
   toolchain, ~776 static import libraries, plus everything unreachable via the
   `snap/prune-closure.sh` closure walk). Guards in the part's `override-prime` fail
   the build on over-pruning (runtime file missing) or a stale prime directory (needs
-  `workshop run zwift-snap-core26 clean`). Bump the `v<N>` comment there when editing
+  `workshop run zwift-snap clean`). Bump the `v<N>` comment there when editing
   `prune-closure.sh`, otherwise craft-parts will not re-run the prime step.
 - **Do not prune** `usr/lib/*/samba` (ntlm_auth needs it) and the nss libraries
   listed in the `lint.ignore` block of `snap/snapcraft.yaml` (dlopened by name).

@@ -20,14 +20,13 @@ The snap is built in destructive mode inside a [Workshop](https://ubuntu.com/wor
 workshop (Ubuntu 26.04). The snap uses `core26`.
 
 ```shell
-workshop launch zwift-snap-core26
-workshop run zwift-snap-core26 setup     # installs snapcraft (snap store), shellcheck, yamllint
-workshop run zwift-snap-core26 build     # sudo snapcraft pack --destructive-mode
-workshop run zwift-snap-core26 test      # unit tests of the launcher scripts
-workshop run zwift-snap-core26 smoke     # visual smoke test with yarf, see below
-workshop run zwift-snap-core26 lint      # shellcheck + yamllint
-workshop run zwift-snap-core26 size      # where the bytes are, for pruning work
-workshop run zwift-snap-core26 stats     # pkgproxy cache usage
+workshop launch zwift-snap
+workshop run zwift-snap build     # sudo snapcraft pack --destructive-mode
+workshop run zwift-snap test      # unit tests of the launcher scripts
+workshop run zwift-snap smoke     # visual smoke test with yarf, see below
+workshop run zwift-snap lint      # shellcheck + yamllint
+workshop run zwift-snap size      # where the bytes are, for pruning work
+workshop run zwift-snap stats     # pkgproxy cache usage
 ```
 
 ## Visual smoke test
@@ -37,11 +36,11 @@ installed and started, with [yarf](https://documentation.ubuntu.com/yarf) drivin
 headless (or host-display) Mir compositor and checking the pixels with OCR and
 template matching. The suite is in `tests/yarf`, the harness in `tests/smoke.sh`.
 Extra arguments after `smoke` are passed to `yarf`, for example
-`workshop run zwift-snap-core26 smoke --variant light`.
+`workshop run zwift-snap smoke --variant light`.
 
 The harness installs the `yarf` and `mir-test-tools` snaps and connects
 `zwift:gpu-2604` to `mesa-2604` when needed. With a display available through the
-workshop desktop interface (`workshop connect project-zwift-dev-gui:desktop`) the
+workshop desktop interface (`workshop connect zwift-snap-sdk:desktop`) the
 Mir compositor renders in a window on the host screen, otherwise it runs on a
 headless virtual output (set `SMOKE_DISPLAY=nested|headless` to force either).
 
@@ -58,7 +57,7 @@ it missing — the recipe is in `tests/yarf/README.md`.
 
 Setup also installs [pkgproxy](https://snapcraft.io/pkgproxy), a caching proxy, and points
 apt and snapd at it. Builds in the same workshop then download each package and snap only
-once; repeat downloads come from the local cache (`workshop run zwift-snap-core26 stats`
+once; repeat downloads come from the local cache (`workshop run zwift-snap stats`
 shows the savings). The WineHQ repository is fetched over plain http for this, because the
 proxy only caches `http://` sources; apt still checks the repository signatures. Not cached:
 the base snap that snapcraft downloads itself, and anything over `https://`.
@@ -69,7 +68,7 @@ workshop itself, so use a throwaway workshop.
 ## Install and run
 
 ```shell
-workshop run zwift-snap-core26 install   # sudo snap install --dangerous ./zwift_*.snap
+workshop run zwift-snap install   # sudo snap install --dangerous ./zwift_*.snap
 sudo snap install mesa-2604       # graphics userspace, if not installed already
 sudo snap connect zwift:gpu-2604 mesa-2604:gpu-2604
 sudo snap connect zwift:bluez
@@ -78,7 +77,7 @@ zwift                             # installs or updates Zwift when needed, then 
 
 `bluez` is not connected automatically. Other apps: `zwift.wine` and `zwift.winecfg`.
 
-To debug confinement problems, install with `workshop run zwift-snap-core26 install --devmode` (the
+To debug confinement problems, install with `workshop run zwift-snap install --devmode` (the
 violations are only logged) and watch them with `snappy-debug`.
 
 The snap has no `home` plug. The folders of the wine user (Desktop, Documents, Downloads, Music,
@@ -116,7 +115,7 @@ and `DEBUG`.
   plugins, gdk-pixbuf/gio/gtk modules, gconv and nss modules, the samba tree, and the
   glycin image loaders. A guard in the wine part's `override-prime` fails the build when
   a runtime file is missing (over-pruning) or a build-time file is still primed (stale
-  prime directory, needs `workshop run zwift-snap-core26 clean`).
+  prime directory, needs `workshop run zwift-snap clean`).
 - The wine runtime is not split into a separate content snap (like
   [wine-platform-runtime](https://github.com/mmtrt/wine-platform-runtime-core24-snap)):
   that snap ships only the support libraries of old wine builds for core24, not wine
