@@ -25,7 +25,15 @@ workshop run zwift-snap-core26 setup     # installs snapcraft (snap store), shel
 workshop run zwift-snap-core26 build     # sudo snapcraft pack --destructive-mode
 workshop run zwift-snap-core26 lint      # shellcheck + yamllint
 workshop run zwift-snap-core26 size      # where the bytes are, for pruning work
+workshop run zwift-snap-core26 stats     # pkgproxy cache usage
 ```
+
+Setup also installs [pkgproxy](https://snapcraft.io/pkgproxy), a caching proxy, and points
+apt and snapd at it. Builds in the same workshop then download each package and snap only
+once; repeat downloads come from the local cache (`workshop run zwift-snap-core26 stats`
+shows the savings). The WineHQ repository is fetched over plain http for this, because the
+proxy only caches `http://` sources; apt still checks the repository signatures. Not cached:
+the base snap that snapcraft downloads itself, and anything over `https://`.
 
 Destructive mode installs build packages (including the WineHQ apt repository) into the
 workshop itself, so use a throwaway workshop.

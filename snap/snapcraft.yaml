@@ -4,15 +4,10 @@ summary: Run Zwift on Linux using wine
 description: |
   Unofficial snap packaging of Zwift for Linux
 
-  Zwift itself is proprietary and is NOT part of this snap. It is downloaded
-  from Zwift's servers into a wine prefix in your snap data directory the first
-  time you start it with:
+  Zwift itself is proprietary and is NOT part of this snap.
 
-      zwift
-
-  A progress window shows the installation. Every start checks for a newer
-  Zwift version and updates it before Zwift starts. Log in through the Zwift
-  window.
+  Every start checks for a Zwift installation and updates it and its pre-requisites
+  before Zwift starts. Log in through the Zwift window.
 # The version comes from the git tags, see the override-pull of the launcher part
 adopt-info: launcher
 license: Unlicense
@@ -40,10 +35,11 @@ lint:
 
 package-repositories:
   # WineHQ repository for Ubuntu 26.04 (key: snap/keys/F987672F.asc). The resolute suite
-  # only has amd64, there is no i386 repository.
+  # only has amd64, there is no i386 repository. Plain http on purpose: pkgproxy only
+  # caches http:// apt sources (apt still checks the signatures of everything it gets).
   - type: apt
     architectures: [amd64]
-    url: https://dl.winehq.org/wine-builds/ubuntu
+    url: http://dl.winehq.org/wine-builds/ubuntu
     suites: [resolute]
     components: [main]
     key-id: D43F640145369C51D786DDEA76F1A20FF987672F
