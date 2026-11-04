@@ -1,5 +1,14 @@
 name: zwift-snap-core26
 base: ubuntu@26.04
+sdks:
+  # Carries the desktop plug of the workshop, defined in .workshop/zwift-dev-gui/sdk.yaml.
+  # The yarf smoke test (tests/smoke.sh) renders its Mir compositor on the host display
+  # through it when one is available.
+  - name: project-zwift-dev-gui
+connections:
+  # The desktop interface is not connected automatically at launch, spell it out here.
+  - plug: project-zwift-dev-gui:desktop
+    slot: system:desktop
 actions:
   setup: |
     # snapcraft is installed from the snap store, destructive mode builds in this workshop.
@@ -37,6 +46,12 @@ actions:
   test: |
     cd /project
     tests/run-tests.sh
+  smoke: |
+    cd /project
+    # Visual smoke test with yarf: starts a Mir compositor, runs the zwift launcher
+    # against it and checks on screen that Zwift gets installed and starts. The first
+    # run downloads Zwift and can take half an hour, later runs are quick.
+    tests/smoke.sh "$@"
   size: |
     cd /project
     du -sh prime/* 2>/dev/null | sort -rh
@@ -45,5 +60,6 @@ actions:
     ls -l --block-size=M ./zwift_*_amd64.snap
   lint: |
     cd /project
-    shellcheck -x launcher/*.sh snap/prune-closure.sh tests/run-tests.sh tests/scenarios.sh tests/stubs/*
-    yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' snap/snapcraft.yaml .workshop/zwift-snap-core26.yaml
+    shellcheck -x launcher/*.sh snap/prune-closure.sh tests/run-tests.sh tests/smoke.sh tests/scenarios.sh tests/stubs/*
+    yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' \
+      snap/snapcraft.yaml .workshop/zwift-snap-core26.yaml .workshop/zwift-dev-gui/sdk.yaml

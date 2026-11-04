@@ -17,16 +17,44 @@ There is no automatic login. Log in through the Zwift window.
 ## Build
 
 The snap is built in destructive mode inside a [Workshop](https://ubuntu.com/workshop/docs/)
-workshop (Ubuntu 26.04). The snap uses `core26`, the `core24` version is on the `main` branch.
+workshop (Ubuntu 26.04). The snap uses `core26`.
 
 ```shell
 workshop launch zwift-snap-core26
 workshop run zwift-snap-core26 setup     # installs snapcraft (snap store), shellcheck, yamllint
 workshop run zwift-snap-core26 build     # sudo snapcraft pack --destructive-mode
+workshop run zwift-snap-core26 test      # unit tests of the launcher scripts
+workshop run zwift-snap-core26 smoke     # visual smoke test with yarf, see below
 workshop run zwift-snap-core26 lint      # shellcheck + yamllint
 workshop run zwift-snap-core26 size      # where the bytes are, for pruning work
 workshop run zwift-snap-core26 stats     # pkgproxy cache usage
 ```
+
+## Visual smoke test
+
+The `smoke` action runs the launcher for real and verifies on screen that Zwift gets
+installed and started, with [yarf](https://documentation.ubuntu.com/yarf) driving a
+headless (or host-display) Mir compositor and checking the pixels with OCR and
+template matching. The suite is in `tests/yarf`, the harness in `tests/smoke.sh`.
+Extra arguments after `smoke` are passed to `yarf`, for example
+`workshop run zwift-snap-core26 smoke --variant light`.
+
+The harness installs the `yarf` and `mir-test-tools` snaps and connects
+`zwift:gpu-2604` to `mesa-2604` when needed. With a display available through the
+workshop desktop interface (`workshop connect project-zwift-dev-gui:desktop`) the
+Mir compositor renders in a window on the host screen, otherwise it runs on a
+headless virtual output (set `SMOKE_DISPLAY=nested|headless` to force either).
+
+The first run installs wine prerequisites and downloads Zwift into the wine prefix,
+which takes tens of minutes; later runs reuse the prefix and take a couple of
+minutes. The suite checks that the launcher progress dialog appears and that the
+Zwift window finally comes up (no login is performed). On failure the yarf report
+(`log.html` in `~/zwift-smoke-out`) shows the screenshots it compared, and the
+harness prints the last lines of the launcher log.
+
+The `zwift-login.png` template in `tests/yarf` matches the Zwift window. Window
+decorations differ between compositor setups, so recapture it when the test reports
+it missing — the recipe is in `tests/yarf/README.md`.
 
 Setup also installs [pkgproxy](https://snapcraft.io/pkgproxy), a caching proxy, and points
 apt and snapd at it. Builds in the same workshop then download each package and snap only
@@ -113,6 +141,3 @@ and `DEBUG`.
   Windows programs run through the PE files in `lib/wine/i386-windows`. The snap has no i386
   packages. The winetricks steps (`dotnet48`, `d3dcompiler_47`, `webview2`) have to be checked
   on a desktop, winetricks prints a warning that new style WoW64 is experimental.
-- A wine prefix made by the `core24` snap (wine with separate 32-bit and 64-bit packages) is
-  in the same folder, `$SNAP_USER_COMMON/.wine`. Whether wine updates it cleanly is not tested.
-  Back it up before the first run, or set `WINEPREFIX` to start with a fresh one.

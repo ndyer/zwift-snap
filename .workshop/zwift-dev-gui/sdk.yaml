@@ -1,0 +1,12 @@
+name: zwift-dev-gui
+version: "0.1"
+summary: Desktop display access for the zwift snap workshop
+description: |
+  In-project SDK that carries the workshop desktop interface plug. Connected to the
+  system:desktop slot it gives processes in this workshop access to the host display,
+  which the yarf smoke test (tests/smoke.sh) uses to render its Mir compositor on the
+  host desktop when one is available. Without a connected display the smoke test runs
+  its compositor on a headless virtual output instead.
+plugs:
+  desktop:
+    interface: desktop
