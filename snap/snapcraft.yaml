@@ -8,8 +8,8 @@ description: |
 
   Every start checks for a Zwift installation and updates it and its pre-requisites
   before Zwift starts. Log in through the Zwift window.
-# The version comes from the git tags, see the override-pull of the launcher part
-adopt-info: launcher
+# The version comes from the git tags, see the version-generator part
+adopt-info: version-generator
 license: Unlicense
 contact: https://github.com/ndyer/zwift-snap/issues
 website: https://github.com/ndyer/zwift-snap
@@ -276,20 +276,23 @@ parts:
   launcher:
     plugin: dump
     source: launcher
-    build-packages:
-      - git
-    # Set the snap version from the latest git tag, for example v0.9 gives 0.9 and v0.9-3-g1a2b3c4
-    # means 3 commits after that tag. "-dirty" is added when there are uncommitted changes. Without
-    # tags the commit hash is used. The source of this part is a copy of the launcher directory
-    # without git data, so ask the project directory. The pull step only runs again when the
-    # launcher files change, run "snapcraft clean --destructive-mode launcher" after tagging.
-    override-pull: |
-      craftctl default
-      version="$(git -C "${CRAFT_PROJECT_DIR}" describe --tags --always --dirty)" || version="unknown"
-      craftctl set version="${version#v}"
     organize:
       "*.sh": bin/
       pulse-client.conf: etc/zwift/pulse-client.conf
+
+  version-generator:
+    plugin: nil
+    source: .
+    # A local source is checked for changes on every run, so this part is rebuilt each time and
+    # the version stays current. A git source would never be rebuilt.
+    source-type: local
+    # Set the snap version from the latest git tag, for example v0.9 gives 0.9 and v0.9-3-g1a2b3c4
+    # means 3 commits after that tag. "-dirty" is added when there are uncommitted changes. Without
+    # tags the commit hash is used. The local source has no git data, so ask the project directory.
+    override-build: |
+      craftctl default
+      version="$(git -C "${CRAFT_PROJECT_DIR}" describe --tags --always --dirty)" || version="unknown"
+      craftctl set version="${version#v}"
 
   gpu-2604:
     # Helpers for the gpu-2604 content interface. Pruning is done after all
