@@ -20,7 +20,13 @@ actions:
   test: |
     cd /project
     tests/run-tests.sh
+  size: |
+    cd /project
+    du -sh prime/* 2>/dev/null | sort -rh
+    du -sh prime/opt/wine-devel/* 2>/dev/null | sort -rh
+    du -sh prime/usr/lib/x86_64-linux-gnu/* 2>/dev/null | sort -rh | head -20
+    ls -l --block-size=M ./zwift_*_amd64.snap
   lint: |
     cd /project
-    shellcheck -x launcher/*.sh tests/run-tests.sh tests/scenarios.sh tests/stubs/*
+    shellcheck -x launcher/*.sh snap/prune-closure.sh tests/run-tests.sh tests/scenarios.sh tests/stubs/*
     yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' snap/snapcraft.yaml .workshop/zwift-snap-core26.yaml

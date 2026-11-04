@@ -24,6 +24,7 @@ workshop launch zwift-snap-core26
 workshop run zwift-snap-core26 setup     # installs snapcraft (snap store), shellcheck, yamllint
 workshop run zwift-snap-core26 build     # sudo snapcraft pack --destructive-mode
 workshop run zwift-snap-core26 lint      # shellcheck + yamllint
+workshop run zwift-snap-core26 size      # where the bytes are, for pruning work
 ```
 
 Destructive mode installs build packages (including the WineHQ apt repository) into the
@@ -69,6 +70,22 @@ and `DEBUG`.
 - Only amd64 is supported.
 - The wine part prunes man pages, locales, package docs (copyright files are kept) and the sane
   scanner backends. `usr/lib/*/samba` must stay, `ntlm_auth` needs it.
+- To keep the download small, the build also prunes everything that is not reachable at
+  runtime: wine's Windows compiler toolchain (`widl`, `winegcc`, ...) and the ~776 static
+  import libraries of `lib/wine` (~100 MB), and — via the DT_NEEDED closure walk in
+  `snap/prune-closure.sh` — every library that only the removed build tools, the samba
+  utilities beyond `ntlm_auth`, gnupg, perl or gstreamer plugins for neural networks
+  (onnx/tensorflow/dnnl), speech synthesis (flite) and similar non-media codecs need
+  (~320 MB more). Libraries that are dlopened by name are kept explicitly: gstreamer
+  plugins, gdk-pixbuf/gio/gtk modules, gconv and nss modules, the samba tree, and the
+  glycin image loaders. A guard in the wine part's `override-prime` fails the build when
+  a runtime file is missing (over-pruning) or a build-time file is still primed (stale
+  prime directory, needs `workshop run zwift-snap-core26 clean`).
+- The wine runtime is not split into a separate content snap (like
+  [wine-platform-runtime](https://github.com/mmtrt/wine-platform-runtime-core24-snap)):
+  that snap ships only the support libraries of old wine builds for core24, not wine
+  itself, and its noble libraries do not match this snap's resolute-built wine. Splitting
+  would not reduce what users download in total and would add a second snap to publish.
 - Not tested: the update, the dialogs after the first run and gameplay (a ride).
 - `snap/gui/zwift.png` is a generated placeholder icon.
 - Bluetooth does not work in Zwift. With the `bluez` interface connected, wine's Bluetooth

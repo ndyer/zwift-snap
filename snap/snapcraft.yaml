@@ -27,6 +27,17 @@ platforms:
     build-on: [amd64]
     build-for: [amd64]
 
+lint:
+  ignore:
+    # nss modules that libnss3 dlopens by name when initializing its crypto
+    # backends, kept by snap/prune-closure.sh for exactly that reason
+    - library:
+        - usr/lib/x86_64-linux-gnu/libsoftokn3.so
+        - usr/lib/x86_64-linux-gnu/libfreeblpriv3.so
+        - usr/lib/x86_64-linux-gnu/libfreebl3.so
+        - usr/lib/x86_64-linux-gnu/libnssdbm3.so
+        - usr/lib/x86_64-linux-gnu/libnssckbi.so
+
 package-repositories:
   # WineHQ repository for Ubuntu 26.04 (key: snap/keys/F987672F.asc). The resolute suite
   # only has amd64, there is no i386 repository.
@@ -89,6 +100,8 @@ parts:
     build-packages:
       # glib-compile-schemas, see override-prime
       - libglib2.0-bin
+      # readelf for snap/prune-closure.sh, see override-prime
+      - binutils
     # The version is pinned to match the upstream docker image. WineHQ removes
     # old builds, so bump it when the build starts failing. On resolute wine-devel is
     # one package with new style WoW64: 64-bit unix libraries plus 32-bit PE files, so
@@ -122,14 +135,116 @@ parts:
       - -usr/share/locale
       # sane scanner backends, only pulled in because wine links against libsane
       - -usr/lib/*/sane
+      # wine-devel ships the complete build toolchain and static import libraries
+      # for cross-compiling Windows programs. Nothing here is used at runtime and
+      # the 776 *.a import libraries alone are ~100 MB. The PE files in the same
+      # directories ARE needed (new style WoW64 builtin DLLs) and stay.
+      - -opt/wine-devel/lib/wine/i386-windows/*.a
+      - -opt/wine-devel/lib/wine/x86_64-windows/*.a
+      - -opt/wine-devel/lib/wine/x86_64-unix/*.a
+      - -opt/wine-devel/share/man
+      - -opt/wine-devel/bin/widl
+      - -opt/wine-devel/bin/winebuild
+      - -opt/wine-devel/bin/winegcc
+      - -opt/wine-devel/bin/wineg++
+      - -opt/wine-devel/bin/winecpp
+      - -opt/wine-devel/bin/winemaker
+      - -opt/wine-devel/bin/wmc
+      - -opt/wine-devel/bin/wrc
+      - -opt/wine-devel/bin/winedump
+      - -opt/wine-devel/bin/msidb
+      - -opt/wine-devel/bin/function_grep.pl
+      # games, not needed by the launcher or winetricks
+      - -opt/wine-devel/bin/winemine
     override-prime: |
       craftctl default
+      # Deletes tools, import libraries and unreachable libraries; see
+      # snap/prune-closure.sh for the closure walk. Bump this comment after
+      # editing that script, craft-parts only re-runs the prime step when the
+      # script text tracked in the part state changes: v3
       # The gschemas.compiled that Debian creates in a trigger is not part of the staged
       # packages. Without it GTK programs (yad) abort with "No GSettings schemas are installed".
       glib-compile-schemas "${CRAFT_PRIME}/usr/share/glib-2.0/schemas"
       # keep the copyright files for license compliance, drop the rest of the package docs
       find "${CRAFT_PRIME}/usr/share/doc" -mindepth 2 ! -name copyright \( -type f -o -type l \) -delete
       find "${CRAFT_PRIME}/usr/share/doc" -mindepth 1 -type d -empty -delete
+      # Remove the wine build toolchain and the static import libraries. The prime
+      # filters above prevent them from being primed on a clean build, but the deletion
+      # here is still needed: an incremental prime does not remove files that an older
+      # build already put into the prime directory, so they would linger in the snap.
+      rm -f "${CRAFT_PRIME}"/opt/wine-devel/lib/wine/*/*.a
+      rm -f "${CRAFT_PRIME}"/opt/wine-devel/bin/widl \
+            "${CRAFT_PRIME}"/opt/wine-devel/bin/winebuild \
+            "${CRAFT_PRIME}"/opt/wine-devel/bin/winegcc \
+            "${CRAFT_PRIME}"/opt/wine-devel/bin/wineg++ \
+            "${CRAFT_PRIME}"/opt/wine-devel/bin/winecpp \
+            "${CRAFT_PRIME}"/opt/wine-devel/bin/winemaker \
+            "${CRAFT_PRIME}"/opt/wine-devel/bin/wmc \
+            "${CRAFT_PRIME}"/opt/wine-devel/bin/wrc \
+            "${CRAFT_PRIME}"/opt/wine-devel/bin/winedump \
+            "${CRAFT_PRIME}"/opt/wine-devel/bin/msidb \
+            "${CRAFT_PRIME}"/opt/wine-devel/bin/function_grep.pl \
+            "${CRAFT_PRIME}"/opt/wine-devel/bin/winemine
+      rm -rf "${CRAFT_PRIME}/opt/wine-devel/share/man"
+      # Delete every library that nothing in the snap needs at runtime. The
+      # script walks the DT_NEEDED closure of wine and the launcher helpers
+      # and removes the unreachable libraries from the staged dependency
+      # closure, for example the onnxruntime/tensorflow stack that only the
+      # gstreamer neural network plugins use.
+      "${CRAFT_PROJECT_DIR}/snap/prune-closure.sh" "${CRAFT_PRIME}"
+      # Guard against over-pruning: fail the build when anything the launcher, winetricks
+      # or wine itself needs at runtime went missing, for example after a change to the
+      # stage-packages list or the prime filter above.
+      for f in \
+          opt/wine-devel/bin/wine \
+          opt/wine-devel/bin/wineserver \
+          opt/wine-devel/bin/wineboot \
+          opt/wine-devel/bin/winecfg \
+          opt/wine-devel/bin/winepath \
+          opt/wine-devel/bin/msiexec \
+          opt/wine-devel/bin/regedit \
+          opt/wine-devel/bin/regsvr32 \
+          opt/wine-devel/bin/notepad \
+          opt/wine-devel/share/wine/wine.inf \
+          opt/wine-devel/lib/wine/x86_64-unix/ntdll.so \
+          usr/bin/ntlm_auth \
+          usr/bin/cabextract \
+          usr/bin/unzip \
+          usr/bin/wget \
+          usr/bin/yad \
+          usr/share/X11/xkb \
+          usr/lib/x86_64-linux-gnu/gstreamer-1.0 \
+          ; do
+          if [[ ! -e "${CRAFT_PRIME}/${f}" ]]; then
+              echo "prune guard: ${f} is missing from the prime directory" >&2
+              exit 1
+          fi
+      done
+      # the WoW64 PE trees must both exist and still contain the builtin DLLs
+      for d in i386-windows x86_64-windows; do
+          if [[ ! -d "${CRAFT_PRIME}/opt/wine-devel/lib/wine/${d}" ]] \
+              || [[ -z "$(ls -A "${CRAFT_PRIME}/opt/wine-devel/lib/wine/${d}")" ]]; then
+              echo "prune guard: lib/wine/${d} is empty or missing" >&2
+              exit 1
+          fi
+      done
+      # Guard against stale prime directories: when these build-time-only files are
+      # still present the prime directory was not regenerated and the snap would keep
+      # shipping them. Run "snapcraft clean" and rebuild in that case.
+      for f in \
+          opt/wine-devel/bin/widl \
+          opt/wine-devel/bin/winebuild \
+          opt/wine-devel/bin/winegcc \
+          opt/wine-devel/bin/winemaker \
+          opt/wine-devel/bin/wmc \
+          opt/wine-devel/bin/wrc \
+          opt/wine-devel/bin/winedump \
+          ; do
+          if [[ -e "${CRAFT_PRIME}/${f}" ]]; then
+              echo "prune guard: ${f} is a build-time-only file and must not be primed" >&2
+              exit 1
+          fi
+      done
 
   winetricks:
     plugin: nil
