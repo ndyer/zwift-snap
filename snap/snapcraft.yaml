@@ -43,6 +43,15 @@ plugs:
     target: $SNAP/gpu-2604
     default-provider: mesa-2604
 
+layout:
+  # gdk-pixbuf (yad) loads images through glycin, which starts its loader programs by the
+  # absolute paths in its configuration files. The base has neither directory, so they can
+  # be bind mounts.
+  /usr/libexec/glycin-loaders:
+    bind: $SNAP/usr/libexec/glycin-loaders
+  /usr/share/glycin-loaders:
+    bind: $SNAP/usr/share/glycin-loaders
+
 environment:
   # winetricks and wine look for helper programs (cabextract, ntlm_auth) in PATH
   PATH: $SNAP/bin:$SNAP/usr/bin:$SNAP/usr/sbin:$PATH
@@ -77,6 +86,9 @@ apps:
 parts:
   wine:
     plugin: nil
+    build-packages:
+      # glib-compile-schemas, see override-prime
+      - libglib2.0-bin
     # The version is pinned to match the upstream docker image. WineHQ removes
     # old builds, so bump it when the build starts failing. On resolute wine-devel is
     # one package with new style WoW64: 64-bit unix libraries plus 32-bit PE files, so
@@ -112,6 +124,9 @@ parts:
       - -usr/lib/*/sane
     override-prime: |
       craftctl default
+      # The gschemas.compiled that Debian creates in a trigger is not part of the staged
+      # packages. Without it GTK programs (yad) abort with "No GSettings schemas are installed".
+      glib-compile-schemas "${CRAFT_PRIME}/usr/share/glib-2.0/schemas"
       # keep the copyright files for license compliance, drop the rest of the package docs
       find "${CRAFT_PRIME}/usr/share/doc" -mindepth 2 ! -name copyright \( -type f -o -type l \) -delete
       find "${CRAFT_PRIME}/usr/share/doc" -mindepth 1 -type d -empty -delete
