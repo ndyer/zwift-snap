@@ -24,3 +24,16 @@ fi
 # apt caches http:// sources only, hence the plain-http WineHQ url in snapcraft.yaml
 pkgproxy.pkgproxyctl setup apt | sh
 apt-get update && apt-get install -y shellcheck yamllint
+
+# Snaps required by the smoke test (tests/smoke.sh). Installed here rather than in
+# the smoke script so a fresh workshop is ready to smoke-test without re-downloading.
+# The hook runs as root, so no sudo. mesa-2604 provides the gpu-2604 slot the zwift
+# snap connects to; yarf drives the Robot Framework suite; mir-test-tools provides
+# the Mir compositor the launcher runs against.
+for _snap in mesa-2604 yarf mir-test-tools; do
+    snap list "${_snap}" > /dev/null 2>&1 || snap install "${_snap}"
+done
+# yarf needs process-control for its OCR; connect it if still disconnected.
+snap connections yarf 2>/dev/null \
+    | awk '$2 == "yarf:process-control" && $3 == "-" { found=1 } END { exit !found }' \
+    && snap connect yarf:process-control

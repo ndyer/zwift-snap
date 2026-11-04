@@ -55,15 +55,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-require_snap() {
-    local name="${1:?}"
-    shift
-    if ! snap list "${name}" > /dev/null 2>&1; then
-        echo "smoke: installing snap ${name}"
-        sudo snap install "$@" "${name}" || die "unable to install the ${name} snap"
-    fi
-}
-
 # connected PLUG [SLOT_PREFIX]: true when the given plug of the zwift snap is
 # connected, optionally only to a slot whose name starts with SLOT_PREFIX
 connected() {
@@ -77,17 +68,11 @@ ensure_snaps() {
     snap list zwift > /dev/null 2>&1 \
         || die "the zwift snap is not installed, run: workshop run zwift-snap build && workshop run zwift-snap install"
 
-    # the gpu-2604-wrapper in the command chain refuses to run without a provider
+    # the gpu-2604-wrapper in the command chain refuses to run without a provider;
+    # mesa-2604 is installed by the SDK setup-base hook, just connect it if needed
     if ! connected gpu-2604 mesa-2604; then
-        require_snap mesa-2604
         sudo snap connect zwift:gpu-2604 mesa-2604:gpu-2604
     fi
-
-    require_snap yarf
-    # optional: speeds up the OCR of yarf
-    snap connections yarf 2> /dev/null | awk '$2 == "yarf:process-control" && $3 == "-" { found=1 } END { exit !found }' \
-        && sudo snap connect yarf:process-control
-    require_snap mir-test-tools
 }
 
 # clear_stale_socket: a previous run that died hard leaves the socket behind, which
