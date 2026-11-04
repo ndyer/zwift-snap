@@ -62,8 +62,8 @@ with `errexit`/`pipefail` set. In-project SDKs are listed with a `project-` pref
 `sdks:` (`project-zwift-snap-sdk` for `.workshop/zwift-snap-sdk/sdk.yaml`), but plug and
 slot references elsewhere (e.g. `connections:`) use the bare name (`zwift-snap-sdk`),
 because the `project-` prefix only selects the source and is not part of the name.
-The workshop desktop interface is NOT auto-connected, the `connections:` entry is
-required.
+The workshop desktop and gpu interfaces are NOT auto-connected, the `connections:`
+entries are required.
 
 ## Visual smoke test (yarf)
 
@@ -97,7 +97,10 @@ Yarf gotchas that cost time to discover (all verified live):
   require several consecutive misses.
 - `mir-test-tools.demo-server` names its own wayland socket after `WAYLAND_DISPLAY`
   (export `wayland-99` before starting it) and refuses to start when that socket
-  already exists — clean stale sockets first.
+  already exists — clean stale sockets first. To nest on the host compositor it
+  also needs `--wayland-host` set to the host socket name, captured before that
+  export, plus GPU device access from the workshop gpu interface — without either
+  it hangs with an empty log and the harness falls back to headless.
 
 ## Snap specifics that are easy to break
 

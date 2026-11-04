@@ -11,6 +11,8 @@ connections:
   # selects the source and is not part of the name.
   - plug: zwift-snap-sdk:desktop
     slot: system:desktop
+  - plug: zwift-snap-sdk:gpu
+    slot: system:gpu
 actions:
   stats: |
     # what pkgproxy has cached and how much downloading it saved

@@ -10,3 +10,5 @@ description: |
 plugs:
   desktop:
     interface: desktop
+  gpu:
+    interface: gpu

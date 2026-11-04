@@ -91,10 +91,14 @@ start_mir() {
     local mir_args=(--add-wayland-extensions "${MIR_EXTENSIONS}")
 
     if [[ ${mode} == "nested" ]]; then
-        # The tutorial recipe: mir names its own socket after WAYLAND_DISPLAY and
-        # picks the way it renders on the host display itself (through the sockets
-        # the desktop interface provides).
-        echo "smoke: starting the Mir compositor on the host display"
+        # mir names its own socket after WAYLAND_DISPLAY, so the host socket must be
+        # passed with --wayland-host before the export below replaces its value
+        if [[ -n ${WAYLAND_DISPLAY:-} ]]; then
+            mir_args+=(--wayland-host "${WAYLAND_DISPLAY}")
+            echo "smoke: starting the Mir compositor on the host wayland display ${WAYLAND_DISPLAY}"
+        else
+            echo "smoke: starting the Mir compositor on the host display"
+        fi
     else
         mir_args+=(--platform-display-libs mir:virtual --virtual-output "${MIR_VIRTUAL_OUTPUT}")
         echo "smoke: no display available, starting a headless Mir compositor (${MIR_VIRTUAL_OUTPUT})"
