@@ -132,6 +132,7 @@ stage_suite() {
     rm -rf "${YARF_SUITE_DIR}" "${YARF_OUT_DIR}"
     mkdir -p "${YARF_SUITE_DIR}" "${YARF_OUT_DIR}"
     cp -r "${ROOT}/tests/smoke/." "${YARF_SUITE_DIR}/"
+    cp "${ROOT}/tests/lib/yarf_ocr.py" "${YARF_SUITE_DIR}/"
 }
 
 report_failure() {

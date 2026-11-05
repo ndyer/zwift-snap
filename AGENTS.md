@@ -22,9 +22,11 @@ snap/snapcraft.yaml     the snap definition (parts, prune filters, plugs, layout
 snap/prune-closure.sh   DT_NEEDED closure walk that prunes unreachable libraries
 tests/             unit tests (bats in tests/unit, stubs in tests/unit/stubs), the visual smoke
                    test (tests/smoke.sh + tests/smoke/), the bluetooth plumbing test
-                   (tests/bluetooth.sh + tests/bluetooth-scan.py), the pairing-screen test
+                   (tests/bluetooth.sh + tests/bluetooth-scan.py), the BLE trainer mock and
+                   bluezoo wrapper (tests/bluetooth-trainer.py, tests/bluezoo-run.py), the pairing-screen test
                    (tests/pairing.sh + tests/pairing/ + tests/zwift-stub.py), the shared bluezoo
-                   helper (tests/lib/bluezoo.sh) and the yarf screenshot/input debugging tools
+                   helper (tests/lib/bluezoo.sh), the yarf OCR thread cap (tests/lib/yarf_ocr.py)
+                   and the yarf screenshot/input debugging tools
                    (tests/tools/yarf.sh + tests/tools/screenshot.py/input.py)
   .workshop/         workshop definition (build environment) + in-project SDK zwift-snap-sdk
 overlay/, prime/, stage/, parts/   build trees, gitignored, never edit by hand
@@ -208,7 +210,7 @@ A hand-made token is accepted by the client, but the game then refreshes it at
 `tests/bluetooth.sh` checks the Bluetooth plumbing of the snap, not the game: wine's
 Bluetooth driver (`winebth`, hosted by winedevice.exe) must reach BlueZ over the snap's
 `bluez` plug, see the adapters, register its authentication agent and learn about a
-discovered peer device.
+discovered BLE smart trainer. It asserts only on the winebth trace (no GATT traffic).
 
 The workshop has no Bluetooth hardware, and bluetoothd's management socket needs
 privileges the container does not have (`bluetoothctl scan` hangs on `mgmt_socket`),
@@ -225,18 +227,31 @@ Gotchas that cost time to discover (all verified live):
   detached with `setsid` — a cancelled caller takes its process group down otherwise.
   The bluez package's D-Bus activation stub (`Exec=/bin/false`) must be removed, or the
   first call to the unowned `org.bluez` name fails with a confusing systemd error.
-- bluezoo only scans while the client that started the discovery stays connected, and
-  it reports a peer only when the peer is discoverable. `bluetoothctl` cannot do
-  either here (its management socket hangs), so `tests/bluetooth-scan.py` drives both
-  adapters over plain D-Bus: a plain discovery on hci0 (the keep-alive client) and a
-  discovery with the `Discoverable` filter on hci1 (how the mock exposes a peer —
-  writing the adapter property directly is denied by the mock).
+- bluezoo has no device emulation of its own: a device is another mock adapter. bluezoo
+  runs two adapters, hci0 (the PC, `00:00:00:11:11:11`) and hci1 (the trainer,
+  `00:00:00:22:22:22`). `tests/bluetooth-trainer.py` makes hci1 a BLE trainer named
+  "KICKR": an LE advertisement (FTMS 0x1826 + Cycling Power 0x1818, discoverable) and a
+  GATT application with FTMS, Cycling Power and Device Information; it streams 150 W /
+  85 rpm while notifications are on and logs every read/write/notify to `trainer.log`.
+  bluezoo links the GATT application to the central's Device1 on Connect.
+- bluezoo only scans while the client that started the discovery stays connected (and any
+  client's StopDiscovery stops it for all). `bluetoothctl` cannot do that here (its
+  management socket hangs), so `tests/bluetooth-scan.py` keeps an LE-only discovery open on
+  hci0 over plain D-Bus.
+- bluezoo reports RSSI 0 and never changes it, but winebth re-reports an advertisement to
+  the BLE watcher only when an LE property changes with an RSSI present — so Zwift saw
+  KICKR once and dropped it. `tests/bluezoo-run.py` wraps bluezoo, sets RSSI to -55 and
+  jitters it on every scan round (one PropertiesChanged per second).
+- winebth would add the trainer's own adapter as a second radio, and wine's watcher uses
+  the first radio. `ROUVY_BT_ADAPTER=hci0` (a hci name or address, read in winebth's
+  `dbus.c`) makes winebth use only hci0 and log "ignoring Bluetooth adapter hci1"; both
+  tests export it.
 - The snap app remaps `$HOME` to its private `~/snap/zwift/x1`, so a prefix in
   `~/snap/zwift/common` is `$HOME/../common/...` from inside the snap.
 - Everything under `/tmp` inside the snap is private to each command and discarded —
   a log file written there is gone before it can be read.
 
-The bluezoo setup (starting the mock as root, the scan client, the prerequisites) lives in
+The bluezoo setup (starting the mock as root, the trainer, the scan client, the prerequisites) lives in
 `tests/lib/bluezoo.sh`, shared by `tests/bluetooth.sh` and the pairing test below.
 
 ## Pairing-screen test (fake login servers)
@@ -266,14 +281,30 @@ Full detail is in `tests/pairing/README.md`; the essentials:
   (click "log in with existing account", empty fields); a returning run opens on LOG IN with the
   email pre-filled (type only the password). EULA / sport / reason are each optional (a returning
   profile skips them).
-- yarf cannot read the snap's data dir, so `tests/pairing.sh` asserts `ZSF_PAIRING_SCREEN` in the
-  game `Log.txt` in bash, and saves `pairing-screen.png`. The test asserts only that the screen
-  is reached, not which devices it lists. Artifacts: `~/zwift-pairing-out/`.
-- On the pairing screen Zwift starts a native BLE search; wine's advertisement watcher turns it
-  into a BlueZ `SetDiscoveryFilter(Transport="le")` + `StartDiscovery` on the default radio
-  (bluezoo logs `Starting discovery on adapter[0]`). Classic BR/EDR devices are therefore never
-  reported to Zwift. `tests/pairing.sh --explore` keeps the game on the pairing screen for an
-  hour to watch this live (game log, bluezoo log, `tests/tools/yarf.sh`).
+- The pairing screen is detected by its POWER SOURCE tile, not the PAIRED DEVICES title: Zwift
+  can open a "No ANT+ dongle connected?" tip over the title. The suite then pairs the mock
+  trainer: POWER SOURCE → PAIR DEVICE dialog → click KICKR → CLOSE. Clicking a device in the
+  dialog toggles it, and clicking a *connected* tile unpairs it, so a returning profile is first
+  given time to reconnect by itself.
+- yarf cannot read the snap's data dir, so `tests/pairing.sh` asserts in bash on the game
+  `Log.txt`: `ZSF_PAIRING_SCREEN`, `Device: "KICKR" has new connection status: connected`, the
+  `Power: KICKR` role in the last `Device List:`, and the indoor-bike-data / cycling-power
+  notify subscriptions in `trainer.log`. A fresh pairing assigns only the Power role; Cadence
+  and Controllable Trainer show up on some layouts or after re-selecting, so they are not
+  required. Artifacts: `~/zwift-pairing-out/`.
+- On the pairing screen Zwift starts a native BLE search (BleWin10Lib); wine's advertisement
+  watcher turns it into a BlueZ `SetDiscoveryFilter(Transport="le")` + `StartDiscovery` on the
+  default radio. Classic BR/EDR devices are therefore never reported to Zwift.
+  `tests/pairing.sh --explore` keeps the game on the pairing screen for an hour to watch and
+  click live (game log, `bluezoo.log`, `trainer.log`, `tests/tools/yarf.sh`); run it detached
+  so an interrupted caller does not close the game. Set `WINEDEBUG` (e.g.
+  `+bluetooth,+winebth`) to trace wine's side.
+- A killed run skips its EXIT trap and leaves the stub CA in `cacert.pem`; the next run strips it
+  before taking its backup.
+- yarf's OCR (RapidOCR on onnxruntime) uses every core by default: one pass over a 1280×1024
+  frame cost ~32 s of CPU. `tests/lib/yarf_ocr.py`, imported as a Robot `Library` by both
+  suites (and staged next to them), caps it at 4 intra-op threads (~6 s CPU, faster wall time).
+  yarf's own match loops already sleep at least 0.1 s per iteration.
 - `tests/tools/yarf.sh` (the `yarf` action) sends pointer/keyboard input and takes screenshots
   of the running compositor (yarf's own wayland clients inside the yarf snap), for exploring the
   screens by hand when updating the suite for a new Zwift version.

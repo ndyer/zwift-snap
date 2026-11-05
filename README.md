@@ -55,9 +55,10 @@ debug audio run `WINEDEBUG=+pulse,+mmdevapi zwift`.
 - The snap uses strict confinement. If something is blocked, install with `--devmode`
   and report the denials from `snappy-debug`.
 - Only amd64 is supported.
-- Bluetooth does not work in Zwift: Wine 11.21 lacks the BLE scanning support Zwift
-  needs, so Zwift reports that the Bluetooth receiver is turned off. Game controllers
-  are not available. Connect smart trainers and ANT+ devices through the Zwift
-  companion app.
+- Bluetooth smart trainers are experimental: the snap's Wine implements the BLE scanning
+  and GATT support Zwift uses, and Zwift discovers, pairs and reads power from a mocked
+  BLE trainer in testing, but real trainers are not yet verified. Only Bluetooth LE
+  devices are found (no classic Bluetooth). Game controllers are not available. If a
+  device does not show up, pair it through the Zwift companion app.
 
 Development and testing guidance is in [AGENTS.md](AGENTS.md).

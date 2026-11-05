@@ -111,6 +111,12 @@ ensure_prerequisites() {
 # append_cacert: trust the stub CA by appending it to the game's cacert.pem, after a backup
 append_cacert() {
     [[ -f ${CACERT} ]] || die "the game cacert.pem is missing: ${CACERT}"
+    # a killed run (no EXIT trap) leaves its CA behind: drop it, or it is backed up as original
+    if grep -q '^# zwift-stub test CA' "${CACERT}"; then
+        local clean
+        clean=$(awk '/^# zwift-stub test CA/ { exit } { print }' "${CACERT}")
+        printf '%s\n' "${clean}" > "${CACERT}"
+    fi
     cp -a "${CACERT}" "${OUT_DIR}/cacert.pem.orig"
     {
         echo
@@ -179,6 +185,30 @@ start_stub() {
     done
 }
 
+# check_trainer: yarf saw a CONNECTED tile; confirm from the game log that Zwift connected the mock
+# trainer in all its roles, and from the trainer's own log that it subscribed to its data
+check_trainer() {
+    local characteristic devices waited=0
+    grep -aq "Device: \"${BLUEZOO_TRAINER_NAME}\" has new connection status: connected" "${GAME_LOG}" \
+        || { report_failure; die "Zwift did not connect the mock trainer ${BLUEZOO_TRAINER_NAME}"; }
+    # pairing through the POWER SOURCE tile assigns the power role; other roles (cadence,
+    # controllable trainer) only follow on some pairing layouts, so they are not required.
+    # The last device list in the log is the current assignment (captured first: grep -q would
+    # close the pipe early and pipefail would report tac's SIGPIPE as a failure)
+    while :; do
+        devices=$(tac "${GAME_LOG}" | sed -n '/^\[[0-9:]*\] Device List:/q;p')
+        [[ ${devices} != *"Power: ${BLUEZOO_TRAINER_NAME} "* ]] || break
+        ((waited += 1))
+        [[ ${waited} -lt 30 ]] \
+            || { report_failure; die "Zwift did not assign the mock trainer the power role"; }
+        sleep 1
+    done
+    for characteristic in indoor-bike-data cycling-power-measurement; do
+        grep -q "start notify ${characteristic}" "${OUT_DIR}/trainer.log" \
+            || { report_failure; die "Zwift did not subscribe to the trainer's ${characteristic}"; }
+    done
+}
+
 # start_game: drive the game directly (launcher dance without a token), inside the snap
 start_game() {
     local run_seconds="${1:-${RUN_SECONDS_DEFAULT}}"
@@ -186,6 +216,10 @@ start_game() {
 set -uo pipefail
 export ZWIFT_NO_GUI=1
 export https_proxy="${STUB_PROXY}" HTTPS_PROXY="${STUB_PROXY}"
+# winebth would otherwise also expose the mock trainer's own adapter as a radio, and Zwift's
+# watcher would scan from it; see tests/lib/bluezoo.sh
+export ROUVY_BT_ADAPTER=hci0
+${WINEDEBUG:+export WINEDEBUG="${WINEDEBUG}"}
 # shellcheck source=/dev/null
 source "\${SNAP}/bin/zwift-common.sh"
 link_wayland_socket
@@ -205,8 +239,9 @@ wineserver -k || true
 EOF
     (
         # shellcheck disable=SC2016
-        snap run --shell zwift.wine -c 'bash "$HOME/../common/pairing-run.sh"' \
-            > "${OUT_DIR}/game.log" 2>&1
+        # snap run loses its output when stdout is a plain file, so it goes through tee
+        snap run --shell zwift.wine -c 'bash "$HOME/../common/pairing-run.sh"' 2>&1 \
+            | tee "${OUT_DIR}/game.log" > /dev/null
     ) &
     game_pid=$!
 }
@@ -231,6 +266,7 @@ main() {
     rm -rf "${OUT_DIR}" "${YARF_SUITE_DIR}"
     mkdir -p "${OUT_DIR}" "${YARF_SUITE_DIR}"
     cp -r "${ROOT}/tests/pairing/." "${YARF_SUITE_DIR}/"
+    cp "${ROOT}/tests/lib/yarf_ocr.py" "${YARF_SUITE_DIR}/"
 
     clear_stale_socket
     case "${SMOKE_DISPLAY:-auto}" in
@@ -246,6 +282,7 @@ main() {
     esac
 
     bluezoo_start
+    bluezoo_trainer_start
     bluezoo_scan_start
     start_stub
     append_cacert
@@ -278,7 +315,9 @@ main() {
         die "the yarf suite passed but the game did not reach ZSF_PAIRING_SCREEN"
     fi
 
-    # keep a screenshot of the pairing screen (its Bluetooth tile shows wine's BLE support state)
+    check_trainer
+
+    # keep a screenshot of the pairing screen with the connected trainer
     "${ROOT}/tests/tools/yarf.sh" screenshot -s "${WAYLAND_SOCKET}" "${OUT_DIR}/pairing-screen.png" > /dev/null 2>&1 \
         || echo "pairing: note: could not capture the pairing screenshot"
 
@@ -288,7 +327,7 @@ main() {
         echo "pairing: use 'tests/tools/yarf.sh input -s ${WAYLAND_SOCKET} <actions>' to interact"
         echo "pairing: tail the logs with: tail -f ~/zwift-pairing-out/bluezoo.log ~/snap/zwift/common/zwift.log"
         echo "pairing: game log at: ${GAME_LOG}"
-        echo "pairing: bluezoo log at: ${OUT_DIR}/bluezoo.log"
+        echo "pairing: bluezoo log at: ${OUT_DIR}/bluezoo.log, mock trainer log at: ${OUT_DIR}/trainer.log"
         # Wait for the game to finish or user interruption
         local waited=0
         while pgrep -f "C:\\\\windows\\\\system32\\\\winedevice.exe" > /dev/null 2>&1; do
@@ -301,7 +340,8 @@ main() {
         done
     fi
 
-    echo "pairing: PASSED (the game reached the device pairing screen)"
+    echo "pairing: PASSED (the game reached the pairing screen and connected the mock trainer" \
+        "${BLUEZOO_TRAINER_NAME} as its power source)"
 }
 
 main "$@"

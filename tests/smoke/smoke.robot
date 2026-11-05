@@ -7,6 +7,8 @@ Documentation     Visual smoke test of the zwift snap.
 ...              the yad progress dialog appears, the install stages run through and
 ...              the Zwift window finally comes up. No login is performed.
 Resource          kvm.resource
+# caps the threads of the OCR in Match Text, which otherwise runs on every core
+Library           yarf_ocr.py
 
 *** Variables ***
 # The first run installs wine prerequisites and downloads Zwift, which takes tens of

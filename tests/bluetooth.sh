@@ -5,15 +5,16 @@
 # bluezoo takes the place of bluetoothd and owns org.bluez on the workshop
 # system bus (bluetooth.service is masked by the SDK setup-base hook). The
 # confined snap reaches it through its bluez plug, exactly as it would reach a
-# real BlueZ on the host. With WINEDEBUG=+winebth the test then checks that
-# wine's Bluetooth driver
-# - sees the two mock adapters (radios),
+# real BlueZ on the host. bluezoo runs two adapters: hci0 is the PC's radio, hci1 is a mock
+# BLE smart trainer (tests/bluetooth-trainer.py) that hci0 discovers over LE. With
+# WINEDEBUG=+winebth,+dbus the test then checks that wine's Bluetooth driver
+# - uses hci0 as its only radio and ignores the trainer's adapter (ROUVY_BT_ADAPTER),
 # - registers its authentication agent with BlueZ, and
-# - learns about a peer device that the mock reports as discovered.
+# - learns about the trainer from its LE advertisement (the two service UUIDs, FTMS and
+#   Cycling Power) and creates a Windows device for it.
 #
-# This is a plumbing test: Zwift itself cannot see any of it yet, because
-# wine 11.21 does not implement the BLE advertisement watcher (see README,
-# "Bluetooth does not work in Zwift").
+# This is a plumbing test without a Windows program: nothing connects to the trainer or
+# reads its GATT services here, tests/pairing.sh covers that through Zwift.
 #
 # Usage: tests/bluetooth.sh
 # The zwift snap must already be installed (workshop run zwift-snap install);
@@ -97,10 +98,12 @@ start_wine() {
     mkdir -p "${BT_PREFIX}"
     cat > "${BT_PREFIX}/trace-wine.sh" <<EOF
 export WINEPREFIX="\$HOME/../common/bt-test"
+# winebth would otherwise also expose the trainer's adapter as a radio, see bluezoo.sh
+export ROUVY_BT_ADAPTER=hci0
 # gecko and mono installs are disabled at wineboot by the real launcher too;
 # winemenubuilder is silenced by wine-env.sh
-WINEDEBUG=+winebth WINEDLLOVERRIDES='mshtml,mscoree=' wine wineboot -i
-WINEDEBUG=+winebth wine cmd /c 'ping -n ${KEEPALIVE_SECONDS} 127.0.0.1'
+WINEDEBUG=+winebth,+dbus WINEDLLOVERRIDES='mshtml,mscoree=' wine wineboot -i
+WINEDEBUG=+winebth,+dbus wine cmd /c 'ping -n ${KEEPALIVE_SECONDS} 127.0.0.1'
 EOF
     (
         # snap run fails with an empty output when its stdout is a regular
@@ -133,33 +136,53 @@ check_trace_failures() {
     fi
 }
 
+# the trainer is fully plumbed once winebth has started the Windows device it created for it
+trainer_device_started() {
+    grep -q "remote_device_pdo_pnp .*IRP_MN_START_DEVICE" "${OUT_DIR}/wine-trace.log" 2> /dev/null
+}
+
 wait_for_device() {
     local waited=0
-    while ! grep -q "${BLUEZOO_PEER_DEVICE_NAME}" "${OUT_DIR}/wine-trace.log" 2> /dev/null; do
+    while ! trainer_device_started; do
         ((waited += 1))
         if [[ ${waited} -ge ${TRACE_WAIT_TIMEOUT} ]]; then
             check_trace_failures
             report_failure
-            die "the mock peer device did not reach winebth within ${TRACE_WAIT_TIMEOUT}s"
+            die "the mock trainer did not reach winebth within ${TRACE_WAIT_TIMEOUT}s"
         fi
         sleep 1
     done
 }
 
+# trainer_uuid_count: the number of service UUIDs in the properties winebth parsed for the
+# trainer (the +dbus channel shows the property types and array sizes, not the values)
+trainer_uuid_count() {
+    local device="${BLUEZOO_CENTRAL_ADAPTER}/${BLUEZOO_TRAINER_DEVICE_NAME}"
+    awk -v start="bluez_handle_new_object (\"${device}\"" '
+        index($0, start) { inside = 1; next }
+        inside && /bluez_device_prop_from_dict_entry \("UUIDs"/ {
+            match($0, /count=[0-9]+/); print substr($0, RSTART + 6, RLENGTH - 6); exit
+        }
+        inside && /New org.bluez.Device1 object/ { exit }
+    ' "${OUT_DIR}/wine-trace.log"
+}
+
 check_trace() {
-    local trace="${OUT_DIR}/wine-trace.log"
-    for adapter in hci0 hci1; do
-        if ! grep -q "New BlueZ org.bluez.Adapter1 object \"/org/bluez/${adapter}\"" "${trace}"; then
-            report_failure
-            die "winebth did not see the mock adapter ${adapter}"
-        fi
-    done
-    grep -q "Adding new bluetooth radio" "${trace}" \
-        || { report_failure; die "winebth did not create radio devices for the mock adapters"; }
+    local trace="${OUT_DIR}/wine-trace.log" radios uuids
+    grep -q "New BlueZ org.bluez.Adapter1 object \"${BLUEZOO_CENTRAL_ADAPTER}\"" "${trace}" \
+        || { report_failure; die "winebth did not see the mock adapter hci0"; }
+    grep -q "winebth: ignoring Bluetooth adapter hci1" "${trace}" \
+        || { report_failure; die "winebth did not ignore the trainer's adapter hci1 (ROUVY_BT_ADAPTER)"; }
+    radios=$(grep -c "Adding new bluetooth radio" "${trace}")
+    [[ ${radios} -eq 1 ]] \
+        || { report_failure; die "winebth created ${radios} radios, expected only the one for hci0"; }
     grep -q "Registered authentication agent" "${trace}" \
         || { report_failure; die "winebth did not register its authentication agent with BlueZ"; }
-    grep -q "${BLUEZOO_PEER_DEVICE_NAME}" "${trace}" \
-        || { report_failure; die "winebth did not see the discovered peer device ${BLUEZOO_PEER_ADDRESS}"; }
+    grep -q "New org.bluez.Device1 object \"${BLUEZOO_CENTRAL_ADAPTER}/${BLUEZOO_TRAINER_DEVICE_NAME}\"" "${trace}" \
+        || { report_failure; die "winebth did not see the trainer ${BLUEZOO_TRAINER_ADDRESS} on hci0"; }
+    uuids=$(trainer_uuid_count)
+    [[ ${uuids} == 2 ]] \
+        || { report_failure; die "winebth saw ${uuids:-no} service UUIDs for the trainer, expected 2 (FTMS, Cycling Power)"; }
 }
 
 main() {
@@ -168,13 +191,15 @@ main() {
     mkdir -p "${OUT_DIR}"
 
     bluezoo_start
+    bluezoo_trainer_start
     bluezoo_scan_start
     start_wine
     wait_for_device
     check_trace_failures
     check_trace
 
-    echo "bluetooth: PASSED (winebth saw both mock adapters, its agent and the discovered peer ${BLUEZOO_PEER_ADDRESS})"
+    echo "bluetooth: PASSED (winebth used hci0 only, registered its agent and created a device for the" \
+        "LE trainer ${BLUEZOO_TRAINER_NAME} ${BLUEZOO_TRAINER_ADDRESS} with its 2 service UUIDs)"
 }
 
 main "$@"

@@ -7,21 +7,28 @@
 #   - set OUT_DIR (a writable directory for bluezoo.log and scan.log) and ROOT (the repo root),
 #   - provide a `die MESSAGE` function and a `connected PLUG` function (true when the plug of the
 #     zwift snap is connected).
-# It sets bluezoo_pid and scan_pid for the caller's cleanup trap; call bluezoo_stop from there.
+# It sets bluezoo_pid, trainer_pid and scan_pid for the caller's cleanup trap; call bluezoo_stop
+# from there.
 
-# hci0 is the radio winebth attaches to, hci1 acts as the peer device that gets discovered
-# (see tests/bluetooth-scan.py).
+# hci0 is the PC's radio that winebth and Zwift scan with. bluezoo has no API to create a remote
+# device, a device is always another mock adapter, so hci1 is the mock smart trainer: it
+# advertises over LE and serves FTMS / Cycling Power GATT services (tests/bluetooth-trainer.py).
 readonly BLUEZOO_CENTRAL_ADAPTER="/org/bluez/hci0"
-readonly BLUEZOO_PEER_ADAPTER="/org/bluez/hci1"
-readonly BLUEZOO_PEER_ADDRESS="00:00:00:22:22:22"
-# used by callers (bluetooth.sh), not inside this helper
+readonly BLUEZOO_TRAINER_ADAPTER="/org/bluez/hci1"
+readonly BLUEZOO_TRAINER_ADDRESS="00:00:00:22:22:22"
+# used by callers, not inside this helper
 # shellcheck disable=SC2034
-readonly BLUEZOO_PEER_DEVICE_NAME="dev_00_00_00_22_22_22"
+readonly BLUEZOO_TRAINER_NAME="KICKR"
+# shellcheck disable=SC2034
+readonly BLUEZOO_TRAINER_DEVICE_NAME="dev_00_00_00_22_22_22"
 readonly BLUEZOO_START_TIMEOUT=20
+# matches the mock started by bluezoo_start, and a plain bluezoo left over by an older run
+readonly BLUEZOO_PATTERN="bluezoo(-run\\.py)? --auto-enable"
 # the scan client stays connected this long; the caller's test must finish well within it
 BLUEZOO_KEEPALIVE_SECONDS="${BLUEZOO_KEEPALIVE_SECONDS:-120}"
 
 bluezoo_pid=""
+trainer_pid=""
 scan_pid=""
 
 # bluezoo_wait_for TIMEOUT DESCRIPTION COMMAND [ARGS...]: run the command every second until it
@@ -79,15 +86,16 @@ bluezoo_adapters_up() {
 bluezoo_start() {
     # A run that died hard leaves bluezoo behind; it must be gone before the new one can own
     # org.bluez.
-    sudo pkill -f "bluezoo --auto-enable" > /dev/null 2>&1
+    sudo pkill -f "${BLUEZOO_PATTERN}" > /dev/null 2>&1
     sleep 1
 
     # bluezoo must run as root: the bluez D-Bus policy only lets root own org.bluez. setsid
     # detaches it from this script's process group so a cancelled caller does not take it down
     # with it. The log is written by the root shell inside the sudo command, because a redirect
     # on the outside would belong to the calling user's sudo wrapper.
-    sudo setsid sh -c "exec bluezoo --auto-enable --scan-interval=1 \
-        -a 00:00:00:11:11:11 -a ${BLUEZOO_PEER_ADDRESS} \
+    # tests/bluezoo-run.py is bluezoo with a live RSSI, see there.
+    sudo setsid sh -c "exec /opt/bluezoo/bin/python3 '${ROOT}/tests/bluezoo-run.py' --auto-enable --scan-interval=1 \
+        -a 00:00:00:11:11:11 -a ${BLUEZOO_TRAINER_ADDRESS} \
         > '${OUT_DIR}/bluezoo.log' 2>&1" < /dev/null &
     bluezoo_pid=$!
 
@@ -95,11 +103,18 @@ bluezoo_start() {
     bluezoo_wait_for "${BLUEZOO_START_TIMEOUT}" "the mock adapters hci0 and hci1 coming up" bluezoo_adapters_up
 }
 
+# bluezoo_trainer_start: turn hci1 into the mock trainer; its log is trainer.log
+bluezoo_trainer_start() {
+    /opt/bluezoo/bin/python "${ROOT}/tests/bluetooth-trainer.py" "${BLUEZOO_TRAINER_ADAPTER}" \
+        --name "${BLUEZOO_TRAINER_NAME}" > "${OUT_DIR}/trainer.log" 2>&1 &
+    trainer_pid=$!
+    bluezoo_wait_for 10 "the mock trainer advertising" \
+        grep -q "advertising as" "${OUT_DIR}/trainer.log"
+}
+
 bluezoo_scan_start() {
-    # The scan client must stay connected or bluezoo stops scanning; it also makes the peer
-    # adapter discoverable (see tests/bluetooth-scan.py).
-    /opt/bluezoo/bin/python "${ROOT}/tests/bluetooth-scan.py" \
-        "${BLUEZOO_CENTRAL_ADAPTER}" "${BLUEZOO_PEER_ADAPTER}" \
+    # The scan client must stay connected or bluezoo stops scanning (see tests/bluetooth-scan.py).
+    /opt/bluezoo/bin/python "${ROOT}/tests/bluetooth-scan.py" "${BLUEZOO_CENTRAL_ADAPTER}" \
         --timeout "${BLUEZOO_KEEPALIVE_SECONDS}" \
         > "${OUT_DIR}/scan.log" 2>&1 &
     scan_pid=$!
@@ -107,11 +122,12 @@ bluezoo_scan_start() {
         grep -q "discovery started" "${OUT_DIR}/scan.log"
 }
 
-# bluezoo_stop: for the caller's cleanup trap. Stops the scan client and bluezoo.
+# bluezoo_stop: for the caller's cleanup trap. Stops the scan client, the trainer and bluezoo.
 bluezoo_stop() {
     [[ -z ${scan_pid} ]] || kill "${scan_pid}" 2> /dev/null
+    [[ -z ${trainer_pid} ]] || kill "${trainer_pid}" 2> /dev/null
     [[ -z ${bluezoo_pid} ]] || {
         sudo kill "${bluezoo_pid}" 2> /dev/null
-        sudo pkill -f "bluezoo --auto-enable" > /dev/null 2>&1
+        sudo pkill -f "${BLUEZOO_PATTERN}" > /dev/null 2>&1
     }
 }

@@ -29,7 +29,8 @@ The zwift snap must be installed and Zwift already downloaded into the prefix, s
   a few empty 200s. The protobuf shapes come from
   [zwift-offline](https://github.com/fatsbrown/zwift-offline).
 - [`tests/pairing/pairing.robot`](pairing.robot) drives the UI with yarf: it logs in through the
-  form and clicks through the onboarding screens to the pairing screen. tests/pairing.sh then
+  form and clicks through the onboarding screens to the pairing screen, then pairs the mock
+  trainer (see Bluetooth below). tests/pairing.sh then
   confirms in the game log that it reached `ZSF_PAIRING_SCREEN` (yarf cannot read the snap's data
   directory) and saves a screenshot of the pairing screen.
 
@@ -44,17 +45,31 @@ profile skips them.
 
 ## Bluetooth
 
-bluezoo (the same BlueZ D-Bus mock as `tests/bluetooth.sh`, via `tests/lib/bluezoo.sh`) runs so
-the pairing screen has adapters to talk to, but Zwift still finds no devices: wine 11.21 does not
-implement the BLE advertisement watcher Zwift uses (see the top-level README, "Bluetooth does not
-work in Zwift"). The saved `pairing-screen.png` shows the Bluetooth tile with its warning icon;
-the test asserts only that the pairing screen is reached, not the Bluetooth state.
+bluezoo (the same BlueZ D-Bus mock as `tests/bluetooth.sh`, via `tests/lib/bluezoo.sh`) runs two
+adapters: hci0 is the PC, hci1 is a BLE smart trainer named KICKR
+([`tests/bluetooth-trainer.py`](../bluetooth-trainer.py): FTMS, Cycling Power and Device
+Information over GATT, streaming 150 W / 85 rpm). `ROUVY_BT_ADAPTER=hci0` keeps wine on the PC
+adapter, and [`tests/bluezoo-run.py`](../bluezoo-run.py) gives the trainer a changing RSSI so
+wine keeps reporting its advertisements to Zwift.
+
+After reaching the pairing screen (detected by its POWER SOURCE tile, since a "No ANT+ dongle"
+tip can cover the PAIRED DEVICES title), the suite pairs the trainer: POWER SOURCE → PAIR DEVICE
+→ KICKR → CLOSE. Clicking a connected tile would unpair the device, so a returning profile is
+first given time to reconnect by itself. tests/pairing.sh then checks in the game log that KICKR
+connected and holds the Power role, and in `trainer.log` that Zwift subscribed to the power and
+indoor bike data notifications. Cadence and Controllable Trainer roles are not required: a fresh
+pairing assigns only Power.
+
+Use `tests/pairing.sh --explore` (best run detached) to keep the game on the pairing screen for
+an hour and drive it with `tests/tools/yarf.sh`; set `WINEDEBUG=+bluetooth,+winebth` to trace
+wine.
 
 ## Artifacts
 
 On success and failure, artifacts are in `~/zwift-pairing-out/`: `pairing-screen.png`, the yarf
 `log.html` (screenshots yarf compared), `yarf.log`, `stub/requests.log` (the requests the game
-made, with request bodies redacted), `bluezoo.log`, `scan.log` and the per-mode `mir-*.log`.
+made, with request bodies redacted), `bluezoo.log`, `trainer.log`, `scan.log`, `game.log` and
+the per-mode `mir-*.log`.
 
 ## Driving the game by hand
 
