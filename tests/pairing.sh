@@ -10,7 +10,9 @@
 # never runs and cannot overwrite the CA. The yarf suite in tests/pairing/ then types fake
 # credentials and clicks through the onboarding screens to the pairing screen.
 #
-# Usage: SMOKE_DISPLAY=auto|nested|headless tests/pairing.sh [extra yarf arguments]
+# Usage: SMOKE_DISPLAY=auto|nested|headless tests/pairing.sh [--explore] [extra yarf arguments]
+# With --explore, the game keeps running after reaching the pairing screen for manual
+# exploration. Use tests/tools/yarf.sh screenshot and input commands to interact with it.
 # The zwift snap must already be installed and Zwift downloaded into the prefix (run the smoke
 # test once first); this script never installs, updates or removes anything.
 set -uo pipefail
@@ -33,8 +35,13 @@ readonly ZWIFT_USER_DIR="${PREFIX}/drive_c/users/${USER}/AppData/Local/Zwift"
 readonly GAME_LOG="${ZWIFT_USER_DIR}/Logs/Log.txt"
 readonly RUN_SCRIPT="${HOME}/snap/zwift/common/pairing-run.sh"
 # how long the game is kept running while yarf drives it; must outlast the yarf suite
-readonly RUN_SECONDS=360
-export BLUEZOO_KEEPALIVE_SECONDS="${RUN_SECONDS}"
+# in explore mode, extend this to allow manual testing
+readonly RUN_SECONDS_DEFAULT=360
+readonly RUN_SECONDS_EXPLORE=3600
+export BLUEZOO_KEEPALIVE_SECONDS="${RUN_SECONDS_DEFAULT}"
+
+explore_mode=false
+yarf_args=()
 
 mir_pid=""
 stub_pid=""
@@ -170,6 +177,7 @@ start_stub() {
 
 # start_game: drive the game directly (launcher dance without a token), inside the snap
 start_game() {
+    local run_seconds="${1:-${RUN_SECONDS_DEFAULT}}"
     cat > "${RUN_SCRIPT}" <<EOF
 set -uo pipefail
 export ZWIFT_NO_GUI=1
@@ -185,7 +193,7 @@ launcher_pid="\$(wine_task_pid ZwiftLauncher.exe)"
 wine start /d "\${zwift_wine_dir}" /unix "\${SNAP}/bin/runfromprocess-rs.exe" "\${launcher_pid}" ZwiftApp.exe
 wait_until_wine_task_started ZwiftApp.exe
 wine taskkill /f /im ZwiftLauncher.exe > /dev/null 2>&1 || true
-for _ in \$(seq 1 ${RUN_SECONDS}); do
+for _ in \$(seq 1 ${run_seconds}); do
     is_wine_task_running ZwiftApp.exe || break
     sleep 1
 done
@@ -199,6 +207,21 @@ EOF
 }
 
 main() {
+    # parse arguments to extract --explore flag
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+        --explore)
+            explore_mode=true
+            export BLUEZOO_KEEPALIVE_SECONDS="${RUN_SECONDS_EXPLORE}"
+            shift
+            ;;
+        *)
+            yarf_args+=("$1")
+            shift
+            ;;
+        esac
+    done
+
     ensure_prerequisites
     rm -rf "${OUT_DIR}" "${YARF_SUITE_DIR}"
     mkdir -p "${OUT_DIR}" "${YARF_SUITE_DIR}"
@@ -221,7 +244,13 @@ main() {
     bluezoo_scan_start
     start_stub
     append_cacert
-    start_game
+    
+    # Determine game run duration based on explore mode
+    local game_run_seconds="${RUN_SECONDS_DEFAULT}"
+    if [[ ${explore_mode} == true ]]; then
+        game_run_seconds="${RUN_SECONDS_EXPLORE}"
+    fi
+    start_game "${game_run_seconds}"
 
     # the game needs a moment to come up before yarf starts matching the login form
     echo "pairing: waiting for the Zwift window"
@@ -233,7 +262,7 @@ main() {
     done
 
     # yarf exits 120 with no output when its stdout is a plain file, so pipe it through tee
-    if ! yarf --platform Mir "${YARF_SUITE_DIR}" --outdir "${OUT_DIR}" "$@" 2>&1 | tee "${OUT_DIR}/yarf.log"; then
+    if ! yarf --platform Mir "${YARF_SUITE_DIR}" --outdir "${OUT_DIR}" "${yarf_args[@]}" 2>&1 | tee "${OUT_DIR}/yarf.log"; then
         report_failure
         die "the yarf suite failed"
     fi
@@ -247,6 +276,25 @@ main() {
     # keep a screenshot of the pairing screen (its Bluetooth tile shows wine's BLE support state)
     "${ROOT}/tests/tools/yarf.sh" screenshot -s "${WAYLAND_SOCKET}" "${OUT_DIR}/pairing-screen.png" > /dev/null 2>&1 \
         || echo "pairing: note: could not capture the pairing screenshot"
+
+    if [[ ${explore_mode} == true ]]; then
+        echo "pairing: explore mode - game running for ${RUN_SECONDS_EXPLORE}s at pairing screen"
+        echo "pairing: use 'tests/tools/yarf.sh screenshot -s ${WAYLAND_SOCKET} [FILE.png]' to view the screen"
+        echo "pairing: use 'tests/tools/yarf.sh input -s ${WAYLAND_SOCKET} <actions>' to interact"
+        echo "pairing: tail the logs with: tail -f ~/zwift-pairing-out/bluezoo.log ~/snap/zwift/common/zwift.log"
+        echo "pairing: game log at: ${GAME_LOG}"
+        echo "pairing: bluezoo log at: ${OUT_DIR}/bluezoo.log"
+        # Wait for the game to finish or user interruption
+        local waited=0
+        while pgrep -f "C:\\\\windows\\\\system32\\\\winedevice.exe" > /dev/null 2>&1; do
+            sleep 10
+            ((waited += 1))
+            if [[ $((waited % 6)) -eq 0 ]]; then
+                local remaining=$((RUN_SECONDS_EXPLORE - waited * 10))
+                [[ ${remaining} -gt 0 ]] && echo "pairing: explore mode running (${remaining}s remaining)"
+            fi
+        done
+    fi
 
     echo "pairing: PASSED (the game reached the device pairing screen)"
 }
