@@ -21,7 +21,7 @@ pkgproxy.pkgproxyctl setup snap | sh
 if ! snap list snapcraft > /dev/null 2>&1; then
     snap install snapcraft --classic
 fi
-# apt caches http:// sources only, hence the plain-http WineHQ url in snapcraft.yaml
+# apt caches http:// sources only (plain-https sources still go direct)
 pkgproxy.pkgproxyctl setup apt | sh
 apt-get update && apt-get install -y shellcheck yamllint
 

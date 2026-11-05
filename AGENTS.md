@@ -6,10 +6,11 @@ Guidance for AI coding agents working in this repository.
 
 An unofficial snap packaging of [Zwift](https://zwift.com) for Linux. Zwift itself is
 proprietary and NOT part of the snap — the launcher scripts download and update it
-into a wine prefix at runtime. Wine runs as a WineHQ distro package
-(`wine-devel=11.21~resolute-1`, new-style WoW64, no i386 host libs), not built from
-source. Strict confinement, amd64 only, base `core26`. The old `core24` variant of
-the snap is gone from the tree; it only lives in git history (pre-`6e31f55` commits
+into a wine prefix at runtime. Wine is built from source by the snap's `wine` part:
+[ndyer/wine](https://github.com/ndyer/wine), a fork of the official wine-mirror/wine
+GitHub mirror, at the `source-tag` in `snap/snapcraft.yaml` (currently `wine-11.21`,
+new-style WoW64, no i386 host libs). Strict confinement, amd64 only, base `core26`.
+The old `core24` variant of the snap is gone from the tree; it only lives in git history (pre-`6e31f55` commits
 or the `origin/core26` / `v0.11` refs).
 
 ## Layout
@@ -18,7 +19,6 @@ or the `origin/core26` / `v0.11` refs).
 launcher/          source of the launcher scripts (zwift-run/gui/setup/common.sh, wine-env.sh)
 snap/snapcraft.yaml     the snap definition (parts, prune filters, plugs, layouts)
 snap/prune-closure.sh   DT_NEEDED closure walk that prunes unreachable libraries
-snap/keys/              WineHQ apt repo signing key
 tests/             unit tests (run-tests.sh + scenarios.sh + stubs) and the visual smoke test
   .workshop/         workshop definition (build environment) + in-project SDK zwift-snap-sdk
 overlay/, prime/, stage/, parts/   build trees, gitignored, never edit by hand
@@ -46,6 +46,20 @@ workshop run zwift-snap stats    # pkgproxy cache savings
 There is no `setup` action: snapcraft, shellcheck, yamllint and the pkgproxy cache
 are installed by the `setup-base` hook of the `zwift-snap-sdk` SDK at launch and
 refresh (see `.workshop/zwift-snap-sdk/hooks/setup-base`).
+
+When running `workshop run zwift-snap build` (or any long-running action) from an
+agent, pipe the output through `tee` instead of swallowing it with `tail`: a
+piped `tail` hides the build's live progress (and makes it look hung), while
+`tee` shows the output as it streams and keeps it in a file for later reading,
+for example `workshop run zwift-snap build | tee build.log`. Keep `pipefail` in
+mind when chaining commands afterwards.
+
+- **Stale snap data**: reinstalling the snap (`snap install --dangerous --amend`)
+  does not remove the old wine prefix in `~/snap/zwift/common`. Before smoke
+  testing a fresh build, purge first (`sudo snap remove --purge zwift`), install
+  the new snap and reconnect the `gpu-2604` interface — otherwise the test runs
+  against the stale installation and the new wine is never exercised. `tests/smoke.sh`
+  expects the snap to be installed beforehand and never installs or removes it.
 
 The canonical agent documentation for operating Workshop is the vendored skill under
 `.github/skills/` (`use-workshop`, `onboard-workshop`, `design-sdk`, imported from
@@ -77,6 +91,13 @@ and downloads Zwift (tens of minutes), later runs are quick. No login is perform
 On failure check `~/zwift-smoke-out/`: `yarf.log`, `log.html` (screenshots yarf
 compared), `zwift.out`, the per-mode `mir-<mode>.log`, and the tail of
 `~/snap/zwift/common/zwift.log` that the harness prints.
+
+Two logfiles show live progress while the suite runs:
+
+- `~/snap/zwift/common/zwift.log` — the launcher log: winetricks steps
+  (`Executing` lines), the Zwift download, the launcher's own state.
+- `~/snap/zwift/common/.wine/drive_c/users/<user>/AppData/Local/Zwift/Logs/Log.txt`
+  — Zwift's own log, which only exists once the game has started.
 
 Window decorations and themes differ between machines: when the suite reports a
 missing template, recapture it with the recipe in `tests/yarf/README.md` and commit
@@ -112,12 +133,14 @@ Yarf gotchas that cost time to discover (all verified live):
   `prune-closure.sh`, otherwise craft-parts will not re-run the prime step.
 - **Do not prune** `usr/lib/*/samba` (ntlm_auth needs it) and the nss libraries
   listed in the `lint.ignore` block of `snap/snapcraft.yaml` (dlopened by name).
-- **WineHQ pin**: `wine-devel=11.21~resolute-1` is pinned because WineHQ deletes old
-  builds; bump the pin when builds start failing on a missing package. The apt repo
-  URI is plain `http://` on purpose (pkgproxy only caches http://, apt still verifies
-  signatures).
-- **pkgproxy** caches apt and snap downloads in the workshop; the base snap and
-  https sources are not cached. The `stats` action shows the savings.
+- **Wine source**: the `wine` part builds [ndyer/wine](https://github.com/ndyer/wine)
+  (fork of wine-mirror/wine) at the `source-tag` in `snap/snapcraft.yaml`; a git
+  source only rebuilds when the tag changes, unlike a local source. To update
+  wine, change `source-tag`. For snap-specific patches, put them on a branch in
+  the fork and point the part at that branch with a pinned `source-commit`.
+- **pkgproxy** caches apt and snap downloads in the workshop; the base snap,
+  https sources and the wine git clone are not cached. The `stats` action shows
+  the savings.
 - **No `home` plug**: wine user folders live inside the wine prefix
   (`~/snap/zwift/common/.wine/drive_c/users/<user>/`); the launcher relinks them to
   the real home at every start.

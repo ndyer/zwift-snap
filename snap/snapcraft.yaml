@@ -33,17 +33,6 @@ lint:
         - usr/lib/x86_64-linux-gnu/libnssdbm3.so
         - usr/lib/x86_64-linux-gnu/libnssckbi.so
 
-package-repositories:
-  # WineHQ repository for Ubuntu 26.04 (key: snap/keys/F987672F.asc). The resolute suite
-  # only has amd64, there is no i386 repository. Plain http on purpose: pkgproxy only
-  # caches http:// apt sources (apt still checks the signatures of everything it gets).
-  - type: apt
-    architectures: [amd64]
-    url: http://dl.winehq.org/wine-builds/ubuntu
-    suites: [resolute]
-    components: [main]
-    key-id: D43F640145369C51D786DDEA76F1A20FF987672F
-
 plugs:
   gpu-2604:
     interface: content
@@ -92,18 +81,129 @@ apps:
 
 parts:
   wine:
-    plugin: nil
+    # Built from ndyer/wine, a fork of the official wine-mirror/wine GitHub
+    # mirror of gitlab.winehq.org/wine/wine. The tag keeps the version aligned
+    # with the wine-devel=11.21~resolute-1 package this part used to stage, so
+    # the resulting snap is a like-for-like replacement.
+    #
+    # To update wine: change source-tag (the tag's commit is what is built, no
+    # separate pin). For snap-specific changes put them on a branch in the fork
+    # and point this part at that branch with a pinned source-commit instead.
+    plugin: autotools
+    source: https://github.com/ndyer/wine.git
+    source-type: git
+    source-tag: wine-11.21
+    source-depth: 1
+    # wine ships a configure script, so the plugin goes straight to
+    # configure/make/make install. New style WoW64: 64-bit unix libraries plus
+    # i386 and x86_64 PE files in one tree, like the WineHQ package.
+    autotools-configure-parameters:
+      # the launcher scripts and the snap apps expect this exact prefix
+      - --prefix=/opt/wine-devel
+      - --enable-archs=i386,x86_64
+      # nothing in the snap runs wine's test suite
+      - --disable-tests
     build-packages:
+      # flex, bison, gettext, pkg-config: build requirements of wine itself
+      - flex
+      - bison
+      - gettext
+      - pkg-config
+      # mingw cross compilers for the PE (Windows) side of the WoW64 build
+      - gcc-mingw-w64-i686
+      - gcc-mingw-w64-x86-64
       # glib-compile-schemas, see override-prime
       - libglib2.0-bin
       # readelf for snap/prune-closure.sh, see override-prime
       - binutils
-    # The version is pinned to match the upstream docker image. WineHQ removes
-    # old builds, so bump it when the build starts failing. On resolute wine-devel is
-    # one package with new style WoW64: 64-bit unix libraries plus 32-bit PE files, so
-    # there are no wine-devel-amd64 and wine-devel-i386 packages and no i386 libraries.
+      # libraries wine builds against (the runtime libraries themselves come
+      # from stage-packages below)
+      - libx11-dev
+      - libxext-dev
+      - libxrandr-dev
+      - libxi-dev
+      - libxcursor-dev
+      - libxinerama-dev
+      - libxcomposite-dev
+      - libxfixes-dev
+      - libxrender-dev
+      - libxxf86vm-dev
+      - libxkbcommon-dev
+      - libxkbregistry-dev
+      - libwayland-dev
+      - libvulkan-dev
+      - libgl-dev
+      - libegl-dev
+      - libfreetype-dev
+      - libfontconfig-dev
+      - libgnutls28-dev
+      - libpulse-dev
+      - libasound2-dev
+      - libgstreamer1.0-dev
+      - libgstreamer-plugins-base1.0-dev
+      - libudev-dev
+      - libusb-1.0-0-dev
+      - libsdl2-dev
+      - libkrb5-dev
+      - libv4l-dev
+      - libpcap-dev
+      - libdbus-1-dev
+      - libpcsclite-dev
+      - libcups2-dev
+      - libsane-dev
+      - libgphoto2-dev
+      - libosmesa6-dev
+      - libopenal-dev
+      - libcapi20-dev
+      - libcups2-dev
+    # The runtime libraries that the wine-devel package used to pull in as
+    # dependencies, now listed directly (derived from the Depends/Recommends of
+    # that package, checked against the DT_NEEDED of the built libraries).
     stage-packages:
-      - wine-devel=11.21~resolute-1
+      - libasound2t64
+      - libasound2-plugins
+      - libavcodec62
+      - libavformat62
+      - libavutil60
+      - libcups2t64
+      - libdbus-1-3
+      - libfontconfig1
+      - libfreetype6
+      - libglib2.0-0t64
+      - libglu1-mesa
+      - libgnutls30t64
+      - libgphoto2-6t64
+      - libgphoto2-port12t64
+      - libgssapi-krb5-2
+      - libgstreamer-plugins-base1.0-0
+      - libgstreamer1.0-0
+      - libkrb5-3
+      - libncurses6
+      - libodbc2
+      - libpcap0.8t64
+      - libpcsclite1
+      - libcapi20-3t64
+      - libpulse0
+      - libsane1
+      - libsdl2-2.0-0
+      - libudev1
+      - libusb-1.0-0
+      - libv4l-0
+      - libwayland-client0
+      - libwayland-egl1
+      - libx11-6
+      - libxcomposite1
+      - libxcursor1
+      - libxext6
+      - libxfixes3
+      - libxi6
+      - libxinerama1
+      - libxkbcommon0
+      - libxkbregistry0
+      - libxrandr2
+      - libxrender1
+      - libxxf86vm1
+      - ocl-icd-libopencl1
       # needed by winetricks
       - cabextract
       - ca-certificates
@@ -131,7 +231,11 @@ parts:
       - -usr/share/locale
       # sane scanner backends, only pulled in because wine links against libsane
       - -usr/lib/*/sane
-      # wine-devel ships the complete build toolchain and static import libraries
+      # make install (the autotools plugin runs the plain target, not
+      # install-lib) puts wine's C headers and WineHQ's build toolchain into the
+      # install tree. Nothing here is used at runtime.
+      - -opt/wine-devel/include
+      # wine ships the complete build toolchain and static import libraries
       # for cross-compiling Windows programs. Nothing here is used at runtime and
       # the 776 *.a import libraries alone are ~100 MB. The PE files in the same
       # directories ARE needed (new style WoW64 builtin DLLs) and stay.
@@ -156,8 +260,9 @@ parts:
       craftctl default
       # Deletes tools, import libraries and unreachable libraries; see
       # snap/prune-closure.sh for the closure walk. Bump this comment after
-      # editing that script, craft-parts only re-runs the prime step when the
-      # script text tracked in the part state changes: v3
+      # editing that script or the prime filters above, craft-parts only
+      # re-runs the prime step when the script text tracked in the part state
+      # changes: v4
       # The gschemas.compiled that Debian creates in a trigger is not part of the staged
       # packages. Without it GTK programs (yad) abort with "No GSettings schemas are installed".
       glib-compile-schemas "${CRAFT_PRIME}/usr/share/glib-2.0/schemas"

@@ -58,12 +58,11 @@ it missing — the recipe is in `tests/yarf/README.md`.
 Setup also installs [pkgproxy](https://snapcraft.io/pkgproxy), a caching proxy, and points
 apt and snapd at it. Builds in the same workshop then download each package and snap only
 once; repeat downloads come from the local cache (`workshop run zwift-snap stats`
-shows the savings). The WineHQ repository is fetched over plain http for this, because the
-proxy only caches `http://` sources; apt still checks the repository signatures. Not cached:
-the base snap that snapcraft downloads itself, and anything over `https://`.
+shows the savings). Not cached: the base snap that snapcraft downloads itself,
+anything over `https://`, and the git clone of the wine source.
 
-Destructive mode installs build packages (including the WineHQ apt repository) into the
-workshop itself, so use a throwaway workshop.
+Destructive mode installs build packages into the workshop itself, so use a
+throwaway workshop.
 
 ## Install and run
 
@@ -133,10 +132,13 @@ and `DEBUG`.
   `adv_watcher_Start` in `dlls/windows.devices.bluetooth/advertisement.c` of wine is still a
   stub. The `joystick` interface is not plugged, so game controllers are not available. Smart
   trainers and ANT+ devices must be connected through the Zwift companion app.
-- WineHQ removes old builds, so the pinned `wine-devel` version in `snap/snapcraft.yaml`
-  will eventually need bumping.
-- The WineHQ `resolute` repository is amd64 only and has a single `wine-devel` package. It is a
-  new style WoW64 build: there is no `wine64` binary and no 32-bit unix libraries, 32-bit
-  Windows programs run through the PE files in `lib/wine/i386-windows`. The snap has no i386
-  packages. The winetricks steps (`dotnet48`, `d3dcompiler_47`, `webview2`) have to be checked
-  on a desktop, winetricks prints a warning that new style WoW64 is experimental.
+- Wine is built from source: the `wine` part of `snap/snapcraft.yaml` builds
+  [ndyer/wine](https://github.com/ndyer/wine) (a fork of the official
+  wine-mirror/wine GitHub mirror) at the tag given by `source-tag`. Bump the tag
+  to update wine; for snap-specific patches put them on a branch in the fork and
+  point the part at it with a pinned commit.
+- The build is a new style WoW64 build: there is no `wine64` binary and no 32-bit
+  unix libraries, 32-bit Windows programs run through the PE files in
+  `lib/wine/i386-windows`. The snap has no i386 packages. The winetricks steps
+  (`dotnet48`, `d3dcompiler_47`, `webview2`) have to be checked on a desktop,
+  winetricks prints a warning that new style WoW64 is experimental.

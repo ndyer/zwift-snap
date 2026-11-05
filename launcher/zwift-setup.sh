@@ -172,7 +172,10 @@ update_zwift_using_launcher() {
 
     # also stop if launcher exits before update finishes, so we don't hang forever
     while [[ ${zwift_current_version} == "${zwift_original_version}" ]] && [[ ${counter} -le ${max_iterations} ]] && is_wine_task_running ZwiftLauncher.exe; do
-        gui_progress $((percent_start + counter * percent_span / max_iterations)) "Updating Zwift to version ${zwift_latest_version} (${counter}/${max_iterations})"
+        # The counter is a timeout budget, not a download size: spell out the
+        # elapsed and maximum time so the message cannot be read as "21 of 240 files".
+        gui_progress $((percent_start + counter * percent_span / max_iterations)) \
+            "Updating Zwift to version ${zwift_latest_version}, waited $((counter * ZWIFT_POLL_INTERVAL / 60)) of $((max_iterations * ZWIFT_POLL_INTERVAL / 60)) minutes"
         sleep "${ZWIFT_POLL_INTERVAL}"
         zwift_current_version="$(get_current_version)"
         ((counter++))
