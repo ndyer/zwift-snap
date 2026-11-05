@@ -270,6 +270,12 @@ Full detail is in `tests/pairing/README.md`; the essentials:
   game `Log.txt` in bash, and saves `pairing-screen.png`. Zwift finds no Bluetooth devices
   (wine 11.21 BLE stub); the test asserts only that the screen is reached. Artifacts:
   `~/zwift-pairing-out/`.
+- With improved Bluetooth patches, wine now initializes BLE and starts device search at the pairing
+  screen. Bluezoo logs show wine polling both adapters continuously. The game never finds devices
+  because wine's BLE advertisement watcher (`adv_watcher_Start`) is not implemented; it returns
+  E_NOTIMPL. The test passes because reaching the screen without crashes is the current goal. Use
+  `tests/pairing.sh --explore` to keep the game at the pairing screen for 1 hour and monitor
+  real-time Bluetooth activity via game log, bluezoo log, and yarf UI interaction.
 - `tests/tools/yarf.sh` (the `yarf` action) sends pointer/keyboard input and takes screenshots
   of the running compositor (yarf's own wayland clients inside the yarf snap), for exploring the
   screens by hand when updating the suite for a new Zwift version.
@@ -294,9 +300,12 @@ Full detail is in `tests/pairing/README.md`; the essentials:
   (`dotnet48`, `d3dcompiler_47`, `webview2`) on a desktop. The runtime is not a
   separate content snap: existing core24 Wine runtime libraries do not match this
   build, and splitting it adds a snap without reducing the total download.
-- **Bluetooth**: Wine 11.21's BLE advertisement watcher methods return `E_NOTIMPL`.
-  When updating Wine, check `adv_watcher_Start` in
-  `dlls/windows.devices.bluetooth/advertisement.c`; the `bluez` plug remains for
+- **Bluetooth**: Wine 11.21 now has improved Bluetooth plumbing support. The
+  bluetooth test (`tests/bluetooth.sh`) passes: wine's Bluetooth driver (`winebth`)
+  successfully registers its authentication agent with BlueZ, discovers adapters,
+  and learns about peer devices. BLE advertisement watcher methods (`adv_watcher_Start`
+  in `dlls/windows.devices.bluetooth/advertisement.c`) still return `E_NOTIMPL`,
+  so Zwift cannot discover BLE devices, but the underlying plumbing is solid for
   testing newer Wine versions.
 - **pkgproxy** caches apt and snap downloads in the workshop; the base snap,
   https sources and the wine git clone are not cached. The `stats` action shows
