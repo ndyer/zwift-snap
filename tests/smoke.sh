@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Visual smoke test of the zwift snap, driven with yarf
 # (https://documentation.ubuntu.com/yarf). Starts a Mir compositor, runs the zwift
-# launcher against it and lets the yarf suite in tests/yarf check on screen that
+# launcher against it and lets the yarf suite in tests/smoke check on screen that
 # Zwift gets installed and starts.
 #
 # The compositor renders on the host display through the workshop desktop interface
@@ -131,7 +131,7 @@ start_mir() {
 stage_suite() {
     rm -rf "${YARF_SUITE_DIR}" "${YARF_OUT_DIR}"
     mkdir -p "${YARF_SUITE_DIR}" "${YARF_OUT_DIR}"
-    cp -r "${ROOT}/tests/yarf/." "${YARF_SUITE_DIR}/"
+    cp -r "${ROOT}/tests/smoke/." "${YARF_SUITE_DIR}/"
 }
 
 report_failure() {

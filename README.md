@@ -22,7 +22,7 @@ workshop (Ubuntu 26.04). The snap uses `core26`.
 ```shell
 workshop launch zwift-snap
 workshop run zwift-snap build     # sudo snapcraft pack --destructive-mode
-workshop run zwift-snap test      # unit tests of the launcher scripts
+workshop run zwift-snap test      # unit tests of the launcher scripts (bats)
 workshop run zwift-snap smoke     # visual smoke test with yarf, see below
 workshop run zwift-snap lint      # shellcheck + yamllint
 workshop run zwift-snap size      # where the bytes are, for pruning work
@@ -34,7 +34,7 @@ workshop run zwift-snap stats     # pkgproxy cache usage
 The `smoke` action runs the launcher for real and verifies on screen that Zwift gets
 installed and started, with [yarf](https://documentation.ubuntu.com/yarf) driving a
 headless (or host-display) Mir compositor and checking the pixels with OCR and
-template matching. The suite is in `tests/yarf`, the harness in `tests/smoke.sh`.
+template matching. The suite is in `tests/smoke`, the harness in `tests/smoke.sh`.
 Extra arguments after `smoke` are passed to `yarf`, for example
 `workshop run zwift-snap smoke --variant light`.
 
@@ -51,9 +51,9 @@ Zwift window finally comes up (no login is performed). On failure the yarf repor
 (`log.html` in `~/zwift-smoke-out`) shows the screenshots it compared, and the
 harness prints the last lines of the launcher log.
 
-The `zwift-login.png` template in `tests/yarf` matches the Zwift window. Window
+The `zwift-login.png` template in `tests/smoke` matches the Zwift window. Window
 decorations differ between compositor setups, so recapture it when the test reports
-it missing — the recipe is in `tests/yarf/README.md`.
+it missing — the recipe is in `tests/smoke/README.md`.
 
 Setup also installs [pkgproxy](https://snapcraft.io/pkgproxy), a caching proxy, and points
 apt and snapd at it. Builds in the same workshop then download each package and snap only

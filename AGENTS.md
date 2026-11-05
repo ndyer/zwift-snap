@@ -19,7 +19,7 @@ or the `origin/core26` / `v0.11` refs).
 launcher/          source of the launcher scripts (zwift-run/gui/setup/common.sh, wine-env.sh)
 snap/snapcraft.yaml     the snap definition (parts, prune filters, plugs, layouts)
 snap/prune-closure.sh   DT_NEEDED closure walk that prunes unreachable libraries
-tests/             unit tests (run-tests.sh + scenarios.sh + stubs) and the visual smoke test
+tests/             unit tests (bats in tests/unit, stubs in tests/unit/stubs) and the visual smoke test
   .workshop/         workshop definition (build environment) + in-project SDK zwift-snap-sdk
 overlay/, prime/, stage/, parts/   build trees, gitignored, never edit by hand
 ```
@@ -82,7 +82,7 @@ entries are required.
 ## Visual smoke test (yarf)
 
 `tests/smoke.sh` starts a `mir-test-tools` Mir compositor, runs the real launcher
-against it and drives the Robot Framework suite in `tests/yarf/` with
+against it and drives the Robot Framework suite in `tests/smoke/` with
 [yarf](https://documentation.ubuntu.com/yarf): test 1 requires the yad progress
 dialog (template match on its static title bar), test 2 requires the Zwift window
 (`zwift-login.png`). The first run on a fresh wine prefix installs wine prerequisites
@@ -100,7 +100,7 @@ Two logfiles show live progress while the suite runs:
   — Zwift's own log, which only exists once the game has started.
 
 Window decorations and themes differ between machines: when the suite reports a
-missing template, recapture it with the recipe in `tests/yarf/README.md` and commit
+missing template, recapture it with the recipe in `tests/smoke/README.md` and commit
 it. `SMOKE_DISPLAY=nested|headless` overrides the auto detection; nested renders on
 the host display through the workshop desktop interface.
 

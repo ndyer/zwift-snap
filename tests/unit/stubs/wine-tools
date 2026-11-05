@@ -33,8 +33,11 @@ case "${cmd}" in
             exit 1
         fi
         # grow the wine prefix like the real winetricks steps do, so the install
-        # progress sampler (which measures drive_c) sees rising percentages
+        # progress sampler (which measures drive_c) sees rising percentages. The
+        # growth alone would be faster than one sampler interval, so stall a
+        # moment per step like the real dotnet48 install does.
         if [[ ${FAKE_WINETRICKS_GROW:-0} -eq 1 ]]; then
+            sleep "${FAKE_WINETRICKS_GROW_SLEEP:-1}"
             local_dir="${WINEPREFIX}/drive_c/windows/fake-install"
             mkdir -p "${local_dir}"
             dd if=/dev/zero of="${local_dir}/chunk.$(date +%s%N)" bs=1k count=16 2> /dev/null

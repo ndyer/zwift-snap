@@ -29,7 +29,7 @@ actions:
     sudo snap install --dangerous "$@" ./zwift_*_amd64.snap
   test: |
     cd /project
-    tests/run-tests.sh
+    bats tests/unit
   smoke: |
     cd /project
     # Visual smoke test with yarf: starts a Mir compositor, runs the zwift launcher
@@ -44,7 +44,8 @@ actions:
     ls -l --block-size=M ./zwift_*_amd64.snap
   lint: |
     cd /project
-    shellcheck -x launcher/*.sh snap/prune-closure.sh tests/run-tests.sh tests/smoke.sh \
-      tests/scenarios.sh tests/stubs/* .workshop/zwift-snap-sdk/hooks/*
+    shellcheck -x launcher/*.sh snap/prune-closure.sh tests/smoke.sh \
+      tests/unit/*.bats tests/unit/test_helper.bash tests/unit/stubs/* \
+      .workshop/zwift-snap-sdk/hooks/*
     yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' \
       snap/snapcraft.yaml .workshop/zwift-snap.yaml .workshop/zwift-snap-sdk/sdk.yaml

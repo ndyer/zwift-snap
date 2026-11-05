@@ -23,7 +23,8 @@ if ! snap list snapcraft > /dev/null 2>&1; then
 fi
 # apt caches http:// sources only (plain-https sources still go direct)
 pkgproxy.pkgproxyctl setup apt | sh
-apt-get update && apt-get install -y shellcheck yamllint
+apt-get update && apt-get install -y shellcheck yamllint \
+    bats bats-support bats-assert bats-file
 
 # Snaps required by the smoke test (tests/smoke.sh). Installed here rather than in
 # the smoke script so a fresh workshop is ready to smoke-test without re-downloading.

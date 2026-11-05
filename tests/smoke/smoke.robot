@@ -54,7 +54,7 @@ Zwift install and start completes
     IF    ${have_template}
         Match    ${CURDIR}${/}zwift-login.png    ${INSTALL_TIMEOUT}
     ELSE
-        Log    zwift-login.png is missing, checking the progress dialog instead. Capture it with the recipe in tests/yarf/README.md.    WARN
+        Log    zwift-login.png is missing, checking the progress dialog instead. Capture it with the recipe in tests/smoke/README.md.    WARN
         Wait Until Keyword Succeeds    ${INSTALL_TIMEOUT}    ${GONE_INTERVAL}    Progress Dialog Is Gone
     END
 
