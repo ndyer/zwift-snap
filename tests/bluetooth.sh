@@ -68,16 +68,12 @@ report_failure() {
 
 cleanup() {
     bluezoo_stop
+    # wineserver -k kills every process of the test prefix only, so a real Zwift session is
+    # never touched; SIGTERMing the wineserver instead leaves its clients orphaned and running.
+    # shellcheck disable=SC2016
+    snap run --shell zwift.wine -c 'WINEPREFIX="$HOME/../common/bt-test" wineserver -k' \
+        > /dev/null 2>&1 || true
     [[ -z ${wine_pid} ]] || kill "${wine_pid}" 2> /dev/null
-    # Stop only the wineserver of the test prefix, identified by its
-    # WINEPREFIX in /proc, so a real Zwift session is never touched.
-    local pid
-    for pid in $(pgrep -x wineserver); do
-        if tr '\0' '\n' < "/proc/${pid}/environ" 2> /dev/null \
-            | grep -qxF "WINEPREFIX=${BT_PREFIX}"; then
-            kill "${pid}" 2> /dev/null
-        fi
-    done
     sleep 1
     # the throwaway prefix is recreated on every run
     rm -rf "${BT_PREFIX}"

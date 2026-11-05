@@ -8,8 +8,9 @@ An unofficial snap packaging of [Zwift](https://zwift.com) for Linux. Zwift itse
 proprietary and NOT part of the snap — the launcher scripts download and update it
 into a wine prefix at runtime. Wine is built from source by the snap's `wine` part:
 [ndyer/wine](https://github.com/ndyer/wine), a fork of the official wine-mirror/wine
-GitHub mirror, at the `source-tag` in `snap/snapcraft.yaml` (currently `wine-11.21`,
-new-style WoW64, no i386 host libs). Strict confinement, amd64 only, base `core26`.
+GitHub mirror, at the `source-branch` in `snap/snapcraft.yaml` (currently
+`zwift-radios-rebased`: wine-11.21 plus BLE support — advertisement watcher, GATT,
+Windows.Devices.Radios; new-style WoW64, no i386 host libs). Strict confinement, amd64 only, base `core26`.
 The old `core24` variant of the snap is gone from the tree; it only lives in git history (pre-`6e31f55` commits
 or the `origin/core26` / `v0.11` refs).
 
@@ -207,8 +208,7 @@ A hand-made token is accepted by the client, but the game then refreshes it at
 `tests/bluetooth.sh` checks the Bluetooth plumbing of the snap, not the game: wine's
 Bluetooth driver (`winebth`, hosted by winedevice.exe) must reach BlueZ over the snap's
 `bluez` plug, see the adapters, register its authentication agent and learn about a
-discovered peer device. Zwift itself still sees none of this — the BLE advertisement
-watcher is stubbed in wine 11.21 (see README, "Bluetooth does not work in Zwift").
+discovered peer device.
 
 The workshop has no Bluetooth hardware, and bluetoothd's management socket needs
 privileges the container does not have (`bluetoothctl scan` hangs on `mgmt_socket`),
@@ -267,15 +267,13 @@ Full detail is in `tests/pairing/README.md`; the essentials:
   email pre-filled (type only the password). EULA / sport / reason are each optional (a returning
   profile skips them).
 - yarf cannot read the snap's data dir, so `tests/pairing.sh` asserts `ZSF_PAIRING_SCREEN` in the
-  game `Log.txt` in bash, and saves `pairing-screen.png`. Zwift finds no Bluetooth devices
-  (wine 11.21 BLE stub); the test asserts only that the screen is reached. Artifacts:
-  `~/zwift-pairing-out/`.
-- With improved Bluetooth patches, wine now initializes BLE and starts device search at the pairing
-  screen. Bluezoo logs show wine polling both adapters continuously. The game never finds devices
-  because wine's BLE advertisement watcher (`adv_watcher_Start`) is not implemented; it returns
-  E_NOTIMPL. The test passes because reaching the screen without crashes is the current goal. Use
-  `tests/pairing.sh --explore` to keep the game at the pairing screen for 1 hour and monitor
-  real-time Bluetooth activity via game log, bluezoo log, and yarf UI interaction.
+  game `Log.txt` in bash, and saves `pairing-screen.png`. The test asserts only that the screen
+  is reached, not which devices it lists. Artifacts: `~/zwift-pairing-out/`.
+- On the pairing screen Zwift starts a native BLE search; wine's advertisement watcher turns it
+  into a BlueZ `SetDiscoveryFilter(Transport="le")` + `StartDiscovery` on the default radio
+  (bluezoo logs `Starting discovery on adapter[0]`). Classic BR/EDR devices are therefore never
+  reported to Zwift. `tests/pairing.sh --explore` keeps the game on the pairing screen for an
+  hour to watch this live (game log, bluezoo log, `tests/tools/yarf.sh`).
 - `tests/tools/yarf.sh` (the `yarf` action) sends pointer/keyboard input and takes screenshots
   of the running compositor (yarf's own wayland clients inside the yarf snap), for exploring the
   screens by hand when updating the suite for a new Zwift version.
@@ -291,22 +289,20 @@ Full detail is in `tests/pairing/README.md`; the essentials:
 - **Do not prune** `usr/lib/*/samba` (ntlm_auth needs it) and the nss libraries
   listed in the `lint.ignore` block of `snap/snapcraft.yaml` (dlopened by name).
 - **Wine source**: the `wine` part builds [ndyer/wine](https://github.com/ndyer/wine)
-  (fork of wine-mirror/wine) at the `source-tag` in `snap/snapcraft.yaml`; a git
-  source only rebuilds when the tag changes, unlike a local source. To update
-  wine, change `source-tag`. For snap-specific patches, put them on a branch in
-  the fork and point the part at that branch with a pinned `source-commit`.
+  (fork of wine-mirror/wine) at the `source-branch` in `snap/snapcraft.yaml`
+  (`zwift-radios-rebased`, not pinned to a `source-commit`). craft-parts does not
+  re-pull a git source for new commits on an unchanged branch, so run the `clean`
+  action (or pin/bump `source-commit`) to pick up new commits on the branch.
 - **Wine runtime**: new-style WoW64 has no `wine64` binary or i386 Unix packages;
   32-bit Windows programs use `lib/wine/i386-windows`. Check the winetricks steps
   (`dotnet48`, `d3dcompiler_47`, `webview2`) on a desktop. The runtime is not a
   separate content snap: existing core24 Wine runtime libraries do not match this
   build, and splitting it adds a snap without reducing the total download.
-- **Bluetooth**: Wine 11.21 now has improved Bluetooth plumbing support. The
-  bluetooth test (`tests/bluetooth.sh`) passes: wine's Bluetooth driver (`winebth`)
-  successfully registers its authentication agent with BlueZ, discovers adapters,
-  and learns about peer devices. BLE advertisement watcher methods (`adv_watcher_Start`
-  in `dlls/windows.devices.bluetooth/advertisement.c`) still return `E_NOTIMPL`,
-  so Zwift cannot discover BLE devices, but the underlying plumbing is solid for
-  testing newer Wine versions.
+- **Bluetooth**: the `zwift-radios-rebased` wine branch implements the BLE
+  advertisement watcher (`adv_watcher_Start` in
+  `dlls/windows.devices.bluetooth/advertisement.c`, LE-only discovery) and GATT on top
+  of winebth. Upstream wine 11.21 stubs the watcher with `E_NOTIMPL`, so check this
+  when moving the part to another branch or tag.
 - **pkgproxy** caches apt and snap downloads in the workshop; the base snap,
   https sources and the wine git clone are not cached. The `stats` action shows
   the savings.

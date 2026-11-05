@@ -45,6 +45,7 @@ yarf_args=()
 
 mir_pid=""
 stub_pid=""
+game_pid=""
 cacert_appended=""
 
 die() {
@@ -72,15 +73,18 @@ report_failure() {
 
 cleanup() {
     bluezoo_stop
-    # stop the game: TERM the keep-alive snap run, then the wineserver of this prefix only
-    pkill -TERM -f "pairing-run.sh" > /dev/null 2>&1
-    sleep 2
-    local pid
-    for pid in $(pgrep -x wineserver); do
-        if tr '\0' '\n' < "/proc/${pid}/environ" 2> /dev/null | grep -qxF "WINEPREFIX=${PREFIX}"; then
-            kill "${pid}" 2> /dev/null
-        fi
-    done
+    # Killing the snap run wrapper or SIGTERMing wineserver leaves the prefix's Windows
+    # processes (services, svchost, winedevice, the Zwift crash handler...) orphaned and
+    # running; wineserver -k kills every client of the prefix. It fails harmlessly when the
+    # game has already shut the server down.
+    if [[ -n ${game_pid} ]]; then
+        # shellcheck disable=SC2016
+        snap run --shell zwift.wine -c 'WINEPREFIX="$HOME/../common/.wine" wineserver -k' \
+            > /dev/null 2>&1 || true
+        kill -TERM "${game_pid}" 2> /dev/null || true
+        wait "${game_pid}" 2> /dev/null || true
+        game_pid=""
+    fi
     [[ -z ${stub_pid} ]] || kill "${stub_pid}" 2> /dev/null
     [[ -z ${mir_pid} ]] || kill "${mir_pid}" 2> /dev/null
     # restore the game's cacert.pem (remove our appended CA)
@@ -204,6 +208,7 @@ EOF
         snap run --shell zwift.wine -c 'bash "$HOME/../common/pairing-run.sh"' \
             > "${OUT_DIR}/game.log" 2>&1
     ) &
+    game_pid=$!
 }
 
 main() {
