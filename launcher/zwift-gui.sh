@@ -48,7 +48,7 @@ gui_progress_start() {
     gui_common_args
     # Started directly from the main shell so that this script is the parent for --auto-kill
     "${YAD}" "${GUI_ARGS[@]}" --progress --title="Zwift" --text="Getting Zwift ready" \
-        --progress-text="Starting" --percentage=0 --auto-close --auto-kill --no-escape \
+        --percentage=0 --auto-close --auto-kill --no-escape \
         --width=480 --button="Cancel:1" <&9 &
     GUI_PROGRESS_PID=$!
 }
