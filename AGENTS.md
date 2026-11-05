@@ -19,7 +19,9 @@ or the `origin/core26` / `v0.11` refs).
 launcher/          source of the launcher scripts (zwift-run/gui/setup/common.sh, wine-env.sh)
 snap/snapcraft.yaml     the snap definition (parts, prune filters, plugs, layouts)
 snap/prune-closure.sh   DT_NEEDED closure walk that prunes unreachable libraries
-tests/             unit tests (bats in tests/unit, stubs in tests/unit/stubs) and the visual smoke test
+tests/             unit tests (bats in tests/unit, stubs in tests/unit/stubs), the visual smoke
+                   test (tests/smoke.sh + tests/smoke/) and the bluetooth plumbing test
+                   (tests/bluetooth.sh + tests/bluetooth-scan.py)
   .workshop/         workshop definition (build environment) + in-project SDK zwift-snap-sdk
 overlay/, prime/, stage/, parts/   build trees, gitignored, never edit by hand
 ```
@@ -28,48 +30,44 @@ The snap has three apps: `zwift` (the launcher), `wine`, `winecfg`; the last two
 users run arbitrary wine commands. All share the command-chain
 `gpu-2604-wrapper -> wine-env.sh`.
 
-## Build and verification (workshop)
+## Workshop
 
-Builds happen in a [Workshop](https://ubuntu.com/workshop/docs/) VM in destructive
-mode. All commands run from the project root:
+All building and testing happens in a [Workshop](https://ubuntu.com/workshop/docs/)
+environment: builds run there in destructive mode. Before running an action, determine
+where your terminal is running:
+
+- **On the host:** run `workshop run zwift-snap <action>` from the project root.
+- **Inside the workshop:** the `workshop` CLI is unavailable. Run the action's commands
+  directly from `/project`, using the definitions in `.workshop/zwift-snap.yaml`.
+- **Uncertain:** check the session context. Here, `hostname` reports `zwift-snap` and
+  `systemd-detect-virt` reports `lxc` inside the workshop, but these are only clues:
+  other environments can share them. If still uncertain, ask before running an
+  environment-sensitive command.
+
+Host-side action commands:
 
 ```shell
-workshop run zwift-snap build    # sudo snapcraft pack --destructive-mode
-workshop run zwift-snap test     # unit tests of the launcher scripts (fast, no GUI)
-workshop run zwift-snap smoke    # visual smoke test with yarf, ~2 min warm, see below
-workshop run zwift-snap install  # sudo snap install --dangerous ./zwift_*.snap
-workshop run zwift-snap lint     # shellcheck + yamllint
-workshop run zwift-snap size     # where the bytes are
-workshop run zwift-snap stats    # pkgproxy cache savings
+workshop run zwift-snap build     # sudo snapcraft pack --destructive-mode
+workshop run zwift-snap install   # sudo snap install --dangerous ./zwift_*.snap
+workshop run zwift-snap test      # unit tests of the launcher scripts (fast, no GUI)
+workshop run zwift-snap smoke     # visual smoke test with yarf, ~2 min warm, see below
+workshop run zwift-snap bluetooth # bluetooth plumbing test with the bluezoo mock, see below
+workshop run zwift-snap lint      # shellcheck + yamllint
+workshop run zwift-snap clean     # sudo snapcraft clean --destructive-mode
+workshop run zwift-snap size      # where the bytes are
+workshop run zwift-snap stats     # pkgproxy cache savings
 ```
 
-There is no `setup` action: snapcraft, shellcheck, yamllint and the pkgproxy cache
-are installed by the `setup-base` hook of the `zwift-snap-sdk` SDK at launch and
-refresh (see `.workshop/zwift-snap-sdk/hooks/setup-base`).
-
-When running `workshop run zwift-snap build` (or any long-running action) from an
-agent, pipe the output through `tee` instead of swallowing it with `tail`: a
-piped `tail` hides the build's live progress (and makes it look hung), while
-`tee` shows the output as it streams and keeps it in a file for later reading,
-for example `workshop run zwift-snap build | tee build.log`. Keep `pipefail` in
-mind when chaining commands afterwards.
-
-- **Stale snap data**: reinstalling the snap (`snap install --dangerous --amend`)
-  does not remove the old wine prefix in `~/snap/zwift/common`. Before smoke
-  testing a fresh build, purge first (`sudo snap remove --purge zwift`), install
-  the new snap and reconnect the `gpu-2604` interface — otherwise the test runs
-  against the stale installation and the new wine is never exercised. `tests/smoke.sh`
-  expects the snap to be installed beforehand and never installs or removes it.
+There is no `setup` action: snapcraft, shellcheck, yamllint, bats, bluez, bluezoo and
+the pkgproxy cache are installed by the `setup-base` hook of the `zwift-snap-sdk` SDK
+at launch and refresh (see `.workshop/zwift-snap-sdk/hooks/setup-base`).
+To launch a new workshop, run `workshop launch zwift-snap` from the host project root.
 
 The canonical agent documentation for operating Workshop is the vendored skill under
 `.github/skills/` (`use-workshop`, `onboard-workshop`, `design-sdk`, imported from
 github.com/canonical/use-workshop-skill). Route Workshop CLI questions there — in
 particular `.github/skills/use-workshop/references/in-project-sdk.md` for the SDK
 layout and hook rules used by this project.
-
-Before declaring a task done run `lint` and `test`. Run `smoke` when the change
-affects anything the launcher does at runtime (plugs, command-chain, wine
-environment, dialogs).
 
 The workshop definition is `.workshop/zwift-snap.yaml`; actions are plain bash
 with `errexit`/`pipefail` set. In-project SDKs are listed with a `project-` prefix in
@@ -79,6 +77,32 @@ because the `project-` prefix only selects the source and is not part of the nam
 The workshop desktop and gpu interfaces are NOT auto-connected, the `connections:`
 entries are required.
 
+## Build
+
+Use the `build` action to build and the `install` action to install the result;
+follow the host-versus-workshop rule above. Destructive mode installs build packages
+into the workshop itself, so use a throwaway workshop.
+
+When running the `build` action (or any long-running action) from an agent,
+pipe the output through `tee` instead of swallowing it with `tail`: a
+piped `tail` hides the build's live progress (and makes it look hung), while
+`tee` shows the output as it streams and keeps it in a file for later reading,
+for example by appending `| tee build.log` to the appropriate command. Keep
+`pipefail` in mind when chaining commands afterwards.
+
+## Verification
+
+Before declaring a task done run `lint` and `test`. Run `smoke` when the change
+affects anything the launcher does at runtime (plugs, command-chain, wine
+environment, dialogs).
+
+- **Stale snap data**: reinstalling the snap (`snap install --dangerous --amend`)
+  does not remove the old wine prefix in `~/snap/zwift/common`. Before smoke
+  testing a fresh build, purge first (`sudo snap remove --purge zwift`), install
+  the new snap and reconnect the `gpu-2604` interface — otherwise the test runs
+  against the stale installation and the new wine is never exercised. `tests/smoke.sh`
+  expects the snap to be installed beforehand and never installs or removes it.
+
 ## Visual smoke test (yarf)
 
 `tests/smoke.sh` starts a `mir-test-tools` Mir compositor, runs the real launcher
@@ -87,6 +111,9 @@ against it and drives the Robot Framework suite in `tests/smoke/` with
 dialog (template match on its static title bar), test 2 requires the Zwift window
 (`zwift-login.png`). The first run on a fresh wine prefix installs wine prerequisites
 and downloads Zwift (tens of minutes), later runs are quick. No login is performed.
+Extra arguments to the `smoke` action are passed to yarf (for example,
+`--variant light`). The harness installs `yarf` and `mir-test-tools` and connects
+`zwift:gpu-2604` to `mesa-2604` when needed.
 
 On failure check `~/zwift-smoke-out/`: `yarf.log`, `log.html` (screenshots yarf
 compared), `zwift.out`, the per-mode `mir-<mode>.log`, and the tail of
@@ -109,7 +136,10 @@ Yarf gotchas that cost time to discover (all verified live):
 - The yarf snap is strict: it sees only `$HOME` — not `/project`, not `/tmp`, and not
   `~/.cache`. The harness stages the suite to `~/zwift-smoke-suite` for that reason.
 - yarf exits 120 with EMPTY output when its stdout is a regular file; piped output is
-  fine. The harness pipes it through `tee` (with `pipefail`).
+  fine. The harness pipes it through `tee` (with `pipefail`). This is not a yarf quirk:
+  `snap run` (and `snap run --shell`) behaves the same — with stdout redirected to a
+  plain file it fails silently with rc=1 and no stderr, while a terminal or pipe works.
+  `tests/bluetooth.sh` hits the same wall and pipes its snap-run output through `tee`.
 - The suite argument must be a directory containing `*.robot` files, not a file.
 - `Match`/`Match Text` timeouts are integer seconds, not Robot time strings.
 - OCR (`Match Text`) misreads the small grey yad text ("Gettir" for "Getting");
@@ -123,13 +153,47 @@ Yarf gotchas that cost time to discover (all verified live):
   export, plus GPU device access from the workshop gpu interface — without either
   it hangs with an empty log and the harness falls back to headless.
 
+## Bluetooth plumbing test (bluezoo)
+
+`tests/bluetooth.sh` checks the Bluetooth plumbing of the snap, not the game: wine's
+Bluetooth driver (`winebth`, hosted by winedevice.exe) must reach BlueZ over the snap's
+`bluez` plug, see the adapters, register its authentication agent and learn about a
+discovered peer device. Zwift itself still sees none of this — the BLE advertisement
+watcher is stubbed in wine 11.21 (see README, "Bluetooth does not work in Zwift").
+
+The workshop has no Bluetooth hardware, and bluetoothd's management socket needs
+privileges the container does not have (`bluetoothctl scan` hangs on `mgmt_socket`),
+so the test uses [bluezoo](https://github.com/Samsung/BlueZoo), a user-space BlueZ
+D-Bus mock, in place of bluetoothd. The `setup-base` SDK hook installs `bluez`
+(bluetoothctl, the D-Bus policy), a `/opt/bluezoo` venv (PyPI, not cached by pkgproxy)
+and masks `bluetooth.service`; the test starts bluezoo itself, runs `zwift.wine` in a
+throwaway prefix (`~/snap/zwift/common/bt-test`) with `WINEDEBUG=+winebth` and asserts
+on the trace. Artifacts on failure: `~/zwift-bt-out/`.
+
+Gotchas that cost time to discover (all verified live):
+
+- bluezoo must run as root (only root may own `org.bluez` per the bluez D-Bus policy),
+  detached with `setsid` — a cancelled caller takes its process group down otherwise.
+  The bluez package's D-Bus activation stub (`Exec=/bin/false`) must be removed, or the
+  first call to the unowned `org.bluez` name fails with a confusing systemd error.
+- bluezoo only scans while the client that started the discovery stays connected, and
+  it reports a peer only when the peer is discoverable. `bluetoothctl` cannot do
+  either here (its management socket hangs), so `tests/bluetooth-scan.py` drives both
+  adapters over plain D-Bus: a plain discovery on hci0 (the keep-alive client) and a
+  discovery with the `Discoverable` filter on hci1 (how the mock exposes a peer —
+  writing the adapter property directly is denied by the mock).
+- The snap app remaps `$HOME` to its private `~/snap/zwift/x1`, so a prefix in
+  `~/snap/zwift/common` is `$HOME/../common/...` from inside the snap.
+- Everything under `/tmp` inside the snap is private to each command and discarded —
+  a log file written there is gone before it can be read.
+
 ## Snap specifics that are easy to break
 
 - **Pruning**: the wine part aggressively prunes (man pages, locales, wine's build
   toolchain, ~776 static import libraries, plus everything unreachable via the
   `snap/prune-closure.sh` closure walk). Guards in the part's `override-prime` fail
   the build on over-pruning (runtime file missing) or a stale prime directory (needs
-  `workshop run zwift-snap clean`). Bump the `v<N>` comment there when editing
+  the `clean` action). Bump the `v<N>` comment there when editing
   `prune-closure.sh`, otherwise craft-parts will not re-run the prime step.
 - **Do not prune** `usr/lib/*/samba` (ntlm_auth needs it) and the nss libraries
   listed in the `lint.ignore` block of `snap/snapcraft.yaml` (dlopened by name).
@@ -138,12 +202,21 @@ Yarf gotchas that cost time to discover (all verified live):
   source only rebuilds when the tag changes, unlike a local source. To update
   wine, change `source-tag`. For snap-specific patches, put them on a branch in
   the fork and point the part at that branch with a pinned `source-commit`.
+- **Wine runtime**: new-style WoW64 has no `wine64` binary or i386 Unix packages;
+  32-bit Windows programs use `lib/wine/i386-windows`. Check the winetricks steps
+  (`dotnet48`, `d3dcompiler_47`, `webview2`) on a desktop. The runtime is not a
+  separate content snap: existing core24 Wine runtime libraries do not match this
+  build, and splitting it adds a snap without reducing the total download.
+- **Bluetooth**: Wine 11.21's BLE advertisement watcher methods return `E_NOTIMPL`.
+  When updating Wine, check `adv_watcher_Start` in
+  `dlls/windows.devices.bluetooth/advertisement.c`; the `bluez` plug remains for
+  testing newer Wine versions.
 - **pkgproxy** caches apt and snap downloads in the workshop; the base snap,
   https sources and the wine git clone are not cached. The `stats` action shows
   the savings.
 - **No `home` plug**: wine user folders live inside the wine prefix
-  (`~/snap/zwift/common/.wine/drive_c/users/<user>/`); the launcher relinks them to
-  the real home at every start.
+  (`~/snap/zwift/common/.wine/drive_c/users/<user>/`); the launcher replaces links
+  to the real home with private directories at every start.
 - **No SVG pixbuf loader / no gecko/mono**: dialogs use a png icon, mshtml/mscoree
   are disabled at wineboot (`WINEDLLOVERRIDES`).
 - **glycin layouts**: `layout:` in snapcraft.yaml bind-mounts the glycin loader

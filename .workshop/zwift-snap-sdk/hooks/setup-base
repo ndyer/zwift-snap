@@ -24,7 +24,8 @@ fi
 # apt caches http:// sources only (plain-https sources still go direct)
 pkgproxy.pkgproxyctl setup apt | sh
 apt-get update && apt-get install -y shellcheck yamllint \
-    bats bats-support bats-assert bats-file
+    bats bats-support bats-assert bats-file \
+    bluez python3-venv
 
 # Snaps required by the smoke test (tests/smoke.sh). Installed here rather than in
 # the smoke script so a fresh workshop is ready to smoke-test without re-downloading.
@@ -38,3 +39,21 @@ done
 snap connections yarf 2>/dev/null \
     | awk '$2 == "yarf:process-control" && $3 == "-" { found=1 } END { exit !found }' \
     && snap connect yarf:process-control
+
+# The Bluetooth plumbing test (tests/bluetooth.sh) needs a BlueZ to talk to,
+# but the workshop has no Bluetooth hardware and bluetoothd's management
+# socket needs privileges the container does not have. bluezoo
+# (https://github.com/Samsung/BlueZoo) is a BlueZ D-Bus mock that runs
+# entirely in user space and takes the place of bluetoothd: the test starts it
+# as org.bluez on the system bus. It is not in the Ubuntu archive, so it comes
+# from PyPI (not cached by pkgproxy); the venv is rebuilt only when missing.
+# bluetoothd is masked so it cannot claim org.bluez, and the bluez package's
+# D-Bus activation stub (Exec=/bin/false) is removed because it makes the
+# first call to the unowned name fail with a confusing systemd error.
+if ! command -v bluezoo > /dev/null 2>&1; then
+    python3 -m venv /opt/bluezoo
+    /opt/bluezoo/bin/pip install --quiet bluezoo==1.0.2
+    ln -sf /opt/bluezoo/bin/bluezoo /usr/local/bin/bluezoo
+fi
+systemctl mask bluetooth.service
+rm -f /usr/share/dbus-1/system-services/org.bluez.service

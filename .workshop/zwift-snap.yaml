@@ -36,6 +36,13 @@ actions:
     # against it and checks on screen that Zwift gets installed and starts. The first
     # run downloads Zwift and can take half an hour, later runs are quick.
     tests/smoke.sh "$@"
+  bluetooth: |
+    cd /project
+    # Bluetooth plumbing test with the BlueZ D-Bus mock bluezoo: checks that
+    # winebth inside the confined snap reaches BlueZ over the bluez plug, sees
+    # the mock adapters and its authentication agent, and learns about a
+    # discovered peer device. Needs the snap to be installed beforehand.
+    tests/bluetooth.sh "$@"
   size: |
     cd /project
     du -sh prime/* 2>/dev/null | sort -rh
@@ -45,7 +52,7 @@ actions:
   lint: |
     cd /project
     shellcheck -x launcher/*.sh snap/prune-closure.sh tests/smoke.sh \
-      tests/unit/*.bats tests/unit/test_helper.bash tests/unit/stubs/* \
-      .workshop/zwift-snap-sdk/hooks/*
+      tests/bluetooth.sh tests/unit/*.bats tests/unit/test_helper.bash \
+      tests/unit/stubs/* .workshop/zwift-snap-sdk/hooks/*
     yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' \
       snap/snapcraft.yaml .workshop/zwift-snap.yaml .workshop/zwift-snap-sdk/sdk.yaml
