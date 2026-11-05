@@ -82,17 +82,15 @@ apps:
 parts:
   wine:
     # Built from ndyer/wine, a fork of the official wine-mirror/wine GitHub
-    # mirror of gitlab.winehq.org/wine/wine. The tag keeps the version aligned
-    # with the wine-devel=11.21~resolute-1 package this part used to stage, so
-    # the resulting snap is a like-for-like replacement.
+    # mirror of gitlab.winehq.org/wine/wine.
     #
-    # To update wine: change source-tag (the tag's commit is what is built, no
-    # separate pin). For snap-specific changes put them on a branch in the fork
-    # and point this part at that branch with a pinned source-commit instead.
+    # This uses the zwift-radios-rebased branch which contains BLE support
+    # (Bluetooth LE advertisement watcher, GATT operations, Windows.Devices.Radios)
+    # rebased on top of wine-11.21.
     plugin: autotools
     source: https://github.com/ndyer/wine.git
     source-type: git
-    source-tag: wine-11.21
+    source-branch: zwift-radios-rebased
     source-depth: 1
     # wine ships a configure script, so the plugin goes straight to
     # configure/make/make install. New style WoW64: 64-bit unix libraries plus
