@@ -16,6 +16,12 @@ readonly ZWIFT_NO_GAMEMODE="${ZWIFT_NO_GAMEMODE:-1}"
 
 init_log || echo "Unable to create the log file ${ZWIFT_LOG}" >&2
 
+# Start capture before any Wine commands so diagnostics from the Wine server are
+# retained even if it starts during prefix checks or setup.
+if [[ ${ZWIFT_BLUETOOTH_DEBUG:-0} == 1 ]]; then
+    exec 2> >(tee -a "${ZWIFT_LOG}" >&2)
+fi
+
 ##########################################
 ##### Automatically stop wine server #####
 

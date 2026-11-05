@@ -66,7 +66,9 @@ msgbox() {
 
 # The wine prefix lives in SNAP_USER_COMMON so it survives snap refreshes.
 export WINEPREFIX="${WINEPREFIX:-${SNAP_USER_COMMON:?SNAP_USER_COMMON is not set, run this inside the snap}/.wine}"
-export WINEDEBUG="${WINEDEBUG:-fixme-all}"
+if [[ ${ZWIFT_BLUETOOTH_DEBUG:-0} == 1 ]]; then
+    export WINEDEBUG="${WINEDEBUG:+${WINEDEBUG},}+bluetooth,+winebth"
+fi
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${SNAP_USER_COMMON}/.cache}"
 export ZWIFT_INSTALL_DIR="${WINEPREFIX}/drive_c/Program Files (x86)/Zwift"
 

@@ -6,6 +6,7 @@ set -u
 
 cmd="$(basename "$0")"
 echo "${cmd} $*" >> "${TEST_DIR}/calls.log"
+printf 'WINEDEBUG=%s\n' "${WINEDEBUG-<unset>}" >> "${TEST_DIR}/wine-debug.log"
 
 install_dir="${ZWIFT_INSTALL_DIR}"
 
@@ -61,9 +62,17 @@ case "${cmd}" in
         if [[ ${1:-} == "-k" ]]; then touch "${TEST_DIR}/launcher-done"; fi
         ;;
     winepath)
+        if [[ ${WINEDEBUG:-} == *"+bluetooth"* ]] && [[ ${WINEDEBUG:-} == *"+winebth"* ]]; then
+            echo "winebth: fake Bluetooth trace during prefix setup (${WINEDEBUG})" >&2
+        fi
         echo "C:\\Program Files (x86)\\Zwift"
         ;;
     wine)
+        if [[ " $* " == *" ZwiftApp.exe "* ]] \
+            && [[ ${WINEDEBUG:-} == *"+bluetooth"* ]] \
+            && [[ ${WINEDEBUG:-} == *"+winebth"* ]]; then
+            echo "winebth: fake Bluetooth runtime trace (${WINEDEBUG})" >&2
+        fi
         case "${1:-}" in
             *ZwiftSetup.exe)
                 if [[ ${FAKE_SETUP_FAIL:-0} -eq 1 ]]; then exit 1; fi

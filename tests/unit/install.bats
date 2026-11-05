@@ -33,6 +33,33 @@ load test_helper
     assert_file_contains "${T}/hostdocs/keep.txt" "keep"
 }
 
+@test "Bluetooth diagnostics are disabled by default" {
+    new_env
+    install_fake_zwift 1.124.0
+    run_zwift FAKE_LATEST=1.124.0
+    assert_equal "${RC}" 0
+    assert_file_contains "${T}/wine-debug.log" "WINEDEBUG=<unset>"
+    assert_file_not_contains "${T}/wine-debug.log" "fixme-all"
+    assert_file_not_contains "${T}/out.log" "fake Bluetooth runtime trace"
+    assert_file_not_contains "${ZWIFT_LOG_FILE}" "fake Bluetooth runtime trace"
+}
+
+@test "Bluetooth diagnostics are opt-in and saved in the launcher log" {
+    new_env
+    install_fake_zwift 1.124.0
+    run_zwift ZWIFT_BLUETOOTH_DEBUG=1 WINEDEBUG=warn,+timestamp FAKE_LATEST=1.124.0
+    assert_equal "${RC}" 0
+    assert_file_contains "${T}/wine-debug.log" "WINEDEBUG=warn,+timestamp,+bluetooth,+winebth"
+    assert_file_contains "${T}/out.log" \
+        "winebth: fake Bluetooth trace during prefix setup (warn,+timestamp,+bluetooth,+winebth)"
+    assert_file_contains "${ZWIFT_LOG_FILE}" \
+        "winebth: fake Bluetooth trace during prefix setup (warn,+timestamp,+bluetooth,+winebth)"
+    assert_file_contains "${T}/out.log" \
+        "winebth: fake Bluetooth runtime trace (warn,+timestamp,+bluetooth,+winebth)"
+    assert_file_contains "${ZWIFT_LOG_FILE}" \
+        "winebth: fake Bluetooth runtime trace (warn,+timestamp,+bluetooth,+winebth)"
+}
+
 @test "fresh install: a prefix that links Documents to the home directory is privatized" {
     new_env
     install_fake_zwift 1.124.0

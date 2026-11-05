@@ -47,8 +47,14 @@ debug audio run `WINEDEBUG=+pulse,+mmdevapi zwift`.
 - `ZWIFT_NO_GAMEMODE` (default `1`)
 - `WINE_DISABLE_EGL`
 - `ZWIFT_NO_GUI` (set to `1` for no dialogs, only terminal output)
+- `ZWIFT_BLUETOOTH_DEBUG` (set to `1` to enable Wine Bluetooth traces for hardware testing)
 - `VERBOSITY`
 - `DEBUG`
+
+To test a real Bluetooth device, run `ZWIFT_BLUETOOTH_DEBUG=1 zwift`. This enables Wine's
+`+bluetooth` and `+winebth` channels and writes the runtime trace to
+`~/snap/zwift/common/zwift.log` (as well as the terminal). Bluetooth diagnostics are off by
+default; the log is rotated to `zwift.log.1` at the start of the next run.
 
 ## Status and limitations
 
