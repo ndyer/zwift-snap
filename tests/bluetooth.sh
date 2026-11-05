@@ -29,26 +29,28 @@ readonly OUT_DIR="${HOME}/zwift-bt-out"
 # the snap app remaps $HOME to its private ~/snap/zwift/x1 directory, so the
 # wine commands below have to use $HOME/../common explicitly.
 readonly BT_PREFIX="${HOME}/snap/zwift/common/bt-test"
-# hci0 is the radio winebth attaches to, hci1 acts as the peer device that
-# gets discovered (see tests/bluetooth-scan.py).
-readonly CENTRAL_ADAPTER="/org/bluez/hci0"
-readonly PEER_ADAPTER="/org/bluez/hci1"
-readonly PEER_ADDRESS="00:00:00:22:22:22"
-readonly PEER_DEVICE_NAME="dev_00_00_00_22_22_22"
-readonly BLUEZOO_START_TIMEOUT=20
 readonly TRACE_WAIT_TIMEOUT=60
-# How long the wine keep-alive and the scan client run; every wait below must
-# finish well within this.
+# How long the wine keep-alive runs; every wait below must finish well within it. The bluezoo
+# scan client runs for the same time (BLUEZOO_KEEPALIVE_SECONDS in the helper).
 readonly KEEPALIVE_SECONDS=120
+export BLUEZOO_KEEPALIVE_SECONDS="${KEEPALIVE_SECONDS}"
 
 wine_pid=""
-scan_pid=""
-bluezoo_pid=""
 
 die() {
     echo "bluetooth: ${*}" >&2
     exit 1
 }
+
+# connected PLUG: true when the given plug of the zwift snap is connected
+connected() {
+    local plug="${1:?}"
+    snap connections zwift 2> /dev/null \
+        | awk -v plug="zwift:${plug}" '$2 == plug && $3 != "-" { found=1 } END { exit !found }'
+}
+
+# shellcheck source=tests/lib/bluezoo.sh
+source "${ROOT}/tests/lib/bluezoo.sh"
 
 report_failure() {
     echo "bluetooth: FAILED, artifacts in ${OUT_DIR}"
@@ -65,12 +67,8 @@ report_failure() {
 }
 
 cleanup() {
-    [[ -z ${scan_pid} ]] || kill "${scan_pid}" 2> /dev/null
+    bluezoo_stop
     [[ -z ${wine_pid} ]] || kill "${wine_pid}" 2> /dev/null
-    [[ -z ${bluezoo_pid} ]] || {
-        sudo kill "${bluezoo_pid}" 2> /dev/null
-        sudo pkill -f "bluezoo --auto-enable" > /dev/null 2>&1
-    }
     # Stop only the wineserver of the test prefix, identified by its
     # WINEPREFIX in /proc, so a real Zwift session is never touched.
     local pid
@@ -86,99 +84,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# connected PLUG: true when the given plug of the zwift snap is connected
-connected() {
-    local plug="${1:?}"
-    snap connections zwift 2> /dev/null \
-        | awk -v plug="zwift:${plug}" '$2 == plug && $3 != "-" { found=1 } END { exit !found }'
-}
-
 ensure_prerequisites() {
     snap list zwift > /dev/null 2>&1 \
         || die "the zwift snap is not installed, run: workshop run zwift-snap build && workshop run zwift-snap install"
-    command -v bluezoo > /dev/null 2>&1 \
-        || die "bluezoo is not installed, it is set up by the SDK setup-base hook (recreate the workshop)"
-    command -v bluetoothd > /dev/null 2>&1 \
-        || die "the bluez package is not installed, it is set up by the SDK setup-base hook (recreate the workshop)"
-
-    # bluez is manual-connect-only, but connecting it is the point of this
-    # test, same as the gpu-2604 handling in tests/smoke.sh
-    if ! connected bluez; then
-        sudo snap connect zwift:bluez
-    fi
-
-    # bluetoothd must not own org.bluez; the SDK setup-base hook masks it, but
-    # this workshop may be older than that hook change. Masking is not enough
-    # on its own: the bluez package ships a D-Bus activation file that points
-    # at /bin/false and makes clients fail with a confusing systemd error the
-    # first time they hit an unowned org.bluez name. Remove it (it belongs to
-    # the bluez package, so it comes back on a package update; this is a test
-    # container).
-    if systemctl is-enabled bluetooth.service > /dev/null 2>&1; then
-        sudo systemctl mask --now bluetooth.service
-    fi
-    if [[ -f /usr/share/dbus-1/system-services/org.bluez.service ]]; then
-        sudo rm -f /usr/share/dbus-1/system-services/org.bluez.service
-    fi
-}
-
-# wait_for TIMEOUT DESCRIPTION COMMAND [ARGS...]: run the command every second
-# until it succeeds
-wait_for() {
-    local timeout="${1:?}" description="${2:?}"
-    shift 2
-    local waited=0
-    until "$@" > /dev/null 2>&1; do
-        ((waited += 1))
-        if [[ ${waited} -ge ${timeout} ]]; then
-            report_failure
-            die "${description} did not happen within ${timeout}s"
-        fi
-        sleep 1
-    done
-}
-
-bluez_name_owned() {
-    busctl list --no-legend 2> /dev/null | grep -qw org.bluez
-}
-
-mock_adapters_up() {
-    gdbus introspect --system --dest org.bluez --object-path /org/bluez \
-        2> /dev/null | grep -q hci0 \
-        && gdbus introspect --system --dest org.bluez --object-path /org/bluez \
-            2> /dev/null | grep -q hci1
-}
-
-start_bluezoo() {
-    # A run that died hard leaves bluezoo behind; it must be gone before the
-    # new one can own org.bluez.
-    sudo pkill -f "bluezoo --auto-enable" > /dev/null 2>&1
-    sleep 1
-
-    # bluezoo must run as root: the bluez D-Bus policy only lets root own
-    # org.bluez. setsid detaches it from this script's process group so a
-    # cancelled caller does not take it down with it. The log is written by
-    # the root shell inside the sudo command, because a redirect on the
-    # outside would belong to the calling user's sudo wrapper.
-    sudo setsid sh -c "exec bluezoo --auto-enable --scan-interval=1 \
-        -a 00:00:00:11:11:11 -a ${PEER_ADDRESS} \
-        > '${OUT_DIR}/bluezoo.log' 2>&1" < /dev/null &
-    bluezoo_pid=$!
-
-    wait_for "${BLUEZOO_START_TIMEOUT}" "bluezoo taking over org.bluez" bluez_name_owned
-    wait_for "${BLUEZOO_START_TIMEOUT}" "the mock adapters hci0 and hci1 coming up" mock_adapters_up
-}
-
-start_scan() {
-    # The scan client must stay connected or bluezoo stops scanning; it also
-    # makes the peer adapter discoverable (see tests/bluetooth-scan.py).
-    /opt/bluezoo/bin/python "${ROOT}/tests/bluetooth-scan.py" \
-        "${CENTRAL_ADAPTER}" "${PEER_ADAPTER}" \
-        --timeout "${KEEPALIVE_SECONDS}" \
-        > "${OUT_DIR}/scan.log" 2>&1 &
-    scan_pid=$!
-    wait_for 10 "the scan client starting the discovery" \
-        grep -q "discovery started" "${OUT_DIR}/scan.log"
+    bluezoo_ensure_prerequisites
 }
 
 start_wine() {
@@ -230,7 +139,7 @@ check_trace_failures() {
 
 wait_for_device() {
     local waited=0
-    while ! grep -q "${PEER_DEVICE_NAME}" "${OUT_DIR}/wine-trace.log" 2> /dev/null; do
+    while ! grep -q "${BLUEZOO_PEER_DEVICE_NAME}" "${OUT_DIR}/wine-trace.log" 2> /dev/null; do
         ((waited += 1))
         if [[ ${waited} -ge ${TRACE_WAIT_TIMEOUT} ]]; then
             check_trace_failures
@@ -253,8 +162,8 @@ check_trace() {
         || { report_failure; die "winebth did not create radio devices for the mock adapters"; }
     grep -q "Registered authentication agent" "${trace}" \
         || { report_failure; die "winebth did not register its authentication agent with BlueZ"; }
-    grep -q "${PEER_DEVICE_NAME}" "${trace}" \
-        || { report_failure; die "winebth did not see the discovered peer device ${PEER_ADDRESS}"; }
+    grep -q "${BLUEZOO_PEER_DEVICE_NAME}" "${trace}" \
+        || { report_failure; die "winebth did not see the discovered peer device ${BLUEZOO_PEER_ADDRESS}"; }
 }
 
 main() {
@@ -262,14 +171,14 @@ main() {
     rm -rf "${OUT_DIR}"
     mkdir -p "${OUT_DIR}"
 
-    start_bluezoo
-    start_scan
+    bluezoo_start
+    bluezoo_scan_start
     start_wine
     wait_for_device
     check_trace_failures
     check_trace
 
-    echo "bluetooth: PASSED (winebth saw both mock adapters, its agent and the discovered peer ${PEER_ADDRESS})"
+    echo "bluetooth: PASSED (winebth saw both mock adapters, its agent and the discovered peer ${BLUEZOO_PEER_ADDRESS})"
 }
 
 main "$@"

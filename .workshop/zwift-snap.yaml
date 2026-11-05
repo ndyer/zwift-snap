@@ -43,6 +43,21 @@ actions:
     # the mock adapters and its authentication agent, and learns about a
     # discovered peer device. Needs the snap to be installed beforehand.
     tests/bluetooth.sh "$@"
+  pairing: |
+    cd /project
+    # Reaches Zwift's device pairing screen without a Zwift account: fakes the
+    # Zwift login servers (tests/zwift-stub.py), runs the bluezoo Bluetooth mock,
+    # and drives the game from the login form to the pairing screen with yarf.
+    # Needs the snap installed and Zwift downloaded into the prefix (run the
+    # smoke test once first).
+    tests/pairing.sh "$@"
+  yarf: |
+    cd /project
+    # Debugging helpers that drive and screenshot a running Mir compositor (such as the
+    # one the smoke or pairing test starts), using yarf's own wayland clients. Examples:
+    #   workshop run zwift-snap yarf screenshot -s wayland-99 ~/shot.png
+    #   workshop run zwift-snap yarf input type offline@example.com then key Return
+    tests/tools/yarf.sh "$@"
   size: |
     cd /project
     du -sh prime/* 2>/dev/null | sort -rh
@@ -52,7 +67,9 @@ actions:
   lint: |
     cd /project
     shellcheck -x launcher/*.sh snap/prune-closure.sh tests/smoke.sh \
-      tests/bluetooth.sh tests/unit/*.bats tests/unit/test_helper.bash \
+      tests/bluetooth.sh tests/pairing.sh tests/tools/yarf.sh tests/lib/*.sh \
+      tests/unit/*.bats tests/unit/test_helper.bash \
       tests/unit/stubs/* .workshop/zwift-snap-sdk/hooks/*
+    python3 -m py_compile tests/zwift-stub.py tests/tools/screenshot.py tests/tools/input.py
     yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' \
       snap/snapcraft.yaml .workshop/zwift-snap.yaml .workshop/zwift-snap-sdk/sdk.yaml

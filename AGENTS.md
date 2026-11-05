@@ -20,8 +20,11 @@ launcher/          source of the launcher scripts (zwift-run/gui/setup/common.sh
 snap/snapcraft.yaml     the snap definition (parts, prune filters, plugs, layouts)
 snap/prune-closure.sh   DT_NEEDED closure walk that prunes unreachable libraries
 tests/             unit tests (bats in tests/unit, stubs in tests/unit/stubs), the visual smoke
-                   test (tests/smoke.sh + tests/smoke/) and the bluetooth plumbing test
-                   (tests/bluetooth.sh + tests/bluetooth-scan.py)
+                   test (tests/smoke.sh + tests/smoke/), the bluetooth plumbing test
+                   (tests/bluetooth.sh + tests/bluetooth-scan.py), the pairing-screen test
+                   (tests/pairing.sh + tests/pairing/ + tests/zwift-stub.py), the shared bluezoo
+                   helper (tests/lib/bluezoo.sh) and the yarf screenshot/input debugging tools
+                   (tests/tools/yarf.sh + tests/tools/screenshot.py/input.py)
   .workshop/         workshop definition (build environment) + in-project SDK zwift-snap-sdk
 overlay/, prime/, stage/, parts/   build trees, gitignored, never edit by hand
 ```
@@ -153,6 +156,52 @@ Yarf gotchas that cost time to discover (all verified live):
   export, plus GPU device access from the workshop gpu interface — without either
   it hangs with an empty log and the harness falls back to headless.
 
+## Screenshots and input for the running game
+
+To see what Zwift shows (login form, error messages, pairing screen) while debugging, or to
+click/type into it, start a compositor and the game as `tests/smoke.sh` does, then use
+`tests/tools/yarf.sh` (the `yarf` workshop action):
+
+```
+tests/tools/yarf.sh screenshot [-s wayland-99] [OUTPUT.png]   # save one frame, view the PNG
+tests/tools/yarf.sh input [-s wayland-99] click 0.5 0.8 then type foo then key Return
+```
+
+The default screenshot output is `~/zwift-yarf/shot-<time>.png`. The `input` commands are
+`click X Y` / `move X Y` (X, Y are 0.0-1.0 proportional), `type TEXT`, `key NAME`, `sleep SECONDS`.
+
+- **Do not use `grim`.** It is installed in the workshop but fails against Mir with
+  `wl_shm@N.create_pool: invalid arguments` / `failed to screenshoot all outputs`, whatever
+  the options (`-s`, `-t`) and timing (reproduced against an idle, freshly started Mir).
+  Connecting `mir-test-tools:wayland` does not change that: the `demo-server` app does not
+  even declare that plug. Not root-caused; do not spend more time on it.
+- The script runs `tests/tools/screenshot.py` / `input.py` inside the yarf snap, using yarf's own
+  `zwlr_screencopy_unstable_v1` and virtual pointer/keyboard clients (`yarf.lib.wayland.*`), the
+  same capture/input path as the smoke and pairing tests. Mir must have been started with
+  `zwlr_screencopy_manager_v1` in `--add-wayland-extensions` (smoke.sh does).
+- yarf's `python3` only exists inside its snap (`/snap/yarf/*/bin/python3` is a dangling
+  symlink on the host), so go through `snap run --shell yarf -c ...`.
+- Inside the yarf snap `$HOME` is remapped to `~/snap/yarf/<rev>`; the real home is
+  `$SNAP_REAL_HOME`. yarf can read and write non-hidden directories under the real home
+  (hence `~/zwift-yarf`), but not `/tmp` or `/project`.
+- yarf also has its own `XDG_RUNTIME_DIR` (`/run/user/<uid>/snap.yarf`): the compositor
+  socket must be symlinked into it, which the script does.
+- A black frame means the compositor works but no window is up yet; take it later.
+
+## Driving the game by hand (no launcher script)
+
+`zwift.wine` defaults to `WINEPREFIX=~/snap/zwift/x1/.wine`, not the real prefix, so set
+`WINEPREFIX=$HOME/snap/zwift/common/.wine` (inside the snap `$SNAP_USER_COMMON/.wine`).
+Starting `ZwiftApp.exe` directly only spawns the .NET launcher; to start the game itself
+repeat the launcher dance of `launcher/zwift-run.sh`: `wine start ZwiftLauncher.exe
+SilentLaunch`, read its pid, then `wine start /unix $SNAP/bin/runfromprocess-rs.exe <pid>
+ZwiftApp.exe <args>`. Run it from a script file in `~/snap/zwift/common` through
+`snap run --shell zwift.wine -c 'bash "$HOME/../common/script.sh"'` and source
+`$SNAP/bin/zwift-common.sh` for the helpers. Use `ZwiftApp.exe --token=<json>` to skip the
+login form; the game log is `AppData/Local/Zwift/Logs/Log.txt` in the prefix user dir.
+A hand-made token is accepted by the client, but the game then refreshes it at
+`secure.zwift.com`, whose real 400 `invalid_grant` shows as "Oops. Wrong email/password".
+
 ## Bluetooth plumbing test (bluezoo)
 
 `tests/bluetooth.sh` checks the Bluetooth plumbing of the snap, not the game: wine's
@@ -186,6 +235,44 @@ Gotchas that cost time to discover (all verified live):
   `~/snap/zwift/common` is `$HOME/../common/...` from inside the snap.
 - Everything under `/tmp` inside the snap is private to each command and discarded —
   a log file written there is gone before it can be read.
+
+The bluezoo setup (starting the mock as root, the scan client, the prerequisites) lives in
+`tests/lib/bluezoo.sh`, shared by `tests/bluetooth.sh` and the pairing test below.
+
+## Pairing-screen test (fake login servers)
+
+`tests/pairing.sh` (the `pairing` workshop action) reaches Zwift's device pairing screen
+**without a Zwift account**, with the bluezoo mock running. It is a test aid, never shipped.
+Full detail is in `tests/pairing/README.md`; the essentials:
+
+- `tests/zwift-stub.py` fakes the two servers login needs (`secure.zwift.com`,
+  `us-or-rly101.zwift.com`). It is an HTTPS proxy: the game is pointed at it with `https_proxy`
+  (which `snap run` passes through), and it terminates TLS for those two hosts with a throwaway
+  CA. Every other host is tunnelled through unchanged, sentry is refused.
+- With only `--token` the game still refreshes at `secure.zwift.com` and the real 400
+  `invalid_grant` shows as "Oops. Wrong email/password" (see "Driving the game by hand"), so the
+  token endpoint must be faked. The stub answers it with an unsigned token and the handful of
+  game API calls the game blocks on before pairing (`/api/auth`, `/api/users/login`,
+  `/api/profiles/me`, the world list, some empty 200s). The protobuf response shapes come from
+  [zwift-offline](https://github.com/fatsbrown/zwift-offline).
+- The stub CA is appended to the prefix's `data/cacert.pem` for the test (backed up, restored
+  after). The game is driven directly (the launcher dance of `zwift-run.sh`, no token, so the
+  login form shows) rather than through the real launcher, so the Zwift patcher never runs and
+  cannot re-download and overwrite the CA.
+- `tests/pairing/pairing.robot` drives the UI with yarf and clicks buttons by their OCR text
+  (resolution independent). The login form's Username/Password fields are too low-contrast for
+  OCR, so they are clicked at a fraction of the span between two anchors it can read, "LOG IN"
+  and "create new user". The suite branches on the two entry paths: first run opens on SIGN UP
+  (click "log in with existing account", empty fields); a returning run opens on LOG IN with the
+  email pre-filled (type only the password). EULA / sport / reason are each optional (a returning
+  profile skips them).
+- yarf cannot read the snap's data dir, so `tests/pairing.sh` asserts `ZSF_PAIRING_SCREEN` in the
+  game `Log.txt` in bash, and saves `pairing-screen.png`. Zwift finds no Bluetooth devices
+  (wine 11.21 BLE stub); the test asserts only that the screen is reached. Artifacts:
+  `~/zwift-pairing-out/`.
+- `tests/tools/yarf.sh` (the `yarf` action) sends pointer/keyboard input and takes screenshots
+  of the running compositor (yarf's own wayland clients inside the yarf snap), for exploring the
+  screens by hand when updating the suite for a new Zwift version.
 
 ## Snap specifics that are easy to break
 
