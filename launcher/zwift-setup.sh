@@ -305,3 +305,47 @@ cleanup_install_artifacts() {
         rm -rf -- "${WINE_USER_HOME}/AppData/Local/Temp/"* || true
     fi
 }
+
+# Configure Zwift display mode from ZWIFT_DISPLAY_MODE env var.
+# Must be called after Zwift is installed (prefs.xml exists).
+# ZWIFT_DISPLAY_MODE defaults to "fullscreen". A resolution value (e.g., "1920x1080")
+# implies windowed mode and sets that resolution.
+configure_display_mode() {
+    # Ensure ZWIFT_DISPLAY_MODE has a default
+    local display_mode="${ZWIFT_DISPLAY_MODE:-fullscreen}"
+
+    if [[ ! -f ${ZWIFT_PREFS_FILE} ]]; then
+        msgbox warning "Preferences file does not exist yet. Display mode ${display_mode} cannot be set."
+        return 0
+    fi
+
+    if [[ ${display_mode} == "fullscreen" ]]; then
+        # Default: ensure fullscreen is enabled
+        if ! grep -q '<FULLSCREEN>1</FULLSCREEN>' "${ZWIFT_PREFS_FILE}"; then
+            msgbox info "Enabling fullscreen mode in Zwift preferences"
+            local updated_prefs
+            updated_prefs="$(awk '{
+                gsub(/<FULLSCREEN>[0-9]*<\/FULLSCREEN>/, "<FULLSCREEN>1</FULLSCREEN>")
+            } 1' "${ZWIFT_PREFS_FILE}")"
+            # If FULLSCREEN doesn't exist, add it after <CONFIG>
+            if ! echo "${updated_prefs}" | grep -q '<FULLSCREEN>1</FULLSCREEN>'; then
+                updated_prefs="$(echo "${updated_prefs}" | sed 's/<CONFIG>/<CONFIG>\n        <FULLSCREEN>1<\/FULLSCREEN>/')"
+            fi
+            echo "${updated_prefs}" > "${ZWIFT_PREFS_FILE}"
+        fi
+    else
+        # User specified a custom resolution -> windowed mode
+        msgbox info "Setting zwift resolution to ${display_mode} (windowed mode)."
+        local updated_prefs
+        updated_prefs="$(awk -v resolution="${display_mode}" '{
+            gsub(/<USER_RESOLUTION_PREF>.*<\/USER_RESOLUTION_PREF>/,
+                 "<USER_RESOLUTION_PREF>" resolution "</USER_RESOLUTION_PREF>")
+            gsub(/<FULLSCREEN>[0-9]*<\/FULLSCREEN>/, "<FULLSCREEN>0</FULLSCREEN>")
+        } 1' "${ZWIFT_PREFS_FILE}")"
+        # If FULLSCREEN doesn't exist, add it after <CONFIG>
+        if ! echo "${updated_prefs}" | grep -q '<FULLSCREEN>0</FULLSCREEN>'; then
+            updated_prefs="$(echo "${updated_prefs}" | sed 's/<CONFIG>/<CONFIG>\n        <FULLSCREEN>0<\/FULLSCREEN>/')"
+        fi
+        echo "${updated_prefs}" > "${ZWIFT_PREFS_FILE}"
+    fi
+}

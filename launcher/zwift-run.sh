@@ -11,7 +11,7 @@ source "${SNAP}/bin/zwift-gui.sh"
 # shellcheck source=launcher/zwift-setup.sh
 source "${SNAP}/bin/zwift-setup.sh"
 
-readonly ZWIFT_OVERRIDE_RESOLUTION="${ZWIFT_OVERRIDE_RESOLUTION:-}"
+readonly ZWIFT_DISPLAY_MODE="${ZWIFT_DISPLAY_MODE:-fullscreen}"
 readonly ZWIFT_NO_GAMEMODE="${ZWIFT_NO_GAMEMODE:-1}"
 
 init_log || echo "Unable to create the log file ${ZWIFT_LOG}" >&2
@@ -93,18 +93,8 @@ fi
 declare -a zwift_args
 zwift_args=()
 
-if [[ -n ${ZWIFT_OVERRIDE_RESOLUTION} ]]; then
-    if [[ -f ${ZWIFT_PREFS_FILE} ]]; then
-        msgbox info "Setting zwift resolution to ${ZWIFT_OVERRIDE_RESOLUTION}."
-        updated_prefs="$(awk -v resolution="${ZWIFT_OVERRIDE_RESOLUTION}" '{
-            gsub(/<USER_RESOLUTION_PREF>.*<\/USER_RESOLUTION_PREF>/,
-                 "<USER_RESOLUTION_PREF>" resolution "</USER_RESOLUTION_PREF>")
-        } 1' "${ZWIFT_PREFS_FILE}")"
-        echo "${updated_prefs}" > "${ZWIFT_PREFS_FILE}"
-    else
-        msgbox warning "Preferences file does not exist yet. Resolution ${ZWIFT_OVERRIDE_RESOLUTION} cannot be set."
-    fi
-fi
+# Configure display mode (fullscreen or custom resolution)
+configure_display_mode
 
 ##################################
 ##### Start Zwift using wine #####

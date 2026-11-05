@@ -43,7 +43,7 @@ debug audio run `WINEDEBUG=+pulse,+mmdevapi zwift`.
 
 ## Environment variables
 
-- `ZWIFT_OVERRIDE_RESOLUTION` (for example `1920x1080`)
+- `ZWIFT_DISPLAY_MODE` — display mode, either `fullscreen` (default) or a resolution like `1920x1080`. A custom resolution implies windowed mode (fullscreen disabled).
 - `ZWIFT_NO_GAMEMODE` (default `1`)
 - `WINE_DISABLE_EGL`
 - `ZWIFT_NO_GUI` (set to `1` for no dialogs, only terminal output)
