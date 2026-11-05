@@ -6,7 +6,7 @@
 # system bus (bluetooth.service is masked by the SDK setup-base hook). The
 # confined snap reaches it through its bluez plug, exactly as it would reach a
 # real BlueZ on the host. bluezoo runs two adapters: hci0 is the PC's radio, hci1 is a mock
-# BLE smart trainer (tests/bluetooth-trainer.py) that hci0 discovers over LE. With
+# BLE smart trainer (tests/tools/bluetooth/bluetooth-trainer.py) that hci0 discovers over LE. With
 # WINEDEBUG=+winebth,+dbus the test then checks that wine's Bluetooth driver
 # - uses hci0 as its only radio and ignores the trainer's adapter (ROUVY_BT_ADAPTER),
 # - registers its authentication agent with BlueZ, and
@@ -50,8 +50,8 @@ connected() {
         | awk -v plug="zwift:${plug}" '$2 == plug && $3 != "-" { found=1 } END { exit !found }'
 }
 
-# shellcheck source=tests/lib/bluezoo.sh
-source "${ROOT}/tests/lib/bluezoo.sh"
+# shellcheck source=tests/tools/bluetooth/bluezoo.sh
+source "${ROOT}/tests/tools/bluetooth/bluezoo.sh"
 
 report_failure() {
     echo "bluetooth: FAILED, artifacts in ${OUT_DIR}"

@@ -7,18 +7,18 @@
 # snap, the same capture/input path the tests use.
 #
 # Usage:
-#   tests/tools/yarf.sh screenshot [-s SOCKET] [OUTPUT.png]
+#   tests/tools/yarf/yarf.sh screenshot [-s SOCKET] [OUTPUT.png]
 #       Save one frame of the compositor. OUTPUT defaults to ~/zwift-yarf/shot-<time>.png and
 #       must be under $HOME outside hidden directories (the yarf snap cannot see anything else).
-#   tests/tools/yarf.sh input [-s SOCKET] COMMAND [then COMMAND ...]
-#       Send pointer/keyboard input. COMMAND is one of (see tests/tools/input.py):
+#   tests/tools/yarf/yarf.sh input [-s SOCKET] COMMAND [then COMMAND ...]
+#       Send pointer/keyboard input. COMMAND is one of (see tests/tools/yarf/input.py):
 #         click X Y | move X Y | type TEXT | key NAME | sleep SECONDS   (X, Y are 0.0-1.0)
-#       Example: tests/tools/yarf.sh input type offline@example.com then key Return
+#       Example: tests/tools/yarf/yarf.sh input type offline@example.com then key Return
 #
 # SOCKET is the compositor's wayland socket, default $WAYLAND_DISPLAY (smoke.sh uses wayland-99).
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly ROOT
 # yarf is a strict snap and cannot see /project or /tmp, so the helpers and the default output
 # live under $HOME, in a non-hidden directory it can read and write
@@ -61,7 +61,7 @@ resolve_socket() {
 run_in_yarf() {
     local helper="${1:?}"
     shift
-    cp "${ROOT}/tests/tools/${helper}" "${STAGE_DIR}/${helper}" || die "unable to stage ${helper}"
+    cp "${ROOT}/tests/tools/yarf/${helper}" "${STAGE_DIR}/${helper}" || die "unable to stage ${helper}"
     # shellcheck disable=SC2016
     snap run --shell yarf -c \
         'home="$1"; helper="$2"; socket="$3"; shift 3; python3 "$home/zwift-yarf/$helper" "$socket" "$@"' \

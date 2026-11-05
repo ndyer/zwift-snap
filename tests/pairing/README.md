@@ -45,12 +45,14 @@ profile skips them.
 
 ## Bluetooth
 
-bluezoo (the same BlueZ D-Bus mock as `tests/bluetooth.sh`, via `tests/lib/bluezoo.sh`) runs two
-adapters: hci0 is the PC, hci1 is a BLE smart trainer named KICKR
-([`tests/bluetooth-trainer.py`](../bluetooth-trainer.py): FTMS, Cycling Power and Device
-Information over GATT, streaming 150 W / 85 rpm). `ROUVY_BT_ADAPTER=hci0` keeps wine on the PC
-adapter, and [`tests/bluezoo-run.py`](../bluezoo-run.py) gives the trainer a changing RSSI so
-wine keeps reporting its advertisements to Zwift.
+bluezoo (the same BlueZ D-Bus mock as `tests/bluetooth.sh`, via
+`tests/tools/bluetooth/bluezoo.sh`) runs two adapters: hci0 is the PC, hci1 is a BLE smart
+trainer named KICKR
+([`tests/tools/bluetooth/bluetooth-trainer.py`](../tools/bluetooth/bluetooth-trainer.py): FTMS,
+Cycling Power and Device Information over GATT, streaming 150 W / 85 rpm).
+`ROUVY_BT_ADAPTER=hci0` keeps wine on the PC adapter, and
+[`tests/tools/bluetooth/bluezoo-run.py`](../tools/bluetooth/bluezoo-run.py) gives the trainer a
+changing RSSI so wine keeps reporting its advertisements to Zwift.
 
 After reaching the pairing screen (detected by its POWER SOURCE tile, since a "No ANT+ dongle"
 tip can cover the PAIRED DEVICES title), the suite pairs the trainer: POWER SOURCE → PAIR DEVICE
@@ -61,7 +63,7 @@ indoor bike data notifications. Cadence and Controllable Trainer roles are not r
 pairing assigns only Power.
 
 Use `tests/pairing.sh --explore` (best run detached) to keep the game on the pairing screen for
-an hour and drive it with `tests/tools/yarf.sh`; set `WINEDEBUG=+bluetooth,+winebth` to trace
+an hour and drive it with `tests/tools/yarf/yarf.sh`; set `WINEDEBUG=+bluetooth,+winebth` to trace
 wine.
 
 ## Artifacts
@@ -73,7 +75,7 @@ the per-mode `mir-*.log`.
 
 ## Driving the game by hand
 
-[`tests/tools/yarf.sh`](../tools/yarf.sh) (the `yarf` workshop action) takes screenshots of and
+[`tests/tools/yarf/yarf.sh`](../tools/yarf/yarf.sh) (the `yarf` workshop action) takes screenshots of and
 sends pointer/keyboard input to the running compositor, for exploring the screens by hand
 (for example while updating this suite for a new Zwift version). It runs yarf's own wayland
 clients inside the yarf snap. See the comments in that script.

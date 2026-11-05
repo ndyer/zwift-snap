@@ -12,7 +12,7 @@
 #
 # Usage: SMOKE_DISPLAY=auto|nested|headless tests/pairing.sh [--explore] [extra yarf arguments]
 # With --explore, the game keeps running after reaching the pairing screen for manual
-# exploration. Use tests/tools/yarf.sh screenshot and input commands to interact with it.
+# exploration. Use tests/tools/yarf/yarf.sh screenshot and input commands to interact with it.
 # The zwift snap must already be installed and Zwift downloaded into the prefix (run the smoke
 # test once first); this script never installs, updates or removes anything.
 set -uo pipefail
@@ -60,8 +60,8 @@ connected() {
         | awk -v plug="zwift:${plug}" '$2 == plug && $3 != "-" { found=1 } END { exit !found }'
 }
 
-# shellcheck source=tests/lib/bluezoo.sh
-source "${ROOT}/tests/lib/bluezoo.sh"
+# shellcheck source=tests/tools/bluetooth/bluezoo.sh
+source "${ROOT}/tests/tools/bluetooth/bluezoo.sh"
 
 report_failure() {
     echo "pairing: FAILED, artifacts in ${OUT_DIR} (log.html shows the screenshots)"
@@ -217,7 +217,7 @@ set -uo pipefail
 export ZWIFT_NO_GUI=1
 export https_proxy="${STUB_PROXY}" HTTPS_PROXY="${STUB_PROXY}"
 # winebth would otherwise also expose the mock trainer's own adapter as a radio, and Zwift's
-# watcher would scan from it; see tests/lib/bluezoo.sh
+# watcher would scan from it; see tests/tools/bluetooth/bluezoo.sh
 export ROUVY_BT_ADAPTER=hci0
 ${WINEDEBUG:+export WINEDEBUG="${WINEDEBUG}"}
 # shellcheck source=/dev/null
@@ -266,7 +266,7 @@ main() {
     rm -rf "${OUT_DIR}" "${YARF_SUITE_DIR}"
     mkdir -p "${OUT_DIR}" "${YARF_SUITE_DIR}"
     cp -r "${ROOT}/tests/pairing/." "${YARF_SUITE_DIR}/"
-    cp "${ROOT}/tests/lib/yarf_ocr.py" "${YARF_SUITE_DIR}/"
+    cp "${ROOT}/tests/tools/yarf/yarf_ocr.py" "${YARF_SUITE_DIR}/"
 
     clear_stale_socket
     case "${SMOKE_DISPLAY:-auto}" in
@@ -318,13 +318,13 @@ main() {
     check_trainer
 
     # keep a screenshot of the pairing screen with the connected trainer
-    "${ROOT}/tests/tools/yarf.sh" screenshot -s "${WAYLAND_SOCKET}" "${OUT_DIR}/pairing-screen.png" > /dev/null 2>&1 \
+    "${ROOT}/tests/tools/yarf/yarf.sh" screenshot -s "${WAYLAND_SOCKET}" "${OUT_DIR}/pairing-screen.png" > /dev/null 2>&1 \
         || echo "pairing: note: could not capture the pairing screenshot"
 
     if [[ ${explore_mode} == true ]]; then
         echo "pairing: explore mode - game running for ${RUN_SECONDS_EXPLORE}s at pairing screen"
-        echo "pairing: use 'tests/tools/yarf.sh screenshot -s ${WAYLAND_SOCKET} [FILE.png]' to view the screen"
-        echo "pairing: use 'tests/tools/yarf.sh input -s ${WAYLAND_SOCKET} <actions>' to interact"
+        echo "pairing: use 'tests/tools/yarf/yarf.sh screenshot -s ${WAYLAND_SOCKET} [FILE.png]' to view the screen"
+        echo "pairing: use 'tests/tools/yarf/yarf.sh input -s ${WAYLAND_SOCKET} <actions>' to interact"
         echo "pairing: tail the logs with: tail -f ~/zwift-pairing-out/bluezoo.log ~/snap/zwift/common/zwift.log"
         echo "pairing: game log at: ${GAME_LOG}"
         echo "pairing: bluezoo log at: ${OUT_DIR}/bluezoo.log, mock trainer log at: ${OUT_DIR}/trainer.log"

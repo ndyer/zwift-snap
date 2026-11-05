@@ -12,7 +12,7 @@
 
 # hci0 is the PC's radio that winebth and Zwift scan with. bluezoo has no API to create a remote
 # device, a device is always another mock adapter, so hci1 is the mock smart trainer: it
-# advertises over LE and serves FTMS / Cycling Power GATT services (tests/bluetooth-trainer.py).
+# advertises over LE and serves FTMS / Cycling Power GATT services (tests/tools/bluetooth/bluetooth-trainer.py).
 readonly BLUEZOO_CENTRAL_ADAPTER="/org/bluez/hci0"
 readonly BLUEZOO_TRAINER_ADAPTER="/org/bluez/hci1"
 readonly BLUEZOO_TRAINER_ADDRESS="00:00:00:22:22:22"
@@ -93,8 +93,8 @@ bluezoo_start() {
     # detaches it from this script's process group so a cancelled caller does not take it down
     # with it. The log is written by the root shell inside the sudo command, because a redirect
     # on the outside would belong to the calling user's sudo wrapper.
-    # tests/bluezoo-run.py is bluezoo with a live RSSI, see there.
-    sudo setsid sh -c "exec /opt/bluezoo/bin/python3 '${ROOT}/tests/bluezoo-run.py' --auto-enable --scan-interval=1 \
+    # tests/tools/bluetooth/bluezoo-run.py is bluezoo with a live RSSI, see there.
+    sudo setsid sh -c "exec /opt/bluezoo/bin/python3 '${ROOT}/tests/tools/bluetooth/bluezoo-run.py' --auto-enable --scan-interval=1 \
         -a 00:00:00:11:11:11 -a ${BLUEZOO_TRAINER_ADDRESS} \
         > '${OUT_DIR}/bluezoo.log' 2>&1" < /dev/null &
     bluezoo_pid=$!
@@ -105,7 +105,7 @@ bluezoo_start() {
 
 # bluezoo_trainer_start: turn hci1 into the mock trainer; its log is trainer.log
 bluezoo_trainer_start() {
-    /opt/bluezoo/bin/python "${ROOT}/tests/bluetooth-trainer.py" "${BLUEZOO_TRAINER_ADAPTER}" \
+    /opt/bluezoo/bin/python "${ROOT}/tests/tools/bluetooth/bluetooth-trainer.py" "${BLUEZOO_TRAINER_ADAPTER}" \
         --name "${BLUEZOO_TRAINER_NAME}" > "${OUT_DIR}/trainer.log" 2>&1 &
     trainer_pid=$!
     bluezoo_wait_for 10 "the mock trainer advertising" \
@@ -113,8 +113,8 @@ bluezoo_trainer_start() {
 }
 
 bluezoo_scan_start() {
-    # The scan client must stay connected or bluezoo stops scanning (see tests/bluetooth-scan.py).
-    /opt/bluezoo/bin/python "${ROOT}/tests/bluetooth-scan.py" "${BLUEZOO_CENTRAL_ADAPTER}" \
+    # The scan client must stay connected or bluezoo stops scanning (see tests/tools/bluetooth/bluetooth-scan.py).
+    /opt/bluezoo/bin/python "${ROOT}/tests/tools/bluetooth/bluetooth-scan.py" "${BLUEZOO_CENTRAL_ADAPTER}" \
         --timeout "${BLUEZOO_KEEPALIVE_SECONDS}" \
         > "${OUT_DIR}/scan.log" 2>&1 &
     scan_pid=$!

@@ -6,7 +6,7 @@ Documentation     Drives Zwift from the login form to the device pairing screen,
 ...               placeholders OCR cannot read, so they are clicked at a fraction of the span between
 ...               two text anchors ("LOG IN" above and "create new user" below), which also scales
 ...               with the screen size. On the pairing screen it pairs the mock BLE trainer KICKR
-...               (tests/bluetooth-trainer.py) as the power source; tests/pairing.sh confirms the game
+...               (tests/tools/bluetooth/bluetooth-trainer.py) as the power source; tests/pairing.sh confirms the game
 ...               state and the trainer's GATT traffic from the logs.
 Resource          kvm.resource
 # caps the threads of the OCR in Match Text, which otherwise runs on every core

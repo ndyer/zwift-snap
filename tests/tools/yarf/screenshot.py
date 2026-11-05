@@ -1,6 +1,6 @@
 """Grab one frame of a wayland compositor to a PNG, using yarf's screencopy client.
 
-Runs inside the yarf snap (see tests/tools/yarf.sh), whose python has pywayland and
+Runs inside the yarf snap (see tests/tools/yarf/yarf.sh), whose python has pywayland and
 yarf.lib.wayland.screencopy. Usage: screenshot.py SOCKET OUTPUT.png
 """
 

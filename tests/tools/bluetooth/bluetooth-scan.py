@@ -7,7 +7,7 @@
 # instead of failing), so the central adapter is driven directly over D-Bus.
 #
 # The discovery is LE only, like the one wine's advertisement watcher starts
-# for Zwift, so the mock trainer (tests/bluetooth-trainer.py) is reported from
+# for Zwift, so the mock trainer (tests/tools/bluetooth/bluetooth-trainer.py) is reported from
 # its LE advertisement: name and service UUIDs. Note that bluezoo keeps one
 # discovery per adapter: whichever client calls StopDiscovery stops it for all.
 #

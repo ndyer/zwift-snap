@@ -22,12 +22,13 @@ snap/snapcraft.yaml     the snap definition (parts, prune filters, plugs, layout
 snap/prune-closure.sh   DT_NEEDED closure walk that prunes unreachable libraries
 tests/             unit tests (bats in tests/unit, stubs in tests/unit/stubs), the visual smoke
                    test (tests/smoke.sh + tests/smoke/), the bluetooth plumbing test
-                   (tests/bluetooth.sh + tests/bluetooth-scan.py), the BLE trainer mock and
-                   bluezoo wrapper (tests/bluetooth-trainer.py, tests/bluezoo-run.py), the pairing-screen test
-                   (tests/pairing.sh + tests/pairing/ + tests/zwift-stub.py), the shared bluezoo
-                   helper (tests/lib/bluezoo.sh), the yarf OCR thread cap (tests/lib/yarf_ocr.py)
-                   and the yarf screenshot/input debugging tools
-                   (tests/tools/yarf.sh + tests/tools/screenshot.py/input.py)
+                   (tests/bluetooth.sh), the pairing-screen test (tests/pairing.sh +
+                   tests/pairing/ + tests/zwift-stub.py)
+  tools/bluetooth/   bluezoo mock tooling shared by both bluetooth tests: the helper bluezoo.sh,
+                   the RSSI wrapper bluezoo-run.py, the scan client bluetooth-scan.py and the
+                   BLE trainer mock bluetooth-trainer.py
+  tools/yarf/        yarf tooling: the screenshot/input debugging tool yarf.sh (+ screenshot.py,
+                   input.py) and the OCR thread cap yarf_ocr.py used by the robot suites
   .workshop/         workshop definition (build environment) + in-project SDK zwift-snap-sdk
 overlay/, prime/, stage/, parts/   build trees, gitignored, never edit by hand
 ```
@@ -163,11 +164,11 @@ Yarf gotchas that cost time to discover (all verified live):
 
 To see what Zwift shows (login form, error messages, pairing screen) while debugging, or to
 click/type into it, start a compositor and the game as `tests/smoke.sh` does, then use
-`tests/tools/yarf.sh` (the `yarf` workshop action):
+`tests/tools/yarf/yarf.sh` (the `yarf` workshop action):
 
 ```
-tests/tools/yarf.sh screenshot [-s wayland-99] [OUTPUT.png]   # save one frame, view the PNG
-tests/tools/yarf.sh input [-s wayland-99] click 0.5 0.8 then type foo then key Return
+tests/tools/yarf/yarf.sh screenshot [-s wayland-99] [OUTPUT.png]   # save one frame, view the PNG
+tests/tools/yarf/yarf.sh input [-s wayland-99] click 0.5 0.8 then type foo then key Return
 ```
 
 The default screenshot output is `~/zwift-yarf/shot-<time>.png`. The `input` commands are
@@ -178,7 +179,7 @@ The default screenshot output is `~/zwift-yarf/shot-<time>.png`. The `input` com
   the options (`-s`, `-t`) and timing (reproduced against an idle, freshly started Mir).
   Connecting `mir-test-tools:wayland` does not change that: the `demo-server` app does not
   even declare that plug. Not root-caused; do not spend more time on it.
-- The script runs `tests/tools/screenshot.py` / `input.py` inside the yarf snap, using yarf's own
+- The script runs `tests/tools/yarf/screenshot.py` / `input.py` inside the yarf snap, using yarf's own
   `zwlr_screencopy_unstable_v1` and virtual pointer/keyboard clients (`yarf.lib.wayland.*`), the
   same capture/input path as the smoke and pairing tests. Mir must have been started with
   `zwlr_screencopy_manager_v1` in `--add-wayland-extensions` (smoke.sh does).
@@ -229,18 +230,18 @@ Gotchas that cost time to discover (all verified live):
   first call to the unowned `org.bluez` name fails with a confusing systemd error.
 - bluezoo has no device emulation of its own: a device is another mock adapter. bluezoo
   runs two adapters, hci0 (the PC, `00:00:00:11:11:11`) and hci1 (the trainer,
-  `00:00:00:22:22:22`). `tests/bluetooth-trainer.py` makes hci1 a BLE trainer named
+  `00:00:00:22:22:22`). `tests/tools/bluetooth/bluetooth-trainer.py` makes hci1 a BLE trainer named
   "KICKR": an LE advertisement (FTMS 0x1826 + Cycling Power 0x1818, discoverable) and a
   GATT application with FTMS, Cycling Power and Device Information; it streams 150 W /
   85 rpm while notifications are on and logs every read/write/notify to `trainer.log`.
   bluezoo links the GATT application to the central's Device1 on Connect.
 - bluezoo only scans while the client that started the discovery stays connected (and any
   client's StopDiscovery stops it for all). `bluetoothctl` cannot do that here (its
-  management socket hangs), so `tests/bluetooth-scan.py` keeps an LE-only discovery open on
+  management socket hangs), so `tests/tools/bluetooth/bluetooth-scan.py` keeps an LE-only discovery open on
   hci0 over plain D-Bus.
 - bluezoo reports RSSI 0 and never changes it, but winebth re-reports an advertisement to
   the BLE watcher only when an LE property changes with an RSSI present — so Zwift saw
-  KICKR once and dropped it. `tests/bluezoo-run.py` wraps bluezoo, sets RSSI to -55 and
+  KICKR once and dropped it. `tests/tools/bluetooth/bluezoo-run.py` wraps bluezoo, sets RSSI to -55 and
   jitters it on every scan round (one PropertiesChanged per second).
 - winebth would add the trainer's own adapter as a second radio, and wine's watcher uses
   the first radio. `ROUVY_BT_ADAPTER=hci0` (a hci name or address, read in winebth's
@@ -252,7 +253,7 @@ Gotchas that cost time to discover (all verified live):
   a log file written there is gone before it can be read.
 
 The bluezoo setup (starting the mock as root, the trainer, the scan client, the prerequisites) lives in
-`tests/lib/bluezoo.sh`, shared by `tests/bluetooth.sh` and the pairing test below.
+`tests/tools/bluetooth/bluezoo.sh`, shared by `tests/bluetooth.sh` and the pairing test below.
 
 ## Pairing-screen test (fake login servers)
 
@@ -296,16 +297,16 @@ Full detail is in `tests/pairing/README.md`; the essentials:
   watcher turns it into a BlueZ `SetDiscoveryFilter(Transport="le")` + `StartDiscovery` on the
   default radio. Classic BR/EDR devices are therefore never reported to Zwift.
   `tests/pairing.sh --explore` keeps the game on the pairing screen for an hour to watch and
-  click live (game log, `bluezoo.log`, `trainer.log`, `tests/tools/yarf.sh`); run it detached
+  click live (game log, `bluezoo.log`, `trainer.log`, `tests/tools/yarf/yarf.sh`); run it detached
   so an interrupted caller does not close the game. Set `WINEDEBUG` (e.g.
   `+bluetooth,+winebth`) to trace wine's side.
 - A killed run skips its EXIT trap and leaves the stub CA in `cacert.pem`; the next run strips it
   before taking its backup.
 - yarf's OCR (RapidOCR on onnxruntime) uses every core by default: one pass over a 1280×1024
-  frame cost ~32 s of CPU. `tests/lib/yarf_ocr.py`, imported as a Robot `Library` by both
+  frame cost ~32 s of CPU. `tests/tools/yarf/yarf_ocr.py`, imported as a Robot `Library` by both
   suites (and staged next to them), caps it at 4 intra-op threads (~6 s CPU, faster wall time).
   yarf's own match loops already sleep at least 0.1 s per iteration.
-- `tests/tools/yarf.sh` (the `yarf` action) sends pointer/keyboard input and takes screenshots
+- `tests/tools/yarf/yarf.sh` (the `yarf` action) sends pointer/keyboard input and takes screenshots
   of the running compositor (yarf's own wayland clients inside the yarf snap), for exploring the
   screens by hand when updating the suite for a new Zwift version.
 

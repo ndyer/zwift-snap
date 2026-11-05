@@ -1,6 +1,6 @@
 """Send pointer and keyboard input to a wayland compositor, using yarf's virtual input clients.
 
-Runs inside the yarf snap (see tests/tools/yarf.sh), the same way as screenshot.py. It is a
+Runs inside the yarf snap (see tests/tools/yarf/yarf.sh), the same way as screenshot.py. It is a
 debugging aid for driving the game by hand during development; the real pairing test uses yarf's
 Robot keywords (tests/pairing/). Reads one command per line of its arguments, joined by the
 literal word "then":
