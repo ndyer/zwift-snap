@@ -162,3 +162,38 @@ run_zwift ZWIFT_NO_GUI=1 FAKE_LATEST=1.124.0 FAKE_UPDATE_RESULT=1.124.0
 check "exit code is 0" test "${RC}" -eq 0
 check "yad was not used" test ! -s "${T}/yad.log"
 check "install steps still ran" has_line "ZwiftSetup.exe" "${T}/calls.log"
+
+echo "install progress: the bar follows the size of drive_c"
+new_env
+run_zwift FAKE_LATEST=1.124.0 FAKE_UPDATE_RESULT=1.124.0 FAKE_WINETRICKS_GROW=1 \
+    ZWIFT_EXPECTED_DRIVE_C_BYTES=102400 ZWIFT_PROGRESS_INTERVAL=1
+check "exit code is 0" test "${RC}" -eq 0
+# during the install the sampler (not the step text) owns the percentage: percent
+# lines rise while the fake winetricks grows drive_c. The final 100 that closes
+# the dialog is not a sample and is excluded from the checks.
+(
+    percents="$(grep -oP 'progress: \K[0-9]+(?=$)' "${T}/yad.log")"
+    percents="$(printf '%s\n' "${percents}" | awk '$1 < 100')"
+    first="$(printf '%s\n' "${percents}" | head -1)"
+    last="$(printf '%s\n' "${percents}" | tail -1)"
+    [[ -n ${first} && ${last} -gt ${first} ]]
+)
+check "the sampled percentage rises" test $? -eq 0
+(
+    percents="$(grep -oP 'progress: \K[0-9]+(?=$)' "${T}/yad.log")"
+    percents="$(printf '%s\n' "${percents}" | awk '$1 < 100')"
+    [[ -z "$(printf '%s\n' "${percents}" | awk 'NR>1 && $1 < prev {print "down"; exit} {prev=$1}')" ]]
+)
+check "the sampled percentage is monotonic" test $? -eq 0
+check "the step texts were still shown" has_line "progress: #Installing .NET Framework 4.8" "${T}/yad.log"
+check "percent milestones were logged" has_line "Install progress:" "${ZWIFT_LOG_FILE}"
+check "no sampler is left running" test -z "$(pgrep -f progress_sampler_loop 2> /dev/null)"
+
+echo "install progress: a failed install stops the sampler too"
+new_env
+printf '1\n' > "${T}/yad-answers" # Quit
+run_zwift FAKE_WINETRICKS_FAIL=1 FAKE_WINETRICKS_GROW=1 \
+    ZWIFT_EXPECTED_DRIVE_C_BYTES=102400 ZWIFT_PROGRESS_INTERVAL=1
+check "exit code is 1" test "${RC}" -eq 1
+check "the progress dialog was opened before the failure" has_line "progress-open" "${T}/yad.log"
+check "the sampler did not outlive the install" test -z "$(pgrep -f progress_sampler_loop 2> /dev/null)"

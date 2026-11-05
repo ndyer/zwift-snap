@@ -53,7 +53,9 @@ gui_progress_start() {
     GUI_PROGRESS_PID=$!
 }
 
-# gui_progress PERCENT TEXT: show a step of the work, also written to the terminal and the log
+# gui_progress PERCENT TEXT: show a step of the work, also written to the terminal and the log.
+# While the install progress sampler runs (zwift-setup.sh), it owns the percentage and this
+# function only updates the text, so the fixed step percentages do not jump the bar backwards.
 gui_progress() {
     local percent="${1:?}"
     local text="${2:-}"
@@ -63,7 +65,10 @@ gui_progress() {
 
     # 100 is reserved for gui_progress_stop, it closes the dialog
     if [[ ${percent} -gt 99 ]]; then percent=99; fi
-    printf '#%s\n%s\n' "${text}" "${percent}" >&9
+    printf '#%s\n' "${text}" >&9
+    if [[ -z ${PROGRESS_SAMPLER_PID:-} ]]; then
+        printf '%s\n' "${percent}" >&9
+    fi
     return 0
 }
 

@@ -7,6 +7,14 @@ SETUP_EXE="${SNAP_USER_COMMON:-/tmp}/ZwiftSetup.exe"
 readonly SETUP_EXE
 # After the installation the launcher downloads the game, at most this many polls (240 * 5s = 20 minutes)
 readonly ZWIFT_DOWNLOAD_ITERATIONS="${ZWIFT_DOWNLOAD_ITERATIONS:-240}"
+# Size of drive_c after a complete fresh install, measured with du -sb on 2026-11-05
+# (wine 11.21: 2.6 GB of windows system files, 5.2 GB of Zwift). The install progress
+# bar shows drive_c's current size as a share of this. Zwift grows between releases,
+# so re-measure with du -sb after an update if the bar starts hitting 100% early.
+readonly ZWIFT_EXPECTED_DRIVE_C_BYTES="${ZWIFT_EXPECTED_DRIVE_C_BYTES:-8537613774}"
+# Seconds between the progress bar samples. Never 0, unlike ZWIFT_POLL_INTERVAL: the
+# tests set that to 0 and would turn the sampler into a busy loop.
+readonly ZWIFT_PROGRESS_INTERVAL="${ZWIFT_PROGRESS_INTERVAL:-5}"
 
 # Run a command with its output in the log and on the terminal. The command runs in the
 # background and is waited for, so the cancel trap of zwift-run.sh runs without delay.
@@ -58,8 +66,70 @@ zwift_installed() {
     [[ -f "${ZWIFT_INSTALL_DIR}/ZwiftApp.exe" ]] && [[ -f "${ZWIFT_INSTALL_DIR}/ZwiftLauncher.exe" ]]
 }
 
+##########################################
+##### Install progress sampler #####
+
+# While the fresh install runs, a background loop shows the share of drive_c that
+# is already installed, so the bar moves through the long winetricks and download
+# steps instead of freezing between fixed steps. It owns the percentage: while it
+# runs, gui_progress only updates the text. The sampler ends at the end of
+# install_zwift (success or failure) and in the cleanup trap of zwift-run.sh.
+
+# The bar never goes backwards and 100 stays reserved for closing the dialog.
+sampler_percent() {
+    local bytes percent
+    bytes="$(du -sb "${WINEPREFIX}/drive_c" 2> /dev/null | cut -f1)"
+    bytes="${bytes:-0}"
+    percent=$((bytes * 99 / ZWIFT_EXPECTED_DRIVE_C_BYTES))
+    [[ ${percent} -gt 99 ]] && percent=99
+    [[ ${percent} -lt ${INSTALL_PROGRESS_PERCENT:-0} ]] && percent="${INSTALL_PROGRESS_PERCENT}"
+    printf '%s' "${percent}"
+}
+
+progress_sampler_loop() {
+    # sample first, sleep between samples: the state at start (fresh prefix, or
+    # right after wineboot) must be visible before the install races ahead
+    local logged_milestone=0
+    while true; do
+        INSTALL_PROGRESS_PERCENT="$(sampler_percent)" || continue
+        printf '%s\n' "${INSTALL_PROGRESS_PERCENT}" >&9 2> /dev/null || return 0
+        # a milestone line in the log every 10%, so the progress is visible in
+        # zwift.log too (the bar itself updates silently every interval)
+        if [[ $((INSTALL_PROGRESS_PERCENT / 10)) -gt ${logged_milestone} ]]; then
+            logged_milestone=$((INSTALL_PROGRESS_PERCENT / 10))
+            msgbox info "Install progress: ${INSTALL_PROGRESS_PERCENT}% ($((INSTALL_PROGRESS_PERCENT * ZWIFT_EXPECTED_DRIVE_C_BYTES / 99 / 1073741824)) of $((ZWIFT_EXPECTED_DRIVE_C_BYTES / 1073741824)) GiB)"
+        fi
+        sleep "${ZWIFT_PROGRESS_INTERVAL}"
+    done
+}
+
+# start_progress_sampler: sample drive_c in the background while the dialog is open.
+start_progress_sampler() {
+    [[ -n ${GUI_PROGRESS_PID} ]] || return 0
+    [[ ${ZWIFT_EXPECTED_DRIVE_C_BYTES} -gt 0 ]] || return 0
+    INSTALL_PROGRESS_PERCENT=0
+    progress_sampler_loop &
+    PROGRESS_SAMPLER_PID=$!
+}
+
+# stop_progress_sampler: end the sampler, on success and on failure.
+stop_progress_sampler() {
+    [[ -n ${PROGRESS_SAMPLER_PID:-} ]] || return 0
+    kill "${PROGRESS_SAMPLER_PID}" 2> /dev/null || true
+    wait "${PROGRESS_SAMPLER_PID}" 2> /dev/null || true
+    PROGRESS_SAMPLER_PID=""
+}
+
 # Install wine prerequisites and Zwift. This runs unattended, the installer shows no windows.
 install_zwift() {
+    start_progress_sampler
+    local rc=0
+    install_zwift_steps || rc=$?
+    stop_progress_sampler
+    return "${rc}"
+}
+
+install_zwift_steps() {
     # prevent wine from installing mono and gecko
     gui_progress 2 "Setting up wine"
     WINEDLLOVERRIDES="mscoree,mshtml=;winemenubuilder.exe=d" run_logged wineboot -u || return 1

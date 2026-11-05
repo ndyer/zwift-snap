@@ -21,11 +21,23 @@ case "${cmd}" in
         mkdir -p "${TEST_DIR}/hostdocs"
         echo "keep" > "${TEST_DIR}/hostdocs/keep.txt"
         ln -sfn "${TEST_DIR}/hostdocs" "${WINEPREFIX}/drive_c/users/tester/Documents"
+        # like a real prefix: drive_c grows at boot, so the install progress
+        # sampler starts from a low percentage and rises during the install
+        if [[ ${FAKE_WINETRICKS_GROW:-0} -eq 1 ]]; then
+            dd if=/dev/zero of="${WINEPREFIX}/drive_c/windows/boot-chunk" bs=1k count=16 2> /dev/null
+        fi
         ;;
     winetricks)
         if [[ ${FAKE_WINETRICKS_FAIL:-0} -eq 1 ]]; then
             echo "winetricks: failing as requested" >&2
             exit 1
+        fi
+        # grow the wine prefix like the real winetricks steps do, so the install
+        # progress sampler (which measures drive_c) sees rising percentages
+        if [[ ${FAKE_WINETRICKS_GROW:-0} -eq 1 ]]; then
+            local_dir="${WINEPREFIX}/drive_c/windows/fake-install"
+            mkdir -p "${local_dir}"
+            dd if=/dev/zero of="${local_dir}/chunk.$(date +%s%N)" bs=1k count=16 2> /dev/null
         fi
         ;;
     wget)

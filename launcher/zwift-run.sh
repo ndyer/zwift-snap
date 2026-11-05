@@ -20,6 +20,7 @@ init_log || echo "Unable to create the log file ${ZWIFT_LOG}" >&2
 ##### Automatically stop wine server #####
 
 cleanup() {
+    stop_progress_sampler
     gui_progress_stop
     msgbox info "Stopping wine server"
     wineserver -k || true
