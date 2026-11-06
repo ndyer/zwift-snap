@@ -159,6 +159,13 @@ Yarf gotchas that cost time to discover (all verified live):
   also needs `--wayland-host` set to the host socket name, captured before that
   export, plus GPU device access from the workshop gpu interface — without either
   it hangs with an empty log and the harness falls back to headless.
+- Nested Mir can also abort on startup with `Failed to read Wayland events: Broken pipe`
+  when a required host/workshop interface is disconnected. Check the workshop desktop
+  and GPU connections before blaming stale processes or sockets; reconnecting the missing
+  plug fixed this during a pairing run. The harness falls back to headless even with
+  `SMOKE_DISPLAY=nested`, so check its startup output to confirm the requested mode.
+  To expose a blank compositor log, reproduce its command with output piped through
+  `tee` rather than redirected to a regular file.
 
 ## Screenshots and input for the running game
 
@@ -272,16 +279,15 @@ Full detail is in `tests/pairing/README.md`; the essentials:
   `/api/profiles/me`, the world list, some empty 200s). The protobuf response shapes come from
   [zwift-offline](https://github.com/fatsbrown/zwift-offline).
 - The stub CA is appended to the prefix's `data/cacert.pem` for the test (backed up, restored
-  after). The game is driven directly (the launcher dance of `zwift-run.sh`, no token, so the
-  login form shows) rather than through the real launcher, so the Zwift patcher never runs and
+  after). The game is driven directly (the launcher dance of `zwift-run.sh`, with fake
+  `Game_Launcher` OAuth JSON passed via `--token`) rather than through the real launcher, so the Zwift patcher never runs and
   cannot re-download and overwrite the CA.
 - `tests/pairing/pairing.robot` drives the UI with yarf and clicks buttons by their OCR text
-  (resolution independent). The login form's Username/Password fields are too low-contrast for
-  OCR, so they are clicked at a fraction of the span between two anchors it can read, "LOG IN"
-  and "create new user". The suite branches on the two entry paths: first run opens on SIGN UP
-  (click "log in with existing account", empty fields); a returning run opens on LOG IN with the
-  email pre-filled (type only the password). EULA / sport / reason are each optional (a returning
-  profile skips them).
+  (resolution independent). The stub's `--token-file` writes a temporary fake token file under
+  `~/snap/zwift/common`, removed on exit; token refresh goes through the stub. No login-form
+  clicks or credentials are needed. The stub profile pre-completes EULA / sport / reason:
+  `saved_game` contains the accepted-license record and its mandatory end chunk, while private
+  attributes select CYCLIST and RACING. The suite does not click or wait for those screens.
 - The pairing screen is detected by its POWER SOURCE tile, not the PAIRED DEVICES title: Zwift
   can open a "No ANT+ dongle connected?" tip over the title. The suite then pairs the mock
   trainer: POWER SOURCE → PAIR DEVICE dialog → click KICKR → CLOSE. Clicking a device in the

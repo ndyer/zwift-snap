@@ -12,8 +12,9 @@ refused outright so the tests send nothing out.
 Every intercepted request is logged to --log. Bodies are never logged, only their size and, for
 form posts, the field names, because the login form carries the password the user typed.
 
-Usage: zwift-stub.py --dir DIR --log FILE [--port 8443] [--token] [--ready-file FILE]
+Usage: zwift-stub.py --dir DIR --log FILE [--port 8443] [--token] [--token-file FILE] [--ready-file FILE]
   --token       answer the OAuth token endpoint with a fake token (otherwise everything is a 404)
+  --token-file  write fake OAuth token JSON for ZwiftApp.exe --token (tests only)
   --ready-file  write the listening port to this file once the socket is up (and a .pid next to it)
 """
 
@@ -25,12 +26,14 @@ import select
 import socket
 import socketserver
 import ssl
+import struct
 import subprocess
 import sys
 import threading
 import time
 import urllib.parse
 import uuid
+import zlib
 from pathlib import Path
 
 # hosts whose requests are answered locally; everything else is tunnelled unchanged
@@ -128,7 +131,18 @@ def login_response() -> bytes:
 
 
 def profile() -> bytes:
-    """A minimal PlayerProfile (every field of the message is optional)."""
+    """A test PlayerProfile with license, sport and goal onboarding already completed."""
+    # saved_game chunk 0x10000010: length, count, then (key, type, value) records.
+    # Accepting the license adds this integer record; captured from the test client's PUT.
+    # The end chunk is mandatory: without it the client hangs while loading the profile.
+    accepted_license = (struct.pack("<IIIIIQ", 0x10000010, 28, 1, 0xE412BB7B, 2, 1)
+                        + struct.pack("<II", 0x10000005, 8))
+    attributes = {
+        "SPORT_SELECT_TYPE": "CYCLIST",
+        "TODAYS_SPORT_SELECT_TYPE": "CYCLIST",
+        "FINAL_SPORT_SELECT_TYPE": "CYCLIST",
+        "ONBOARD_CUSTOMIZATION_USER_TYPE_ZWIFT_GOAL": "RACING",
+    }
     return b"".join([
         pb_varint(1, 1),  # id
         pb_varint(2, 1),  # server_realm
@@ -138,10 +152,13 @@ def profile() -> bytes:
         pb_varint(6, 1),  # is_male
         pb_varint(9, 70000),  # weight_in_grams
         pb_varint(10, 200),  # ftp
+        pb_bytes(33, accepted_license),  # saved_game
         pb_varint(42, 1750),  # height_in_millimeters
         pb_varint(48, 1),  # player_type NORMAL
         pb_varint(50, 1),  # use_metric
         pb_varint(55, 30),  # age
+        *(pb_bytes(113, pb_varint(1, zlib.crc32(name.encode())) + pb_bytes(5, value))
+          for name, value in attributes.items()),
     ])
 
 
@@ -307,6 +324,7 @@ def main() -> None:
     parser.add_argument("--log", required=True)
     parser.add_argument("--port", type=int, default=8443)
     parser.add_argument("--token", action="store_true")
+    parser.add_argument("--token-file", type=Path)
     parser.add_argument("--ready-file")
     parser.parse_args(namespace=settings)
 
@@ -317,6 +335,9 @@ def main() -> None:
     with Server(("127.0.0.1", settings.port), Handler) as server:
         server.context = context
         port = server.server_address[1]
+        if settings.token_file:
+            # runfromprocess forwards a Windows command line; spaces split the token argument.
+            settings.token_file.write_text(json.dumps(fake_token(), separators=(",", ":")))
         if settings.ready_file:
             Path(settings.ready_file + ".pid").write_text(f"{os.getpid()}\n")
             Path(settings.ready_file).write_text(f"{port}\n")

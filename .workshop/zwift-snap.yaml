@@ -47,7 +47,7 @@ actions:
     cd /project
     # Reaches Zwift's device pairing screen without a Zwift account: fakes the
     # Zwift login servers (tests/zwift-stub.py), runs the bluezoo Bluetooth mock,
-    # and drives the game from the login form to the pairing screen with yarf.
+    # logs in with a fake token, and pairs the trainer with yarf.
     # Needs the snap installed and Zwift downloaded into the prefix (run the
     # smoke test once first).
     tests/pairing.sh "$@"

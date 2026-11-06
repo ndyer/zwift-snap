@@ -21,27 +21,31 @@ The zwift snap must be installed and Zwift already downloaded into the prefix, s
   tunnelled straight through, so only login and the game API are faked.
 - The game trusts the stub because its CA is appended to the prefix's `data/cacert.pem` for the
   duration of the test (backed up and restored afterwards). The game is driven directly (the
-  launcher dance of `launcher/zwift-run.sh`, without a login token) rather than through the real
+  launcher dance of `launcher/zwift-run.sh`, with a fake login token) rather than through the real
   launcher, so the Zwift patcher never runs and cannot overwrite the CA.
 - The stub answers the OAuth token endpoint with a fake (unsigned) token and the handful of game
   API calls the game blocks on before the pairing screen: `/api/auth`, `/api/users/login` (a
-  protobuf `LoginResponse`), `/api/profiles/me` (a minimal protobuf profile), the world list and
+  protobuf `LoginResponse`), `/api/profiles/me` (a pre-onboarded protobuf profile), the world list and
   a few empty 200s. The protobuf shapes come from
   [zwift-offline](https://github.com/fatsbrown/zwift-offline).
-- [`tests/pairing/pairing.robot`](pairing.robot) drives the UI with yarf: it logs in through the
-  form and clicks through the onboarding screens to the pairing screen, then pairs the mock
+- The stub writes fake `Game_Launcher` OAuth token JSON with `--token-file`; the harness passes
+  it to `ZwiftApp.exe --token` to bypass the login form. The client refreshes it through the
+  stub's OAuth endpoint, not the real service. JSON must be compact (no spaces), because
+  `runfromprocess` forwards a Windows command line. The temporary token file is removed on exit.
+- [`tests/pairing/pairing.robot`](pairing.robot) drives the UI with yarf: it waits directly
+  for the pairing screen, then pairs the mock
   trainer (see Bluetooth below). tests/pairing.sh then
   confirms in the game log that it reached `ZSF_PAIRING_SCREEN` (yarf cannot read the snap's data
   directory) and saves a screenshot of the pairing screen.
 
-The suite finds every button by its on-screen text (OCR), which is resolution independent. The
-login form is the exception: its Username and Password fields are low-contrast placeholders OCR
-cannot read, so they are clicked at a fraction of the vertical span between two text anchors it
-can read, "LOG IN" and "create new user". The suite branches on the two ways the login form is
-reached: a first run opens on a SIGN UP screen with a link to the form and empty fields; a
-returning run opens on the LOG IN form with the email already filled, so only the password is
-typed. The onboarding screens (EULA, sport, reason) are each optional, because a returning
-profile skips them.
+The suite finds every button by its on-screen text (OCR), which is resolution independent.
+Token login bypasses both SIGN UP and LOG IN. The stub profile skips the onboarding screens
+(EULA, sport, reason): its `saved_game`
+contains the license-acceptance integer record (key `0xE412BB7B`, value `1`) and an end
+chunk, and its private attributes select `CYCLIST` and the `RACING` goal. These values were
+captured from the fake profile updates made by the client when completing onboarding.
+They belong to `PlayerProfile`, not `LoginResponse`; the attribute IDs and protobuf
+fields are documented in zwift-offline's `protobuf/profile.proto`.
 
 ## Bluetooth
 

@@ -5,10 +5,9 @@
 # It is a test aid, never shipped in the snap. tests/zwift-stub.py stands in for Zwift's login
 # (secure.zwift.com) and game (us-or-rly101.zwift.com) servers; the game is pointed at it with
 # https_proxy and trusts its throwaway CA (appended to the prefix's data/cacert.pem, restored
-# afterwards). The game is driven directly (the launcher dance of launcher/zwift-run.sh, without a
-# token, so the in-game login form appears), not through the real launcher, so the Zwift patcher
-# never runs and cannot overwrite the CA. The yarf suite in tests/pairing/ then types fake
-# credentials and clicks through the onboarding screens to the pairing screen.
+# afterwards). The game is driven directly (the launcher dance of launcher/zwift-run.sh, with a
+# fake token), not through the real launcher, so the Zwift patcher never runs and cannot overwrite
+# the CA. The stub's pre-onboarded profile skips onboarding; yarf only drives device pairing.
 #
 # Usage: SMOKE_DISPLAY=auto|nested|headless tests/pairing.sh [--explore] [extra yarf arguments]
 # With --explore, the game keeps running after reaching the pairing screen for manual
@@ -34,6 +33,7 @@ readonly CACERT="${PREFIX}/drive_c/Program Files (x86)/Zwift/data/cacert.pem"
 readonly ZWIFT_USER_DIR="${PREFIX}/drive_c/users/${USER}/AppData/Local/Zwift"
 readonly GAME_LOG="${ZWIFT_USER_DIR}/Logs/Log.txt"
 readonly RUN_SCRIPT="${HOME}/snap/zwift/common/pairing-run.sh"
+readonly TOKEN_FILE="${HOME}/snap/zwift/common/pairing-token.json"
 # how long the game is kept running while yarf drives it; must outlast the yarf suite
 # in explore mode, extend this to allow manual testing
 readonly RUN_SECONDS_DEFAULT=360
@@ -89,7 +89,7 @@ cleanup() {
     [[ -z ${mir_pid} ]] || kill "${mir_pid}" 2> /dev/null
     # restore the game's cacert.pem (remove our appended CA)
     [[ -z ${cacert_appended} ]] || restore_cacert
-    rm -f "${RUN_SCRIPT}"
+    rm -f "${RUN_SCRIPT}" "${TOKEN_FILE}"
     rm -f "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${WAYLAND_SOCKET}" \
         "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${WAYLAND_SOCKET}.lock"
 }
@@ -174,7 +174,8 @@ start_stub() {
     mkdir -p "${OUT_DIR}/stub"
     rm -f "${OUT_DIR}/stub/ready" "${OUT_DIR}/stub/ready.pid"
     python3 "${ROOT}/tests/zwift-stub.py" --dir "${OUT_DIR}/stub" --log "${OUT_DIR}/stub/requests.log" \
-        --port "${STUB_PORT}" --token --ready-file "${OUT_DIR}/stub/ready" > "${OUT_DIR}/stub/out.log" 2>&1 &
+        --port "${STUB_PORT}" --token --token-file "${TOKEN_FILE}" \
+        --ready-file "${OUT_DIR}/stub/ready" > "${OUT_DIR}/stub/out.log" 2>&1 &
     stub_pid=$!
     local waited=0
     while [[ ! -f "${OUT_DIR}/stub/ready" ]]; do
@@ -209,7 +210,7 @@ check_trainer() {
     done
 }
 
-# start_game: drive the game directly (launcher dance without a token), inside the snap
+# start_game: drive the game directly with the stub's fake OAuth token, inside the snap
 start_game() {
     local run_seconds="${1:-${RUN_SECONDS_DEFAULT}}"
     cat > "${RUN_SCRIPT}" <<EOF
@@ -228,7 +229,8 @@ zwift_wine_dir="\$(winepath -w "\${ZWIFT_INSTALL_DIR}")"
 wine start /d "\${zwift_wine_dir}" ZwiftLauncher.exe SilentLaunch
 wait_until_wine_task_started ZwiftLauncher.exe
 launcher_pid="\$(wine_task_pid ZwiftLauncher.exe)"
-wine start /d "\${zwift_wine_dir}" /unix "\${SNAP}/bin/runfromprocess-rs.exe" "\${launcher_pid}" ZwiftApp.exe
+token="\$(cat "\$HOME/../common/pairing-token.json")" || exit 1
+wine start /d "\${zwift_wine_dir}" /unix "\${SNAP}/bin/runfromprocess-rs.exe" "\${launcher_pid}" ZwiftApp.exe "--token=\${token}"
 wait_until_wine_task_started ZwiftApp.exe
 wine taskkill /f /im ZwiftLauncher.exe > /dev/null 2>&1 || true
 for _ in \$(seq 1 ${run_seconds}); do
@@ -294,12 +296,12 @@ main() {
     fi
     start_game "${game_run_seconds}"
 
-    # the game needs a moment to come up before yarf starts matching the login form
+    # the game needs a moment to come up before yarf starts matching the pairing screen
     echo "pairing: waiting for the Zwift window"
     local waited=0
     until grep -aq "ZSF_UNINITIALIZED -> ZSF_LOGIN\|ZSF_TOKEN_LOGIN" "${GAME_LOG}" 2> /dev/null; do
         ((waited += 1))
-        [[ ${waited} -lt 120 ]] || { report_failure; die "the Zwift login screen did not appear"; }
+        [[ ${waited} -lt 120 ]] || { report_failure; die "Zwift did not begin login"; }
         sleep 1
     done
 
