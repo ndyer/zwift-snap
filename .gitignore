@@ -5,3 +5,5 @@ prime/
 .craft/
 snap/.snapcraft/
 .workshop.lock
+wine-src/
+__pycache__/

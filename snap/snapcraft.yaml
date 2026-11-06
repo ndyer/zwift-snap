@@ -87,11 +87,10 @@ parts:
     # This uses the zwift-radios-rebased branch which contains BLE support
     # (Bluetooth LE advertisement watcher, GATT operations, Windows.Devices.Radios)
     # rebased on top of wine-11.21.
+    # Using local source for faster incremental builds.
     plugin: autotools
-    source: https://github.com/ndyer/wine.git
-    source-type: git
-    source-branch: zwift-radios-rebased
-    source-depth: 1
+    source: /project/wine-src
+    source-type: local
     # wine ships a configure script, so the plugin goes straight to
     # configure/make/make install. New style WoW64: 64-bit unix libraries plus
     # i386 and x86_64 PE files in one tree, like the WineHQ package.

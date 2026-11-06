@@ -65,8 +65,6 @@ entries are required.
 ## Build
 
 Use the `build` action to build and the `install` action to install the result.
-Destructive mode installs build packages
-into the workshop itself, so use a throwaway workshop.
 
 When running the `build` action (or any long-running action) from an agent,
 pipe the output through `tee` instead of swallowing it with `tail`: a
