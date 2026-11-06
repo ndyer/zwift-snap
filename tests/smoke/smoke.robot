@@ -45,20 +45,8 @@ Launcher shows its progress dialog
     IF    not ${ocr_ok}    Log    OCR did not read the dialog text, the template match is authoritative.    WARN
 
 Zwift install and start completes
-    [Documentation]    Wait until the launcher is done. It closes the progress
-    ...    dialog right after Zwift started. When the template of the Zwift window
-    ...    is available, require the window itself to be on screen; otherwise
-    ...    require the progress dialog to be gone from several consecutive checks.
-    ...    tests/smoke.sh double checks the ZwiftApp.exe wine process afterwards,
-    ...    because a failed install also closes the dialog (leaving an error dialog
-    ...    in its place).
-    ${have_template}=    Evaluate    os.path.exists("${CURDIR}${/}zwift-login.png")    modules=os
-    IF    ${have_template}
-        Match    ${CURDIR}${/}zwift-login.png    ${INSTALL_TIMEOUT}
-    ELSE
-        Log    zwift-login.png is missing, checking the progress dialog instead. Capture it with the recipe in tests/smoke/README.md.    WARN
-        Wait Until Keyword Succeeds    ${INSTALL_TIMEOUT}    ${GONE_INTERVAL}    Progress Dialog Is Gone
-    END
+    [Documentation]    Wait for Zwift to show the SIGN UP screen.
+    Match Text    SIGN UP    ${INSTALL_TIMEOUT}
 
 *** Keywords ***
 Progress Dialog Is Gone
