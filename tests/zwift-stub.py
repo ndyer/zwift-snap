@@ -12,6 +12,9 @@ refused outright so the tests send nothing out.
 Every intercepted request is logged to --log. Bodies are never logged, only their size and, for
 form posts, the field names, because the login form carries the password the user typed.
 
+Protobuf message structures and API endpoints derived from
+https://github.com/zoffline/zwift-offline.
+
 Usage: zwift-stub.py --dir DIR --log FILE [--port 8443] [--token] [--token-file FILE] [--ready-file FILE]
   --token       answer the OAuth token endpoint with a fake token (otherwise everything is a 404)
   --token-file  write fake OAuth token JSON for ZwiftApp.exe --token (tests only)
