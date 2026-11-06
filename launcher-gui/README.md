@@ -2,8 +2,7 @@
 
 The `zwift-gui` binary is the snap's default `zwift` app. It owns installation,
 updates, display preferences, process supervision, cancellation and logging.
-GTK4 widgets are built programmatically with gtk-rs; no yad, GTK Builder file,
-file tailing, or second async runtime is needed.
+GTK4 widgets are built programmatically with gtk-rs.
 
 The GTK window and game share `ZWIFT_DISPLAY_MODE`: fullscreen by default, or
 `WIDTHxHEIGHT` windowed. The window hides after the first game window appears;

@@ -4,15 +4,13 @@ Guidance for AI coding agents working in this repository.
 
 ## What this project is
 
-An unofficial snap packaging of [Zwift](https://zwift.com) for Linux. Zwift itself is
+An unofficial snap launcher for [Zwift](https://zwift.com) for Linux. Zwift itself is
 proprietary and NOT part of the snap — the Rust launcher downloads and updates it
 into a wine prefix at runtime. Wine is built from source by the snap's `wine` part:
 [ndyer/wine](https://github.com/ndyer/wine), a fork of the official wine-mirror/wine
 GitHub mirror, at the `source-branch` in `snap/snapcraft.yaml` (currently
 `zwift-radios-rebased`: wine-11.21 plus BLE support — advertisement watcher, GATT,
 Windows.Devices.Radios; new-style WoW64, no i386 host libs). Strict confinement, amd64 only, base `core26`.
-The old `core24` variant of the snap is gone from the tree; it only lives in git history (pre-`6e31f55` commits
-or the `origin/core26` / `v0.11` refs).
 
 ## Layout
 

@@ -12,21 +12,17 @@ it when needed. If the check or update fails you can still launch the installed 
 The output of all steps is in `$SNAP_USER_COMMON/zwift.log`; the error dialogs have a
 `Show log` button.
 
-There is no automatic login. Log in through the Zwift window.
+https://snapcraft.io/zwift
 
 ## Install and run
 
 Install a local build of the snap, then connect its graphics and Bluetooth interfaces:
 
 ```shell
-sudo snap install --dangerous ./zwift_*_amd64.snap
-sudo snap install mesa-2604       # graphics userspace, if not installed already
-sudo snap connect zwift:gpu-2604 mesa-2604:gpu-2604
+sudo snap install --beta zwift
 sudo snap connect zwift:bluez
 zwift                             # installs or updates Zwift when needed, then starts it
 ```
-
-`bluez` is not connected automatically. Other apps: `zwift.wine` and `zwift.winecfg`.
 
 The progress dialog stays open until Zwift shows its first window (including splash
 screens), rather than closing as soon as the process starts. If no window appears

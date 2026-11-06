@@ -1,12 +1,11 @@
 name: zwift
 title: Zwift
-summary: Run Zwift on Linux using wine
+summary: Launch Zwift on Linux using Wine
 description: |
-  Unofficial snap packaging of Zwift for Linux
+  Unofficial snap launcher for Zwift
 
-  Zwift itself is proprietary and is NOT part of this snap.
-
-  Every start checks for a Zwift installation and updates it and its pre-requisites
+  Zwift itself is proprietary and is NOT part of this snap. Every start checks
+  for a Zwift installation and updates it and its pre-requisites
   before Zwift starts. Log in through the Zwift window.
 # The version comes from the git tags, see the version-generator part
 adopt-info: version-generator
