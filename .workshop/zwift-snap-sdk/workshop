@@ -1,0 +1,74 @@
+#!/usr/bin/python3
+"""Run this project's Workshop actions from inside its workshop.
+
+The SDK's setup-project hook installs this runner at /usr/local/bin/workshop.
+Use workshop run <action> [arguments...] or workshop run zwift-snap <action>.
+Each invocation reads /project/.workshop/zwift-snap.yaml and runs the action
+from /project with bash errexit/pipefail. workshop --help lists actions.
+This is not the host Workshop CLI: lifecycle and management commands can only
+be run from the host by the user, not from within the workshop.
+"""
+
+import os
+from pathlib import Path
+import sys
+
+import yaml
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if args and args[0] != "run" and args not in (["--help"], ["-h"]):
+        raise ValueError(
+            "You are already inside the zwift-snap workshop. "
+            "This is a local action runner, not the host Workshop CLI; "
+            "only 'run' is supported here.\n"
+            "Run actions with: workshop run <action> [arguments...]\n"
+            "List actions with: workshop --help\n"
+            "Run shell commands directly in /project; do not use workshop exec or shell.\n"
+            "Lifecycle and management commands (such as refresh, info, changes, "
+            "or tasks) can only be run from the host by the user, "
+            "not from within the workshop."
+        )
+
+    project = Path(__file__).resolve().parents[2]
+    with (project / ".workshop/zwift-snap.yaml").open() as stream:
+        definition = yaml.safe_load(stream)
+    if not isinstance(definition, dict):
+        raise ValueError("workshop definition must be a mapping")
+    actions = definition.get("actions")
+    if not isinstance(actions, dict) or not all(
+        isinstance(name, str) and isinstance(script, str)
+        for name, script in actions.items()
+    ):
+        raise ValueError("workshop actions must map names to shell scripts")
+
+    if not args or args in (["--help"], ["-h"]):
+        print("Usage: workshop run [zwift-snap] <action> [arguments...]")
+        print("In-workshop action runner only; use the host CLI for lifecycle commands.")
+        print("Actions: " + ", ".join(actions))
+        return 0
+    args = args[1:]
+    if args and args[0] == "zwift-snap":
+        args = args[1:]
+    if not args:
+        raise ValueError("missing action; use --help to list actions")
+    action, *arguments = args
+    if action not in actions:
+        raise ValueError(f"unknown action {action!r}; use --help to list actions")
+
+    os.chdir(project)
+    os.execv(
+        "/bin/bash",
+        ["bash", "-e", "-o", "pipefail", "-c", actions[action],
+         f"workshop run {action}", *arguments],
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, yaml.YAMLError) as error:
+        print(f"workshop: {error}", file=sys.stderr)
+        sys.exit(1)

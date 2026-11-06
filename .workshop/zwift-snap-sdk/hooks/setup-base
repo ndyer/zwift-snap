@@ -30,7 +30,7 @@ pkgproxy.pkgproxyctl setup snap | sh
 pkgproxy.pkgproxyctl setup apt | sh
 apt-get update && apt-get install -y shellcheck yamllint \
     bats bats-support bats-assert bats-file \
-    bluez python3-venv
+    bluez python3-venv python3-yaml
 
 # yarf needs process-control for its OCR; connect it if still disconnected.
 snap connections yarf 2>/dev/null \

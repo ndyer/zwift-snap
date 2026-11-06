@@ -70,6 +70,7 @@ actions:
       tests/bluetooth.sh tests/pairing.sh tests/tools/yarf/yarf.sh tests/tools/bluetooth/*.sh \
       tests/unit/*.bats tests/unit/test_helper.bash \
       tests/unit/stubs/* .workshop/zwift-snap-sdk/hooks/*
-    python3 -m py_compile tests/zwift-stub.py tests/tools/yarf/*.py tests/tools/bluetooth/*.py
+    python3 -m py_compile tests/zwift-stub.py tests/tools/yarf/*.py tests/tools/bluetooth/*.py \
+      .workshop/zwift-snap-sdk/workshop
     yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' \
       snap/snapcraft.yaml .workshop/zwift-snap.yaml .workshop/zwift-snap-sdk/sdk.yaml

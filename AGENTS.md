@@ -40,35 +40,13 @@ users run arbitrary wine commands. All share the command-chain
 ## Workshop
 
 All building and testing happens in a [Workshop](https://ubuntu.com/workshop/docs/)
-environment: builds run there in destructive mode. Before running an action, determine
-where your terminal is running:
-
-- **On the host:** run `workshop run zwift-snap <action>` from the project root.
-- **Inside the workshop:** the `workshop` CLI is unavailable. Run the action's commands
-  directly from `/project`, using the definitions in `.workshop/zwift-snap.yaml`.
-- **Uncertain:** check the session context. Here, `hostname` reports `zwift-snap` and
-  `systemd-detect-virt` reports `lxc` inside the workshop, but these are only clues:
-  other environments can share them. If still uncertain, ask before running an
-  environment-sensitive command.
-
-Host-side action commands:
-
-```shell
-workshop run zwift-snap build     # sudo snapcraft pack --destructive-mode
-workshop run zwift-snap install   # sudo snap install --dangerous ./zwift_*.snap
-workshop run zwift-snap test      # unit tests of the launcher scripts (fast, no GUI)
-workshop run zwift-snap smoke     # visual smoke test with yarf, ~2 min warm, see below
-workshop run zwift-snap bluetooth # bluetooth plumbing test with the bluezoo mock, see below
-workshop run zwift-snap lint      # shellcheck + yamllint
-workshop run zwift-snap clean     # sudo snapcraft clean --destructive-mode
-workshop run zwift-snap size      # where the bytes are
-workshop run zwift-snap stats     # pkgproxy cache savings
-```
+environment. Use `workshop run <action> [arguments...]`; `workshop --help` lists
+actions. The local runner's header at `.workshop/zwift-snap-sdk/workshop` documents
+its behavior and limitations.
 
 There is no `setup` action: snapcraft, shellcheck, yamllint, bats, bluez, bluezoo and
 the pkgproxy cache are installed by the `setup-base` hook of the `zwift-snap-sdk` SDK
 at launch and refresh (see `.workshop/zwift-snap-sdk/hooks/setup-base`).
-To launch a new workshop, run `workshop launch zwift-snap` from the host project root.
 
 The canonical agent documentation for operating Workshop is the vendored skill under
 `.github/skills/` (`use-workshop`, `onboard-workshop`, `design-sdk`, imported from
@@ -86,8 +64,8 @@ entries are required.
 
 ## Build
 
-Use the `build` action to build and the `install` action to install the result;
-follow the host-versus-workshop rule above. Destructive mode installs build packages
+Use the `build` action to build and the `install` action to install the result.
+Destructive mode installs build packages
 into the workshop itself, so use a throwaway workshop.
 
 When running the `build` action (or any long-running action) from an agent,

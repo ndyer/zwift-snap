@@ -1,0 +1,4 @@
+#!/bin/bash
+set -euo pipefail
+
+sudo ln -sfn /project/.workshop/zwift-snap-sdk/workshop /usr/local/bin/workshop
