@@ -311,41 +311,64 @@ cleanup_install_artifacts() {
 # ZWIFT_DISPLAY_MODE defaults to "fullscreen". A resolution value (e.g., "1920x1080")
 # implies windowed mode and sets that resolution.
 configure_display_mode() {
-    # Ensure ZWIFT_DISPLAY_MODE has a default
     local display_mode="${ZWIFT_DISPLAY_MODE:-fullscreen}"
+    local fullscreen=1 resolution="" temp
 
     if [[ ! -f ${ZWIFT_PREFS_FILE} ]]; then
         msgbox warning "Preferences file does not exist yet. Display mode ${display_mode} cannot be set."
         return 0
     fi
 
-    if [[ ${display_mode} == "fullscreen" ]]; then
-        # Default: ensure fullscreen is enabled
-        if ! grep -q '<FULLSCREEN>1</FULLSCREEN>' "${ZWIFT_PREFS_FILE}"; then
-            msgbox info "Enabling fullscreen mode in Zwift preferences"
-            local updated_prefs
-            updated_prefs="$(awk '{
-                gsub(/<FULLSCREEN>[0-9]*<\/FULLSCREEN>/, "<FULLSCREEN>1</FULLSCREEN>")
-            } 1' "${ZWIFT_PREFS_FILE}")"
-            # If FULLSCREEN doesn't exist, add it after <CONFIG>
-            if ! echo "${updated_prefs}" | grep -q '<FULLSCREEN>1</FULLSCREEN>'; then
-                updated_prefs="$(echo "${updated_prefs}" | sed 's/<CONFIG>/<CONFIG>\n        <FULLSCREEN>1<\/FULLSCREEN>/')"
-            fi
-            echo "${updated_prefs}" > "${ZWIFT_PREFS_FILE}"
+    if [[ ${display_mode} != "fullscreen" ]]; then
+        if [[ ! ${display_mode} =~ ^[1-9][0-9]*x[1-9][0-9]*$ ]]; then
+            msgbox error "Invalid display mode: ${display_mode}. Use fullscreen or WIDTHxHEIGHT."
+            return 1
         fi
-    else
-        # User specified a custom resolution -> windowed mode
-        msgbox info "Setting zwift resolution to ${display_mode} (windowed mode)."
-        local updated_prefs
-        updated_prefs="$(awk -v resolution="${display_mode}" '{
-            gsub(/<USER_RESOLUTION_PREF>.*<\/USER_RESOLUTION_PREF>/,
-                 "<USER_RESOLUTION_PREF>" resolution "</USER_RESOLUTION_PREF>")
-            gsub(/<FULLSCREEN>[0-9]*<\/FULLSCREEN>/, "<FULLSCREEN>0</FULLSCREEN>")
-        } 1' "${ZWIFT_PREFS_FILE}")"
-        # If FULLSCREEN doesn't exist, add it after <CONFIG>
-        if ! echo "${updated_prefs}" | grep -q '<FULLSCREEN>0</FULLSCREEN>'; then
-            updated_prefs="$(echo "${updated_prefs}" | sed 's/<CONFIG>/<CONFIG>\n        <FULLSCREEN>0<\/FULLSCREEN>/')"
-        fi
-        echo "${updated_prefs}" > "${ZWIFT_PREFS_FILE}"
+        fullscreen=0
+        resolution="${display_mode}"
     fi
+
+    temp="$(mktemp "${ZWIFT_PREFS_FILE}.XXXXXX")" || {
+        msgbox error "Unable to create a temporary preferences file"
+        return 1
+    }
+    # The Windows launcher creates <CONFIG/> on a fresh install.
+    # Update only CONFIG, preserving other preferences and an existing resolution in fullscreen.
+    if ! awk -v fullscreen="${fullscreen}" -v resolution="${resolution}" '
+        function set_pref(config, key, value, tag, pattern) {
+            tag = "<" key ">" value "</" key ">"
+            pattern = "<" key "[[:space:]]*>[^<]*</" key ">"
+            if (!gsub(pattern, tag, config) &&
+                !gsub("<" key "[[:space:]]*/>", tag, config))
+                sub(/<\/CONFIG>/, "        " tag "\n    </CONFIG>", config)
+            return config
+        }
+        { xml = xml $0 "\n" }
+        END {
+            if (xml !~ /<ZWIFT[[:space:]]*>/ || xml !~ /<\/ZWIFT>/) exit 1
+            gsub(/<CONFIG[[:space:]]*\/>/, "<CONFIG></CONFIG>", xml)
+            if (xml !~ /<CONFIG[[:space:]]*>/) {
+                if (!sub(/<\/ZWIFT>/, "    <CONFIG></CONFIG>\n</ZWIFT>", xml))
+                    exit 1
+            }
+            if (!match(xml, /<CONFIG[[:space:]]*>/)) exit 1
+            start = RSTART
+            config = substr(xml, start)
+            if (!match(config, /<\/CONFIG>/)) exit 1
+            length_config = RSTART + RLENGTH - 1
+            config = substr(config, 1, length_config)
+            config = set_pref(config, "FULLSCREEN", fullscreen)
+            if (resolution != "")
+                config = set_pref(config, "USER_RESOLUTION_PREF", resolution)
+            printf "%s%s%s", substr(xml, 1, start - 1), config, substr(xml, start + length_config)
+        }
+    ' "${ZWIFT_PREFS_FILE}" > "${temp}" \
+        || ! grep -q "<FULLSCREEN>${fullscreen}</FULLSCREEN>" "${temp}" \
+        || { [[ -n ${resolution} ]] && ! grep -q "<USER_RESOLUTION_PREF>${resolution}</USER_RESOLUTION_PREF>" "${temp}"; } \
+        || ! mv -f -- "${temp}" "${ZWIFT_PREFS_FILE}"; then
+        rm -f -- "${temp}"
+        msgbox error "Unable to update display mode in ${ZWIFT_PREFS_FILE}"
+        return 1
+    fi
+    msgbox info "Set Zwift display mode to ${display_mode}"
 }

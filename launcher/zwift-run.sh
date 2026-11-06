@@ -100,7 +100,10 @@ declare -a zwift_args
 zwift_args=()
 
 # Configure display mode (fullscreen or custom resolution)
-configure_display_mode
+if ! configure_display_mode; then
+    gui_failure "Zwift preferences" "Failed to configure the display mode. Check the log for details." "" 1
+    fail "Failed to configure Zwift display mode"
+fi
 
 ##################################
 ##### Start Zwift using wine #####

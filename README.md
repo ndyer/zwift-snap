@@ -55,6 +55,10 @@ debug audio run `WINEDEBUG=+pulse,+mmdevapi zwift`.
 - `VERBOSITY`
 - `DEBUG`
 
+Display preferences are added when missing, including on a fresh install. If an
+existing preferences file cannot be updated, the launcher reports an error instead
+of starting with the wrong display mode.
+
 To test a real Bluetooth device, run `ZWIFT_BLUETOOTH_DEBUG=1 zwift`. This enables Wine's
 `+bluetooth` and `+winebth` channels and writes the runtime trace to
 `~/snap/zwift/common/zwift.log` (as well as the terminal). Bluetooth diagnostics are off by
