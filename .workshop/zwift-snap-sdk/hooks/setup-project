@@ -1,4 +1,8 @@
 #!/bin/bash
+# setup-project hook of the zwift-snap-sdk SDK. Runs at every launch and after every
+# applied workshop refresh, after the project is mounted and auto-connect has finished.
+# This hook only installs the workshop runner symlink (needs /project mounted).
 set -euo pipefail
 
+# Install the workshop runner.
 sudo ln -sfn /project/.workshop/zwift-snap-sdk/workshop /usr/local/bin/workshop

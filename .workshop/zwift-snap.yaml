@@ -1,10 +1,16 @@
 name: zwift-snap
 base: ubuntu@26.04
 sdks:
+  # pkgproxy SDK: installs and configures pkgproxy early, warms cache with local snaps.
+  # Must be listed before zwift-snap-sdk so pkgproxy is configured before other snaps install.
+  - name: project-pkgproxy
   # Carries the desktop plug of the workshop, defined in .workshop/zwift-snap-sdk/sdk.yaml.
   # The yarf smoke test (tests/smoke.sh) renders its Mir compositor on the host display
   # through it when one is available.
   - name: project-zwift-snap-sdk
+  # Rust SDK for building and testing the zwift-gui launcher
+  - name: rust
+    channel: latest/stable
 connections:
   # The desktop interface is not connected automatically at launch, spell it out here.
   # References use the bare SDK name: the project- prefix of the sdks entry only

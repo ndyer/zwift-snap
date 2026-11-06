@@ -15,19 +15,11 @@ set -uo pipefail
 # documented and restored on refresh if removed to save disk; mir-test-tools provides the Mir
 # compositor the launcher runs against. The content interfaces auto-connect once their providers
 # are present (unlike process-control, connected below). The hook runs as root, so no sudo.
+# NOTE: pkgproxy is now installed and configured by the pkgproxy SDK (project-pkgproxy),
+# which runs before this SDK (listed first in sdks:), so its cache is warm when we install snaps.
 snap install snapcraft --classic
-snap install pkgproxy mesa-2604 yarf gnome-46-2404 mir-test-tools
+snap install mesa-2604 yarf gnome-46-2404 mir-test-tools
 
-# Point snapd and apt at the pkgproxy cache so repeated builds skip the downloads; wait for the
-# proxy daemon first.
-for _ in $(seq 30); do
-    pkgproxy.pkgproxyctl stats > /dev/null 2>&1 && break
-    sleep 1
-done
-pkgproxy.pkgproxyctl stats > /dev/null
-pkgproxy.pkgproxyctl setup snap | sh
-# apt caches http:// sources only (plain-https sources still go direct)
-pkgproxy.pkgproxyctl setup apt | sh
 apt-get update && apt-get install -y shellcheck yamllint \
     bats bats-support bats-assert bats-file \
     bluez python3-venv python3-yaml

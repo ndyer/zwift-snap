@@ -1,0 +1,50 @@
+#!/bin/bash
+# setup-base hook of the pkgproxy SDK. Runs as root when the SDK is installed
+# (workshop launch) and when its revision changes (workshop refresh), so the setup
+# that used to be a workshop action now happens automatically on every fresh
+# workshop. Everything here is idempotent, because a refresh can run it again.
+set -euo pipefail
+
+snap install pkgproxy
+
+# setup-base runs before /project is mounted, so use the SDK's bundled cache.
+cache_dir="$SDK/cache"
+objects_dir="/var/snap/pkgproxy/common/cache/snap/objects/sha3-384"
+if [ ! -d "$cache_dir" ]; then
+    echo "pkgproxy: bundled cache directory is missing: $cache_dir" >&2
+    exit 1
+fi
+
+shopt -s nullglob
+cache_files=()
+for blob in "$cache_dir"/*; do
+    filename="${blob##*/}"
+    [[ "$filename" =~ ^[0-9a-f]{96}$ ]] || continue
+    if [ ! -f "$blob" ] || [ ! -f "$blob.meta.json" ]; then
+        echo "pkgproxy: cache object must have a blob and metadata sidecar: $blob" >&2
+        exit 1
+    fi
+    cache_files+=("$blob" "$blob.meta.json")
+done
+
+if [ "${#cache_files[@]}" -gt 0 ]; then
+    snap stop pkgproxy
+    trap 'snap start pkgproxy' EXIT
+    mkdir -p "$objects_dir"
+    cp -- "${cache_files[@]}" "$objects_dir/"
+    snap start pkgproxy
+    trap - EXIT
+fi
+
+# Point snapd and apt at the pkgproxy cache
+pkgproxy.pkgproxyctl setup snap | sh
+pkgproxy.pkgproxyctl setup apt | sh
+
+# Make sure the daemon is up
+for _ in $(seq 30); do
+    pkgproxy.pkgproxyctl stats > /dev/null 2>&1 && exit 0
+    sleep 1
+done
+echo "pkgproxy: daemon did not become ready within 30 seconds" >&2
+pkgproxy.pkgproxyctl stats >&2
+exit 1
