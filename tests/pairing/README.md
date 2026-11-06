@@ -34,7 +34,7 @@ The zwift snap must be installed and Zwift already downloaded into the prefix, s
   `runfromprocess` forwards a Windows command line. The temporary token file is removed on exit.
 - [`tests/pairing/pairing.robot`](pairing.robot) drives the UI with yarf: it waits directly
   for the pairing screen, then pairs the mock
-  trainer (see Bluetooth below). tests/pairing.sh then
+  trainer as Power Source (see Bluetooth below). tests/pairing.sh then
   confirms in the game log that it reached `ZSF_PAIRING_SCREEN` (yarf cannot read the snap's data
   directory) and saves a screenshot of the pairing screen.
 
@@ -56,7 +56,8 @@ bluezoo (the same BlueZ D-Bus mock as `tests/bluetooth.sh`, via
 `tests/tools/bluetooth/bluezoo.sh`) runs two adapters: hci0 is the PC, hci1 is a BLE smart
 trainer named KICKR
 ([`tests/tools/bluetooth/bluetooth-trainer.py`](../tools/bluetooth/bluetooth-trainer.py): FTMS,
-Cycling Power and Device Information over GATT, streaming 150 W / 85 rpm).
+Cycling Power, Device Information, supporting standard services and the Zwift custom service
+over GATT, streaming 150 W / 85 rpm).
 `ROUVY_BT_ADAPTER=hci0` keeps wine on the PC adapter, and
 [`tests/tools/bluetooth/bluezoo-run.py`](../tools/bluetooth/bluezoo-run.py) gives the trainer a
 changing RSSI so wine keeps reporting its advertisements to Zwift.
@@ -65,9 +66,31 @@ After reaching the pairing screen (detected by its POWER SOURCE tile, since a "N
 tip can cover the PAIRED DEVICES title), the suite pairs the trainer: POWER SOURCE → PAIR DEVICE
 → KICKR → CLOSE. Clicking a connected tile would unpair the device, so a returning profile is
 first given time to reconnect by itself. tests/pairing.sh then checks in the game log that KICKR
-connected and holds the Power role, and in `trainer.log` that Zwift subscribed to the power and
-indoor bike data notifications. Cadence and Controllable Trainer roles are not required: a fresh
-pairing assigns only Power.
+connected and holds the Power role, and in `trainer.log` that
+Zwift subscribed to the power, indoor bike data, FTMS control point and Zwift custom channels.
+Cadence and Controllable Trainer roles are not required. Explicit Resistance selection is
+unnecessary for reproducing the crash.
+
+The Zwift custom service (`00000001-19ca-4651-86e5-fa29dcdd09d1`) exposes async notifications
+(`00000002-…`), sync-rx writes (`00000003-…`) and sync-tx indications (`00000004-…`).
+It is discovered over GATT, without changing the eight advertised service UUIDs. The real-trainer
+trace selects sync-rx immediately before the `DataWriter` activation and fatal Wine
+`vccorlib140.dll.?GetIBoxArrayVtable@Details@Platform@@YAPEAXPEAX@Z` call. Power-only pairing
+and FTMS subscriptions do not prove this write path was exercised.
+This service is a crash-reproduction surface, not a Zwift protocol emulator: incoming writes
+are logged and rejected as unsupported, rather than fabricating a handshake response.
+The existing FTMS control point still responds to requests with success indications.
+A Wine abort is a test failure, not a passing reproduction; the harness prints the abort
+from `game.log` alongside the normal failure artifacts.
+With the custom service present, the same `GetIBoxArrayVtable` abort is reproducible during
+initial Power pairing, before any write reaches the mock. Without that service, both Power
+and Resistance pairing succeed.
+
+To reproduce with Bluetooth tracing on the nested desktop, run inside the workshop:
+
+```shell
+SMOKE_DISPLAY=nested WINEDEBUG=+bluetooth,+winebth tests/pairing.sh
+```
 
 Use `tests/pairing.sh --explore` (best run detached) to keep the game on the pairing screen for
 an hour and drive it with `tests/tools/yarf/yarf.sh`; set `WINEDEBUG=+bluetooth,+winebth` to trace

@@ -9,7 +9,9 @@
 # when that side connects.
 #
 # Services, modelled on a Wahoo KICKR:
-#   Fitness Machine (FTMS, 0x1826), Cycling Power (0x1818), Device Information (0x180A).
+#   Fitness Machine (FTMS, 0x1826), Cycling Power (0x1818), Device Information (0x180A),
+#   supporting standard services, and the Zwift custom service seen on the real trainer.
+# The custom service exposes the write path for crash reproduction, not a protocol emulator.
 # While a client has notifications on, fake ride data (~150 W, ~85 rpm) is sent every
 # second. Every read, write and notification start/stop is logged to stdout, which the
 # tests assert on. Runs in the bluezoo venv (it needs sdbus) until it is killed.
@@ -36,6 +38,15 @@ def uuid16(short: int) -> str:
 FTMS = uuid16(0x1826)
 CYCLING_POWER = uuid16(0x1818)
 DEVICE_INFORMATION = uuid16(0x180A)
+GENERIC_ACCESS = uuid16(0x1800)
+GENERIC_ATTRIBUTE = uuid16(0x1801)
+BATTERY_SERVICE = uuid16(0x180F)
+CYCLING_SPEED_CADENCE = uuid16(0x1816)
+LOCATION_NAVIGATION = uuid16(0x1819)
+ZWIFT_SERVICE = "00000001-19ca-4651-86e5-fa29dcdd09d1"
+ZWIFT_ASYNC = "00000002-19ca-4651-86e5-fa29dcdd09d1"
+ZWIFT_SYNC_RX = "00000003-19ca-4651-86e5-fa29dcdd09d1"
+ZWIFT_SYNC_TX = "00000004-19ca-4651-86e5-fa29dcdd09d1"
 # The GAP appearance of a cycling power sensor.
 APPEARANCE_CYCLING_POWER_SENSOR = 0x0484
 
@@ -187,12 +198,13 @@ class Trainer:
         self.pending_indications: list[tuple[Characteristic, bytes]] = []
 
     def add_service(self, index: int, uuid: str,
-                    characteristics: list[tuple[int, list[str], str, bytes]],
+                    characteristics: list[tuple[int | str, list[str], str, bytes]],
                     on_write: Optional[Callable[[Characteristic, bytes], None]] = None) -> None:
         service_path = f"{APP_PATH}/service{index}"
         self.manager.export_with_manager(service_path, Service(uuid), self.bus)
-        for char_index, (short, flags, name, value) in enumerate(characteristics):
-            char = Characteristic(uuid16(short), service_path, flags, name, value, on_write)
+        for char_index, (char_uuid, flags, name, value) in enumerate(characteristics):
+            char = Characteristic(uuid16(char_uuid) if isinstance(char_uuid, int) else char_uuid,
+                                  service_path, flags, name, value, on_write)
             self.manager.export_with_manager(f"{service_path}/char{char_index}", char, self.bus)
             self.characteristics.append(char)
 
@@ -208,9 +220,50 @@ class Trainer:
         response = bytes((0x80, value[0], 0x01))
         self.pending_indications.append((char, response))
 
+    def on_zwift_write(self, char: Characteristic, value: bytes) -> None:
+        log(f"{char.name}: Zwift protocol responses are not emulated")
+        raise sdbus.DbusNotSupportedError("Zwift protocol responses are not emulated")
+
     def export(self) -> None:
         self.manager.export_to_dbus(APP_PATH, self.bus)
-        self.add_service(0, FTMS, [
+        # Service 0: Generic Access (0x1800) - matches real DI device
+        self.add_service(0, GENERIC_ACCESS, [
+            (0x2A00, ["read"], "device-name", self.name.encode()),
+            (0x2A01, ["read"], "appearance", struct.pack("<H", APPEARANCE_CYCLING_POWER_SENSOR)),
+            (0x2A02, ["read"], "peripheral-preferred-connection-parameters", struct.pack("<HHHH", 6, 6, 0, 300)),
+            (0x2A03, ["read"], "reconnection-address", b"\x00" * 6),
+            (0x2A04, ["read"], "peripheral-privacy-flag", b"\x00"),
+        ])
+        # Service 1: Generic Attribute (0x1801) - matches real DI device
+        self.add_service(1, GENERIC_ATTRIBUTE, [
+            (0x2A05, ["indicate"], "service-changed", b"\x00\x00\xff\xff"),
+        ])
+        # Service 2: Device Information (0x180A)
+        self.add_service(2, DEVICE_INFORMATION, [
+            (0x2A29, ["read"], "manufacturer-name", b"Wahoo Fitness"),
+            (0x2A24, ["read"], "model-number", self.name.encode()),
+            (0x2A25, ["read"], "serial-number", b"ZWIFTSNAP0001"),
+            (0x2A26, ["read"], "firmware-revision", b"4.2.0"),
+        ])
+        # Service 3: Battery Service (0x180F) - matches real DI device
+        self.add_service(3, BATTERY_SERVICE, [
+            (0x2A19, ["read", "notify"], "battery-level", bytes((100,))),
+        ])
+        # Service 4: Cycling Speed and Cadence (0x1816) - matches real DI device
+        self.add_service(4, CYCLING_SPEED_CADENCE, [
+            (0x2A5B, ["notify"], "csc-measurement", b""),
+            (0x2A5C, ["read"], "csc-feature", struct.pack("<I", 0x00000003)),
+            (0x2A5D, ["read"], "sensor-location", bytes((13,))),
+        ])
+        # Service 5: Location and Navigation (0x1819) - matches real DI device
+        self.add_service(5, LOCATION_NAVIGATION, [
+            (0x2A67, ["notify"], "ln-control-point", b""),
+            (0x2A68, ["read"], "navigation", b""),
+            (0x2A69, ["read"], "position-quality", b""),
+            (0x2A6A, ["read"], "ln-feature", struct.pack("<I", 0x00000001)),
+        ])
+        # Service 6: Fitness Machine (FTMS, 0x1826)
+        self.add_service(6, FTMS, [
             # Fitness Machine Features: cadence + power measurement supported; target
             # settings: power target and indoor bike simulation supported.
             (0x2ACC, ["read"], "ftms-feature",
@@ -221,20 +274,25 @@ class Trainer:
             # Supported Power Range: 0..2000 W in 1 W steps.
             (0x2AD8, ["read"], "supported-power-range", struct.pack("<hhH", 0, 2000, 1)),
         ], on_write=self.on_control_point)
-        self.add_service(1, CYCLING_POWER, [
+        # Service 7: Cycling Power (0x1818)
+        self.add_service(7, CYCLING_POWER, [
             (0x2A63, ["notify"], "cycling-power-measurement", b""),
             # Cycling Power Feature: crank revolution data supported.
             (0x2A65, ["read"], "cycling-power-feature", struct.pack("<I", 1 << 3)),
             # Sensor Location: rear hub.
             (0x2A5D, ["read"], "sensor-location", bytes((13,))),
         ])
-        self.add_service(2, DEVICE_INFORMATION, [
-            (0x2A29, ["read"], "manufacturer-name", b"Wahoo Fitness"),
-            (0x2A24, ["read"], "model-number", self.name.encode()),
-            (0x2A25, ["read"], "serial-number", b"ZWIFTSNAP0001"),
-            (0x2A26, ["read"], "firmware-revision", b"4.2.0"),
+        # The real crash selects sync-rx immediately before creating a DataWriter.
+        self.add_service(8, ZWIFT_SERVICE, [
+            (ZWIFT_ASYNC, ["notify"], "zwift-async", b""),
+            (ZWIFT_SYNC_RX, ["write"], "zwift-sync-rx", b""),
+            (ZWIFT_SYNC_TX, ["indicate"], "zwift-sync-tx", b""),
+        ], on_write=self.on_zwift_write)
+        # The custom service is discovered over GATT after connecting.
+        self.advertisement = Advertisement(self.name, [
+            FTMS, CYCLING_POWER, GENERIC_ACCESS, GENERIC_ATTRIBUTE,
+            DEVICE_INFORMATION, BATTERY_SERVICE, CYCLING_SPEED_CADENCE, LOCATION_NAVIGATION
         ])
-        self.advertisement = Advertisement(self.name, [FTMS, CYCLING_POWER])
         self.advertisement.export_to_dbus(ADV_PATH, self.bus)
 
     async def register(self, adapter: str) -> None:
@@ -294,4 +352,5 @@ async def main() -> None:
     await trainer.ride()
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

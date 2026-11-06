@@ -181,8 +181,8 @@ check_trace() {
     grep -q "New org.bluez.Device1 object \"${BLUEZOO_CENTRAL_ADAPTER}/${BLUEZOO_TRAINER_DEVICE_NAME}\"" "${trace}" \
         || { report_failure; die "winebth did not see the trainer ${BLUEZOO_TRAINER_ADDRESS} on hci0"; }
     uuids=$(trainer_uuid_count)
-    [[ ${uuids} == 2 ]] \
-        || { report_failure; die "winebth saw ${uuids:-no} service UUIDs for the trainer, expected 2 (FTMS, Cycling Power)"; }
+    [[ ${uuids} == 8 ]] \
+        || { report_failure; die "winebth saw ${uuids:-no} service UUIDs for the trainer, expected 8 (FTMS, Cycling Power, Generic Access, Generic Attribute, Device Information, Battery, CSC, Location/Nav)"; }
 }
 
 main() {
@@ -199,7 +199,7 @@ main() {
     check_trace
 
     echo "bluetooth: PASSED (winebth used hci0 only, registered its agent and created a device for the" \
-        "LE trainer ${BLUEZOO_TRAINER_NAME} ${BLUEZOO_TRAINER_ADDRESS} with its 2 service UUIDs)"
+        "LE trainer ${BLUEZOO_TRAINER_NAME} ${BLUEZOO_TRAINER_ADDRESS} with its 8 service UUIDs)"
 }
 
 main "$@"

@@ -11,7 +11,7 @@ Library           yarf_ocr.py
 
 *** Variables ***
 # how long to wait for a screen that must appear
-${SCREEN_TIMEOUT}    90
+${SCREEN_TIMEOUT}    180
 # how long the pairing dialog may take to list the trainer (bluezoo reports it every second)
 ${DEVICE_TIMEOUT}    60
 # a returning profile reconnects its saved trainer on its own within this time
@@ -45,8 +45,7 @@ Wait For The Pairing Screen
     Match Text    POWER SOURCE    ${SCREEN_TIMEOUT}
 
 Pair The Trainer
-    [Documentation]    Pair the mock trainer as the power source (some pairing layouts later add the
-    ...    cadence and controllable trainer roles, which are not required). A returning profile reconnects the trainer it
+    [Documentation]    Pair the mock trainer as the power source. A returning profile reconnects the trainer it
     ...    paired before by itself, and clicking a connected tile would unpair it, so first give
     ...    the reconnect a chance. Clicking the trainer in the dialog toggles it: click it once.
     ${reconnected}=    Run Keyword And Return Status    Match Text    ${TRAINER}    ${RECONNECT_TIMEOUT}

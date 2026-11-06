@@ -86,7 +86,7 @@ bluezoo_adapters_up() {
 bluezoo_start() {
     # A run that died hard leaves bluezoo behind; it must be gone before the new one can own
     # org.bluez.
-    sudo pkill -f "${BLUEZOO_PATTERN}" > /dev/null 2>&1
+    bluezoo_stop_processes
     sleep 1
 
     # bluezoo must run as root: the bluez D-Bus policy only lets root own org.bluez. setsid
@@ -128,6 +128,13 @@ bluezoo_stop() {
     [[ -z ${trainer_pid} ]] || kill "${trainer_pid}" 2> /dev/null
     [[ -z ${bluezoo_pid} ]] || {
         sudo kill "${bluezoo_pid}" 2> /dev/null
-        sudo pkill -f "${BLUEZOO_PATTERN}" > /dev/null 2>&1
+        bluezoo_stop_processes
     }
+}
+
+bluezoo_stop_processes() {
+    local pid
+    while read -r pid; do
+        sudo kill "${pid}" 2> /dev/null
+    done < <(pgrep -f "${BLUEZOO_PATTERN}")
 }

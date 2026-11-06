@@ -69,6 +69,9 @@ report_failure() {
         [[ -f ${OUT_DIR}/${log} ]] && { echo "pairing: tail of ${log}:"; tail -15 "${OUT_DIR}/${log}"; }
     done
     [[ -f ${GAME_LOG} ]] && { echo "pairing: last game states:"; grep -aE "ZSF_|GameFlowState" "${GAME_LOG}" | tail -8; }
+    if [[ -f ${OUT_DIR}/game.log ]]; then
+        grep -aE 'wine: Call .*unimplemented function|Unhandled exception' "${OUT_DIR}/game.log" || true
+    fi
 }
 
 cleanup() {
@@ -192,19 +195,19 @@ check_trainer() {
     local characteristic devices waited=0
     grep -aq "Device: \"${BLUEZOO_TRAINER_NAME}\" has new connection status: connected" "${GAME_LOG}" \
         || { report_failure; die "Zwift did not connect the mock trainer ${BLUEZOO_TRAINER_NAME}"; }
-    # pairing through the POWER SOURCE tile assigns the power role; other roles (cadence,
-    # controllable trainer) only follow on some pairing layouts, so they are not required.
     # The last device list in the log is the current assignment (captured first: grep -q would
     # close the pipe early and pipefail would report tac's SIGPIPE as a failure)
     while :; do
         devices=$(tac "${GAME_LOG}" | sed -n '/^\[[0-9:]*\] Device List:/q;p')
-        [[ ${devices} != *"Power: ${BLUEZOO_TRAINER_NAME} "* ]] || break
+        if [[ ${devices} == *"Power: ${BLUEZOO_TRAINER_NAME} "* ]]; then
+            break
+        fi
         ((waited += 1))
         [[ ${waited} -lt 30 ]] \
             || { report_failure; die "Zwift did not assign the mock trainer the power role"; }
         sleep 1
     done
-    for characteristic in indoor-bike-data cycling-power-measurement; do
+    for characteristic in indoor-bike-data cycling-power-measurement ftms-control-point zwift-async zwift-sync-tx; do
         grep -q "start notify ${characteristic}" "${OUT_DIR}/trainer.log" \
             || { report_failure; die "Zwift did not subscribe to the trainer's ${characteristic}"; }
     done
