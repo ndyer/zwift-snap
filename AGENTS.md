@@ -342,3 +342,17 @@ Full detail is in `tests/pairing/README.md`; the essentials:
 - YAML files are linted with yamllint relaxed, line length 140.
 - Comments explain *why*; several constraints above are encoded as comments next to
   the code they protect — keep them in sync when you change behavior.
+
+## Release Procedures
+
+- Tags in the main repository `/project` follow semantic versioning: `v0.10`, `v0.11`, `v0.12`
+- Wine source tags in `/project/wine-src` use the pattern: `zwift-snap-v0.12`
+- When releasing a new version:
+  1. Ensure both repositories are clean, don't proceed otherwise.
+  2. Figure out the next version in sequence.
+  3. Tag wine-src.
+  4. Tag main repository
+  5. Rebuild snap with `sudo snapcraft pack --destructive-mode`
+  6. Move/re-tag main repository's v0.12 to point to the final commit
+  7. Run all validation and tests
+  8. Upload with snapcraft upload (will need credentials so this may be done by user)
