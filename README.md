@@ -28,6 +28,10 @@ zwift                             # installs or updates Zwift when needed, then 
 
 `bluez` is not connected automatically. Other apps: `zwift.wine` and `zwift.winecfg`.
 
+The progress dialog stays open until Zwift shows its first window (including splash
+screens), rather than closing as soon as the process starts. If no window appears
+within two minutes, the launcher logs a warning and leaves Zwift running.
+
 To debug confinement problems, install the local snap with `--devmode` and watch the
 logged violations with `snappy-debug`.
 

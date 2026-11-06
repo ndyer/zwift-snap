@@ -149,7 +149,14 @@ kill_wine_tasks ZwiftLauncher.exe ZwiftWindowsCrashHandler.exe
 
 msgbox ok "Zwift started using wine"
 
-# the Zwift window is up, the progress dialog is not needed any more
+if [[ -n ${GUI_PROGRESS_PID} ]]; then
+    gui_progress 99 "Waiting for the Zwift window"
+    if ! wait_until_zwift_window; then
+        gui_failure "Zwift failed to start" "Unable to show the Zwift window. Check the log for details." "" 1
+        fail "Failed to show the Zwift window"
+    fi
+fi
+
 gui_progress_stop
 
 ##################################

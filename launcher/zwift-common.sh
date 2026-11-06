@@ -162,6 +162,24 @@ wait_until_wine_task_started() {
     wait_until "is_wine_task_running ${task_name}"
 }
 
+wait_until_zwift_window() {
+    local pid rc
+    pid="$(wine_task_pid ZwiftApp.exe)" || {
+        msgbox error "Zwift exited before its window appeared"
+        return 1
+    }
+    wine "${SNAP}/bin/wait-for-window.exe" "${pid}" >> "${ZWIFT_LOG}" 2>&1
+    rc=$?
+    case ${rc} in
+        0) msgbox ok "Zwift window is visible" ;;
+        2) msgbox warning "Timed out waiting for the Zwift window; leaving Zwift running" ;;
+        *)
+            msgbox error "Unable to wait for the Zwift window (exit ${rc})"
+            return 1
+            ;;
+    esac
+}
+
 #####################################
 ##### Display and graphics setup #####
 

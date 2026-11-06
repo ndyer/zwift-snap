@@ -379,6 +379,14 @@ parts:
   launcher:
     plugin: dump
     source: launcher
+    build-packages:
+      - gcc-mingw-w64-x86-64
+    override-build: |
+      craftctl default
+      mkdir -p "${CRAFT_PART_INSTALL}/bin"
+      x86_64-w64-mingw32-gcc -Wall -Wextra -Werror -O2 \
+        "${CRAFT_PART_SRC}/wait-for-window.c" -o "${CRAFT_PART_INSTALL}/bin/wait-for-window.exe" -luser32
+      rm "${CRAFT_PART_INSTALL}/wait-for-window.c"
     organize:
       "*.sh": bin/
       pulse-client.conf: etc/zwift/pulse-client.conf

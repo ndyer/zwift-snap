@@ -7,7 +7,7 @@ load test_helper
 
 @test "fresh install: install, the launcher downloads Zwift, then launch" {
     new_env
-    run_zwift FAKE_GAME_POLLS=2 FAKE_LATEST=1.124.0 FAKE_UPDATE_RESULT=1.124.0
+    run_zwift FAKE_GAME_POLLS=3 FAKE_LATEST=1.124.0 FAKE_UPDATE_RESULT=1.124.0
     assert_equal "${RC}" 0
     assert_file_contains "${T}/calls.log" "wineboot -u"
     assert_file_contains "${T}/calls.log" "winetricks -q dotnet48"

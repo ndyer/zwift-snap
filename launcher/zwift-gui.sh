@@ -2,7 +2,7 @@
 # yad dialogs for the Zwift snap launcher. This file is meant to be sourced, not executed.
 #
 # One progress dialog stays open while Zwift is installed or updated and is closed when
-# Zwift starts. Problems are reported with an error dialog. Without yad or a display all
+# Zwift's first window appears. Problems are reported with an error dialog. Without yad or a display all
 # functions do nothing except print messages, so zwift still works from a terminal.
 
 readonly YAD="${YAD:-yad}"
