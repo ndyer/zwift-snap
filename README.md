@@ -5,7 +5,7 @@ Unofficial snap packaging of [Zwift](https://zwift.com) for Linux.
 Zwift is proprietary and is **not** included in the snap. It is downloaded from Zwift's
 servers into a wine prefix under `$SNAP_USER_COMMON` the first time you run `zwift`.
 
-Every `zwift` run first makes sure Zwift is installed and up to date, with a yad progress window,
+Every `zwift` run first makes sure Zwift is installed and up to date, with a Rust/GTK4 progress window,
 and then starts it. The first run installs wine prerequisites and Zwift without any
 prompts, which takes several minutes. Later runs check for a newer Zwift version and update
 it when needed. If the check or update fails you can still launch the installed version.
@@ -47,13 +47,12 @@ debug audio run `WINEDEBUG=+pulse,+mmdevapi zwift`.
 
 ## Environment variables
 
-- `ZWIFT_DISPLAY_MODE` — display mode, either `fullscreen` (default) or a resolution like `1920x1080`. A custom resolution implies windowed mode (fullscreen disabled).
+- `ZWIFT_DISPLAY_MODE` — shared launcher/game display mode, either `fullscreen` (default) or a resolution like `1920x1080`. A custom resolution implies windowed mode (fullscreen disabled).
 - `ZWIFT_NO_GAMEMODE` (default `1`)
 - `WINE_DISABLE_EGL`
 - `ZWIFT_NO_GUI` (set to `1` for no dialogs, only terminal output)
 - `ZWIFT_BLUETOOTH_DEBUG` (set to `1` to enable Wine Bluetooth traces for hardware testing)
 - `VERBOSITY`
-- `DEBUG`
 
 Display preferences are added when missing, including on a fresh install. If an
 existing preferences file cannot be updated, the launcher reports an error instead
@@ -63,6 +62,12 @@ To test a real Bluetooth device, run `ZWIFT_BLUETOOTH_DEBUG=1 zwift`. This enabl
 `+bluetooth` and `+winebth` channels and writes the runtime trace to
 `~/snap/zwift/common/zwift.log` (as well as the terminal). Bluetooth diagnostics are off by
 default; the log is rotated to `zwift.log.1` at the start of the next run.
+
+Rust captures child-process output and sends it directly to the log file, terminal,
+and in-app log view; the GUI does not tail a file. Closing the launcher cancels its
+work and stops its Wine prefix. Without a display (or with `ZWIFT_NO_GUI=1`), it
+runs in terminal mode: installation errors quit and update errors permit launching
+an installed copy.
 
 ## Status and limitations
 

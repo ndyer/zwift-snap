@@ -22,7 +22,7 @@ snap install mesa-2604 yarf gnome-46-2404 mir-test-tools
 
 apt-get update && apt-get install -y shellcheck yamllint \
     bats bats-support bats-assert bats-file \
-    bluez python3-venv python3-yaml
+    bluez python3-venv python3-yaml libgtk-4-dev pkg-config
 
 # yarf needs process-control for its OCR; connect it if still disconnected.
 snap connections yarf 2>/dev/null \

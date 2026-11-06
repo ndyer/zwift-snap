@@ -5,7 +5,7 @@
 # It is a test aid, never shipped in the snap. tests/zwift-stub.py stands in for Zwift's login
 # (secure.zwift.com) and game (us-or-rly101.zwift.com) servers; the game is pointed at it with
 # https_proxy and trusts its throwaway CA (appended to the prefix's data/cacert.pem, restored
-# afterwards). The game is driven directly (the launcher dance of launcher/zwift-run.sh, with a
+# afterwards). The game is driven directly (the launcher's Wine parent-process sequence, with a
 # fake token), not through the real launcher, so the Zwift patcher never runs and cannot overwrite
 # the CA. The stub's pre-onboarded profile skips onboarding; yarf only drives device pairing.
 #
@@ -224,20 +224,34 @@ export https_proxy="${STUB_PROXY}" HTTPS_PROXY="${STUB_PROXY}"
 # watcher would scan from it; see tests/tools/bluetooth/bluezoo.sh
 export ROUVY_BT_ADAPTER=hci0
 ${WINEDEBUG:+export WINEDEBUG="${WINEDEBUG}"}
-# shellcheck source=/dev/null
-source "\${SNAP}/bin/zwift-common.sh"
-link_wayland_socket
+export WINEPREFIX="\${SNAP_USER_COMMON}/.wine"
+export ZWIFT_INSTALL_DIR="\${WINEPREFIX}/drive_c/Program Files (x86)/Zwift"
+if [[ -n \${WAYLAND_DISPLAY:-} && \${WAYLAND_DISPLAY} != /* && -n \${XDG_RUNTIME_DIR:-} \
+    && ! -e \${XDG_RUNTIME_DIR}/\${WAYLAND_DISPLAY} ]]; then
+    ln -sf "/run/user/\$(id -u)/\${WAYLAND_DISPLAY}" "\${XDG_RUNTIME_DIR}/\${WAYLAND_DISPLAY}" || exit 1
+fi
 unset DISPLAY
+wine_task_pid() {
+    wine tasklist /fo list /fi "IMAGENAME eq \$1" | grep -m1 -Po '^PID:[\\t ]*\\K[0-9]+'
+}
+wait_until_wine_task_started() {
+    for _ in {1..100}; do
+        wine_task_pid "\$1" > /dev/null && return 0
+        sleep 0.1
+    done
+    echo "Timed out waiting for \$1" >&2
+    return 1
+}
 zwift_wine_dir="\$(winepath -w "\${ZWIFT_INSTALL_DIR}")"
-wine start /d "\${zwift_wine_dir}" ZwiftLauncher.exe SilentLaunch
-wait_until_wine_task_started ZwiftLauncher.exe
-launcher_pid="\$(wine_task_pid ZwiftLauncher.exe)"
+wine start /d "\${zwift_wine_dir}" ZwiftLauncher.exe SilentLaunch || exit 1
+wait_until_wine_task_started ZwiftLauncher.exe || exit 1
+launcher_pid="\$(wine_task_pid ZwiftLauncher.exe)" || exit 1
 token="\$(cat "\$HOME/../common/pairing-token.json")" || exit 1
 wine start /d "\${zwift_wine_dir}" /unix "\${SNAP}/bin/runfromprocess-rs.exe" "\${launcher_pid}" ZwiftApp.exe "--token=\${token}"
-wait_until_wine_task_started ZwiftApp.exe
+wait_until_wine_task_started ZwiftApp.exe || exit 1
 wine taskkill /f /im ZwiftLauncher.exe > /dev/null 2>&1 || true
 for _ in \$(seq 1 ${run_seconds}); do
-    is_wine_task_running ZwiftApp.exe || break
+    wine_task_pid ZwiftApp.exe > /dev/null || break
     sleep 1
 done
 wineserver -k || true

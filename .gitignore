@@ -7,3 +7,4 @@ snap/.snapcraft/
 .workshop.lock
 wine-src/
 __pycache__/
+launcher-gui/target/

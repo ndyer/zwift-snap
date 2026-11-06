@@ -43,13 +43,13 @@ export PULSE_CLIENTCONFIG="${PULSE_CLIENTCONFIG:-${SNAP}/etc/zwift/pulse-client.
 
 mkdir -p "${SNAP_USER_COMMON}" || exit 1
 
-# GTK programs (yad) need the data of the staged packages: GSettings schemas, icon themes and
+# GTK needs the data of the staged packages: GSettings schemas, icon themes and
 # the glycin loader configuration. Snaps without the desktop helpers do not have $SNAP/usr/share
 # in XDG_DATA_DIRS.
 export GSETTINGS_SCHEMA_DIR="${SNAP}/usr/share/glib-2.0/schemas"
 export XDG_DATA_DIRS="${XDG_DATA_DIRS:+${XDG_DATA_DIRS}:}${SNAP}/usr/share"
 
-# gdk-pixbuf loaders (yad), same fix as ubuntu/snapcraft-desktop-helpers common/desktop-exports.
+# gdk-pixbuf loaders, same fix as ubuntu/snapcraft-desktop-helpers common/desktop-exports.
 # The loaders.cache that Debian creates in a postinst script is not part of the staged
 # packages, and it holds absolute paths, so it is generated here. It is regenerated when it is
 # missing or points to another snap revision.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Closure-based pruning for the zwift snap.
 #
-# Called from the wine part's override-prime with the prime directory as the
+# Called from runtime-prune's override-prime with the prime directory as the
 # only argument. It walks the DT_NEEDED closure of every ELF file that can be
 # reached at runtime (wine itself, the launcher helpers and the trees that are
 # dlopened by name) and deletes every library in the prime pool that nothing
@@ -30,7 +30,7 @@ gst_deny_re='lib(flite|onnxruntime|tensorflow-lite|freeaptx|zvbi|ltc|sndfile)\.s
 
 # Binaries of packages that nothing in the snap runs at runtime. The launcher
 # only needs wine, wineboot, winepath, wineserver, winetricks, cabextract,
-# unzip, wget, yad, ntlm_auth and the xdg tools. samba ships a full tool
+# unzip, wget, ntlm_auth and the xdg tools. samba ships a full tool
 # chest of which ntlm_auth is the only needed program, and gnupg/debconf/ucf/
 # perl/fontconfig-utils/gtk-update-icon-cache are build or packaging helpers.
 removed_binaries=(
@@ -180,8 +180,9 @@ while IFS= read -r -d '' f; do
 done < <(find "${prime}/opt/wine-devel" -type f -print0 2>/dev/null)
 
 # helper binaries the launcher and wine call through PATH
-for bin in yad ntlm_auth cabextract unzip wget bwrap update-mime-database \
-    glycin-thumbnailer yad-icon-browser; do
+add_root "${prime}/bin/zwift-gui"
+for bin in ntlm_auth cabextract unzip wget bwrap update-mime-database \
+    glycin-thumbnailer; do
     add_root "${prime}/usr/bin/${bin}"
 done
 

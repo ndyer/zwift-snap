@@ -40,7 +40,7 @@ plugs:
     default-provider: mesa-2604
 
 layout:
-  # gdk-pixbuf (yad) loads images through glycin, which starts its loader programs by the
+  # GTK image loading uses glycin, which starts its loader programs by the
   # absolute paths in its configuration files. The base has neither directory, so they can
   # be bind mounts.
   /usr/libexec/glycin-loaders:
@@ -56,7 +56,7 @@ environment:
 
 apps:
   zwift:
-    command: bin/zwift-run.sh
+    command: bin/zwift-gui
     command-chain: &chain
       - bin/gpu-2604-wrapper
       - bin/wine-env.sh
@@ -80,6 +80,19 @@ apps:
     plugs: *plugs
 
 parts:
+  zwift-gui:
+    plugin: rust
+    source: launcher-gui
+    rust-channel: stable
+    rust-features: [gtk-ui]
+    build-packages:
+      - libgtk-4-dev
+    stage-packages:
+      - libgtk-4-1
+    prime:
+      - bin/zwift-gui
+      - usr/
+
   wine:
     # Built from ndyer/wine, a fork of the official wine-mirror/wine GitHub
     # mirror of gitlab.winehq.org/wine/wine.
@@ -215,8 +228,6 @@ parts:
       - libdecor-0-0
       - libdecor-0-plugin-1-gtk
       - xdg-utils
-      # progress and error dialogs of the launcher
-      - yad
       # keyboard layouts, without them wine's wayland driver gets no keyboard input
       - xkb-data
     # Prune files that are not needed at runtime. Do not prune usr/lib/*/samba, it
@@ -253,15 +264,21 @@ parts:
       - -opt/wine-devel/bin/function_grep.pl
       # games, not needed by the launcher or winetricks
       - -opt/wine-devel/bin/winemine
+
+  runtime-prune:
+    # Pruning needs every runtime part primed, not rebuilt. Keep this dependency
+    # downstream of Wine so launcher changes never invalidate Wine's build.
+    plugin: nil
+    after: [wine, zwift-gui, launcher-runtime, winetricks, runfromprocess]
     override-prime: |
       craftctl default
       # Deletes tools, import libraries and unreachable libraries; see
       # snap/prune-closure.sh for the closure walk. Bump this comment after
-      # editing that script or the prime filters above, craft-parts only
+      # editing that script or Wine's prime filters, craft-parts only
       # re-runs the prime step when the script text tracked in the part state
-      # changes: v4
+      # changes: v7
       # The gschemas.compiled that Debian creates in a trigger is not part of the staged
-      # packages. Without it GTK programs (yad) abort with "No GSettings schemas are installed".
+      # packages. Without it GTK programs abort with "No GSettings schemas are installed".
       glib-compile-schemas "${CRAFT_PRIME}/usr/share/glib-2.0/schemas"
       # keep the copyright files for license compliance, drop the rest of the package docs
       find "${CRAFT_PRIME}/usr/share/doc" -mindepth 2 ! -name copyright \( -type f -o -type l \) -delete
@@ -294,6 +311,7 @@ parts:
       # or wine itself needs at runtime went missing, for example after a change to the
       # stage-packages list or the prime filter above.
       for f in \
+          bin/zwift-gui \
           opt/wine-devel/bin/wine \
           opt/wine-devel/bin/wineserver \
           opt/wine-devel/bin/wineboot \
@@ -309,7 +327,6 @@ parts:
           usr/bin/cabextract \
           usr/bin/unzip \
           usr/bin/wget \
-          usr/bin/yad \
           usr/share/X11/xkb \
           usr/lib/x86_64-linux-gnu/gstreamer-1.0 \
           ; do
@@ -330,6 +347,11 @@ parts:
       # still present the prime directory was not regenerated and the snap would keep
       # shipping them. Run "snapcraft clean" and rebuild in that case.
       for f in \
+          bin/zwift-common.sh \
+          bin/zwift-gui.sh \
+          bin/zwift-run.sh \
+          bin/zwift-setup.sh \
+          usr/bin/yad \
           opt/wine-devel/bin/widl \
           opt/wine-devel/bin/winebuild \
           opt/wine-devel/bin/winegcc \
@@ -375,7 +397,7 @@ parts:
       install -Dm755 target/x86_64-pc-windows-gnu/release/runfromprocess-rs.exe \
         "${CRAFT_PART_INSTALL}/bin/runfromprocess-rs.exe"
 
-  launcher:
+  launcher-runtime:
     plugin: dump
     source: launcher
     build-packages:
@@ -407,7 +429,7 @@ parts:
   gpu-2604:
     # Helpers for the gpu-2604 content interface. Pruning is done after all
     # other parts staged their libraries so nothing shadows the mesa provider.
-    after: [wine, launcher]
+    after: [runtime-prune]
     plugin: dump
     source: https://github.com/canonical/gpu-snap.git
     source-type: git

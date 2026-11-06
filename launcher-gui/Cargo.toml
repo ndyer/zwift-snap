@@ -1,0 +1,24 @@
+[package]
+name = "zwift-gui"
+version = "0.1.0"
+edition = "2021"
+description = "Rust replacement for the Zwift snap launcher scripts and yad dialogs"
+license = "Unlicense"
+
+[lib]
+name = "zwift_gui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zwift-gui"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+signal-hook = "0.3"
+gtk = { package = "gtk4", version = "0.9", optional = true }
+
+[features]
+gtk-ui = ["dep:gtk"]
+
+[workspace]

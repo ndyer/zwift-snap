@@ -1,15 +1,19 @@
 # Yarf smoke test
 
-`tests/smoke.sh` runs the visual smoke test in the workshop: it starts a Mir
-compositor, runs the zwift launcher against it and drives the `yarf` suite in this
-directory (`smoke.robot`). The suite checks on screen that the launcher progress
-dialog appears and that Zwift gets installed and started by requiring the `SIGN UP`
-text on screen. A returning profile that opens on `LOG IN` will not pass this check.
+`workshop run smoke` starts a Mir compositor, runs the confined `zwift` Rust
+launcher and drives this suite with yarf. It checks the GTK log button while
+installation is in progress and requires `SIGN UP` in the game. A returning
+profile opening on `LOG IN` does not pass this check. No login is performed.
 
-The first run installs the wine prerequisites and downloads Zwift into the wine
-prefix, which takes tens of minutes. Later runs reuse the prefix and are quick.
+The first run installs Wine prerequisites and downloads Zwift, taking tens of
+minutes. Later runs reuse the prefix. After a rebuild, purge and reinstall when
+testing a fresh prefix; the harness never installs or removes the snap itself.
 
-## Templates
+Diagnostics are under `~/zwift-smoke-out/`; the launcher writes
+`~/snap/zwift/common/zwift.log`. Output goes through `tee` because snap commands
+cannot reliably start with stdout redirected to regular files in this environment.
 
-`zwift-dialog-title.png` matches the progress dialog's static title bar. The game
-screen is checked with OCR (`Match Text`), not an image template.
+OCR runs sequentially and does not queue frames. If the test keeps waiting while
+the expected screen is visible, compare a fresh `workshop run yarf screenshot`
+capture with yarf's diagnostics; a separate capture succeeding does not establish
+that the running yarf client's Wayland connection is healthy.

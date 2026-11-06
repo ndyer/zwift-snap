@@ -37,20 +37,24 @@ die() {
 }
 
 cleanup() {
-    # TERM makes zwift-run.sh run its own cleanup trap, which stops wine cleanly.
-    [[ -z ${zwift_pid} ]] || kill -TERM "${zwift_pid}" 2> /dev/null
-    pkill -TERM -f "zwift-run.sh" > /dev/null 2>&1
-    # wine may keep running when the launcher died before its cleanup trap; the
-    # dialog may be up too. Kill what is left, then stop the compositor.
-    sleep 2
-    pkill -TERM -f "ZwiftApp.exe|ZwiftLauncher.exe|wineserver" > /dev/null 2>&1
-    pkill -TERM -x yad > /dev/null 2>&1
-    sleep 1
-    pkill -KILL -f "ZwiftApp.exe|ZwiftLauncher.exe|wineserver" > /dev/null 2>&1
-    [[ -z ${mir_pid} ]] || kill "${mir_pid}" 2> /dev/null
-    sleep 1
-    if pgrep -f "ZwiftApp.exe|ZwiftLauncher.exe|wineserver" > /dev/null 2>&1; then
-        echo "smoke: warning: wine processes survived the cleanup" >&2
+    if [[ -n ${zwift_pid} ]]; then
+        kill -TERM "${zwift_pid}" 2> /dev/null || true
+        for ((i = 0; i < 150; i++)); do
+            kill -0 "${zwift_pid}" 2> /dev/null || break
+            sleep 0.2
+        done
+        if kill -0 "${zwift_pid}" 2> /dev/null; then
+            echo "smoke: launcher did not stop after TERM; stopping its Wine prefix" >&2
+            # shellcheck disable=SC2016
+            timeout 15 snap run --shell zwift.wine -c \
+                'WINEPREFIX="$SNAP_USER_COMMON/.wine" wineserver -k' 2>&1 | tee -a "${YARF_OUT_DIR}/cleanup.log"
+            kill -KILL "${zwift_pid}" 2> /dev/null || true
+        fi
+        wait "${zwift_pid}" 2> /dev/null || true
+    fi
+    if [[ -n ${mir_pid} ]]; then
+        kill "${mir_pid}" 2> /dev/null || true
+        wait "${mir_pid}" 2> /dev/null || true
     fi
 }
 trap cleanup EXIT
@@ -171,7 +175,7 @@ main() {
 
     # the launcher links the compositor socket into the runtime dir of the snap and
     # runs everything (dialogs and wine) on native wayland
-    snap run zwift > "${YARF_OUT_DIR}/zwift.out" 2>&1 &
+    snap run zwift > >(tee "${YARF_OUT_DIR}/zwift.out") 2>&1 &
     zwift_pid=$!
 
     # yarf exits 120 with no output when its stdout is a plain file (snap stdio

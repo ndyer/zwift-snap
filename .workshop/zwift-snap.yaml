@@ -33,9 +33,26 @@ actions:
     cd /project
     # pass --devmode to install the strict snap without confinement, for debugging
     sudo snap install --dangerous "$@" ./zwift_*_amd64.snap
+  lint: |
+    cd /project
+    shellcheck -x launcher/*.sh snap/prune-closure.sh tests/smoke.sh tests/gtk-preview.sh \
+      tests/bluetooth.sh tests/pairing.sh tests/tools/yarf/yarf.sh tests/tools/bluetooth/*.sh \
+      tests/unit/*.bats tests/unit/test_helper.bash \
+      .workshop/zwift-snap-sdk/hooks/*
+    python3 -m py_compile tests/zwift-stub.py tests/tools/yarf/*.py tests/tools/bluetooth/*.py \
+      .workshop/zwift-snap-sdk/workshop
+    yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' \
+      snap/snapcraft.yaml .workshop/zwift-snap.yaml .workshop/zwift-snap-sdk/sdk.yaml
+    cargo fmt --manifest-path launcher-gui/Cargo.toml --check
+    cargo clippy --manifest-path launcher-gui/Cargo.toml --features gtk-ui --all-targets -- -D warnings
   test: |
     cd /project
     bats tests/unit
+    cargo test --manifest-path launcher-gui/Cargo.toml --features gtk-ui
+  gtk-preview: |
+    cd /project
+    # Visual tests of the GTK launcher and stub-Wine lifecycle; no real Zwift.
+    bash tests/gtk-preview.sh
   smoke: |
     cd /project
     # Visual smoke test with yarf: starts a Mir compositor, runs the zwift launcher
@@ -70,13 +87,3 @@ actions:
     du -sh prime/opt/wine-devel/* 2>/dev/null | sort -rh
     du -sh prime/usr/lib/x86_64-linux-gnu/* 2>/dev/null | sort -rh | head -20
     ls -l --block-size=M ./zwift_*_amd64.snap
-  lint: |
-    cd /project
-    shellcheck -x launcher/*.sh snap/prune-closure.sh tests/smoke.sh \
-      tests/bluetooth.sh tests/pairing.sh tests/tools/yarf/yarf.sh tests/tools/bluetooth/*.sh \
-      tests/unit/*.bats tests/unit/test_helper.bash \
-      tests/unit/stubs/* .workshop/zwift-snap-sdk/hooks/*
-    python3 -m py_compile tests/zwift-stub.py tests/tools/yarf/*.py tests/tools/bluetooth/*.py \
-      .workshop/zwift-snap-sdk/workshop
-    yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' \
-      snap/snapcraft.yaml .workshop/zwift-snap.yaml .workshop/zwift-snap-sdk/sdk.yaml
