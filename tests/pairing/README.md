@@ -47,6 +47,9 @@ captured from the fake profile updates made by the client when completing onboar
 They belong to `PlayerProfile`, not `LoginResponse`; the attribute IDs and protobuf
 fields are documented in zwift-offline's `protobuf/profile.proto`.
 
+Clicks pause briefly after moving the pointer and hold the button for 100 ms so
+Zwift can observe the press across game frames instead of missing an immediate press/release.
+
 ## Bluetooth
 
 bluezoo (the same BlueZ D-Bus mock as `tests/bluetooth.sh`, via

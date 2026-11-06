@@ -26,6 +26,18 @@ Reach The Pairing Screen
     Pair The Trainer
 
 *** Keywords ***
+Click Zwift Target
+    [Arguments]    ${target}
+    Move Pointer To ${target}
+    Sleep    100ms
+    Press LEFT Button
+    TRY
+        # Zwift can miss a press and release delivered between two game frames.
+        Sleep    100ms
+    FINALLY
+        Release LEFT Button
+    END
+
 Wait For The Pairing Screen
     [Documentation]    The pairing screen is titled PAIRED DEVICES, but Zwift can open a "No ANT+
     ...    dongle connected?" tip over the title. Wait for the POWER SOURCE tile instead: it is never
@@ -39,11 +51,11 @@ Pair The Trainer
     ...    the reconnect a chance. Clicking the trainer in the dialog toggles it: click it once.
     ${reconnected}=    Run Keyword And Return Status    Match Text    ${TRAINER}    ${RECONNECT_TIMEOUT}
     IF    not ${reconnected}
-        Click LEFT Button On POWER SOURCE
+        Click Zwift Target    POWER SOURCE
         Match Text    PAIR DEVICE    ${SCREEN_TIMEOUT}
         Match Text    ${TRAINER}    ${DEVICE_TIMEOUT}
-        Click LEFT Button On ${TRAINER}
+        Click Zwift Target    ${TRAINER}
         Sleep    3s
-        Click LEFT Button On CLOSE
+        Click Zwift Target    CLOSE
     END
     Match Text    CONNECTED    ${SCREEN_TIMEOUT}
