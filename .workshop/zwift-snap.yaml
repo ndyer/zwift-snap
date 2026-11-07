@@ -31,8 +31,21 @@ actions:
     sudo snapcraft clean --destructive-mode
   install: |
     cd /project
+    # Build timestamps, not version strings, identify the latest local artifact.
+    newest=""
+    for candidate in ./zwift_*_amd64.snap; do
+      [[ -f ${candidate} ]] || continue
+      if [[ -z ${newest} || ${candidate} -nt ${newest} ]]; then
+        newest="${candidate}"
+      fi
+    done
+    if [[ -z ${newest} ]]; then
+      echo "No Zwift snap found in /project; run workshop run build first." >&2
+      exit 1
+    fi
+    echo "Installing ${newest}"
     # pass --devmode to install the strict snap without confinement, for debugging
-    sudo snap install --dangerous "$@" ./zwift_*_amd64.snap
+    sudo snap install --dangerous "$@" "${newest}"
   lint: |
     cd /project
     shellcheck -x launcher/*.sh snap/prune-closure.sh tests/smoke.sh tests/gtk-preview.sh \
@@ -56,8 +69,8 @@ actions:
   smoke: |
     cd /project
     # Visual smoke test with yarf: starts a Mir compositor, runs the zwift launcher
-    # against it and checks on screen that Zwift gets installed and starts. The first
-    # run downloads Zwift and can take half an hour, later runs are quick.
+    # against it and checks installation reaches the mandatory login gate, without
+    # credentials. The first run downloads Zwift and can take half an hour.
     tests/smoke.sh "$@"
   bluetooth: |
     cd /project

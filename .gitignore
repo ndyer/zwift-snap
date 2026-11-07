@@ -8,3 +8,4 @@ snap/.snapcraft/
 wine-src/
 __pycache__/
 launcher-gui/target/
+/build.log
