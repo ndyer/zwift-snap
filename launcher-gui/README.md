@@ -8,7 +8,14 @@ The GTK window and game share `ZWIFT_DISPLAY_MODE`: fullscreen by default, or
 `WIDTHxHEIGHT` windowed. The window hides after the first game window appears;
 the launcher stays alive until the game exits. Errors retain the in-app log view.
 Installation failures offer Retry; update failures offer Launch anyway.
-`ZWIFT_NO_GUI=1`, no display, or failed GTK initialization selects terminal mode.
+After installation/update, the GUI requires clicking **Login to Zwift** and completing
+OAuth sign-in in an embedded WebKitGTK 6.0 browser before starting the game. PKCE and
+state validation protect the exchange. Closing the browser or an unsuccessful exchange
+leaves the game stopped and allows retrying; closing the launcher cancels the wait.
+The token file in `$SNAP_USER_COMMON/pairing-token.json` has owner-only permissions,
+and its compact JSON is read at launch time and forwarded as `--token=<json>`.
+`ZWIFT_NO_GUI=1`, no display, or failed GTK initialization selects terminal mode,
+which retains the game's own login flow rather than requiring browser authentication.
 
 Rust drains stdout/stderr, writes `$SNAP_USER_COMMON/zwift.log` (rotating `.1`)
 and forwards output directly to the GUI. SIGINT, SIGTERM, SIGHUP and closing the
@@ -44,14 +51,15 @@ workshop run build
 
 `gtk-preview` tests simulated install failure/retry, cancellation and both display
 modes, plus the real lifecycle with stub Wine for update failure, live logs,
-Launch anyway, window handoff and cleanup. Rust integration tests execute the
-binary in terminal mode, including failures and SIGTERM.
+Launch anyway, the mandatory login gate and cancellation cleanup. Rust unit tests
+verify that the worker cannot start the game before login confirmation and reads
+fresh token JSON only at launch. Integration tests execute the binary in terminal
+mode, including failures and SIGTERM.
 
-After installing a build, `workshop run smoke` tests the real confined launcher.
-A fresh-prefix run has reached the Zwift sign-up screen with the Rust launcher;
-the observed yarf Wayland/OCR wait prevented an automated smoke verdict on that
-run. Do not equate that observation with a passing full smoke suite.
-Bluetooth and pairing tests exercise the packaged Wine and shared environment.
+After installing a build, `workshop run smoke` tests the real confined launcher up
+to the mandatory login gate without using an account. Authenticated game startup
+requires a manual login test. Bluetooth and pairing tests exercise the packaged
+Wine and shared environment, with fake login servers used by the pairing test.
 
 Run the binary without arguments to launch, `-- GAME_ARGUMENTS...` to forward
 game arguments, `--preview` for the simulated UI, or `set-display-mode PREFS_FILE`

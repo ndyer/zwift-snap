@@ -5,8 +5,8 @@ description: |
   Unofficial snap launcher for Zwift
 
   Zwift itself is proprietary and is NOT part of this snap. Every start checks
-  for a Zwift installation and updates it and its pre-requisites
-  before Zwift starts. Log in through the Zwift window.
+  for a Zwift installation and updates it and its pre-requisites. The graphical
+  launcher then requires login through an embedded browser before starting Zwift.
 # The version comes from the git tags, see the version-generator part
 adopt-info: version-generator
 license: Unlicense
@@ -46,6 +46,10 @@ layout:
     bind: $SNAP/usr/libexec/glycin-loaders
   /usr/share/glycin-loaders:
     bind: $SNAP/usr/share/glycin-loaders
+  # WebKit spawns its network/web/GPU processes and loads its injected bundle
+  # using compiled-in absolute paths, not PATH or LD_LIBRARY_PATH.
+  /usr/lib/x86_64-linux-gnu/webkitgtk-6.0:
+    bind: $SNAP/usr/lib/x86_64-linux-gnu/webkitgtk-6.0
 
 environment:
   # winetricks and wine look for helper programs (cabextract, ntlm_auth) in PATH
@@ -86,8 +90,16 @@ parts:
     rust-features: [gtk-ui]
     build-packages:
       - libgtk-4-dev
+      - libwebkitgtk-6.0-dev
+      - libjavascriptcoregtk-6.0-dev
+      - libsoup-3.0-dev
     stage-packages:
       - libgtk-4-1
+      - libwebkitgtk-6.0-4
+      - libjavascriptcoregtk-6.0-1
+      - libsoup-3.0-0
+      # TLS is a GIO plugin, not a linked dependency of WebKit/libsoup.
+      - glib-networking
     prime:
       - bin/zwift-gui
       - usr/
@@ -111,7 +123,10 @@ parts:
       - --prefix=/opt/wine-devel
       - --enable-archs=i386,x86_64
       # nothing in the snap runs wine's test suite
+      - --disable-maintainer-mode
+      - --disable-debug
       - --disable-tests
+      - --disable-build-id
     build-packages:
       # flex, bison, gettext, pkg-config: build requirements of wine itself
       - flex
@@ -275,7 +290,7 @@ parts:
       # snap/prune-closure.sh for the closure walk. Bump this comment after
       # editing that script or Wine's prime filters, craft-parts only
       # re-runs the prime step when the script text tracked in the part state
-      # changes: v7
+      # changes: v8
       # The gschemas.compiled that Debian creates in a trigger is not part of the staged
       # packages. Without it GTK programs abort with "No GSettings schemas are installed".
       glib-compile-schemas "${CRAFT_PRIME}/usr/share/glib-2.0/schemas"
@@ -328,6 +343,11 @@ parts:
           usr/bin/wget \
           usr/share/X11/xkb \
           usr/lib/x86_64-linux-gnu/gstreamer-1.0 \
+          usr/lib/x86_64-linux-gnu/gio/modules/libgiognutls.so \
+          usr/lib/x86_64-linux-gnu/webkitgtk-6.0/WebKitNetworkProcess \
+          usr/lib/x86_64-linux-gnu/webkitgtk-6.0/WebKitWebProcess \
+          usr/lib/x86_64-linux-gnu/webkitgtk-6.0/WebKitGPUProcess \
+          usr/lib/x86_64-linux-gnu/webkitgtk-6.0/injected-bundle/libwebkitgtkinjectedbundle.so \
           ; do
           if [[ ! -e "${CRAFT_PRIME}/${f}" ]]; then
               echo "prune guard: ${f} is missing from the prime directory" >&2

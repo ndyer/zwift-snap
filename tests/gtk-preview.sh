@@ -135,24 +135,27 @@ PATH="${fixture}/bin:${PATH}" SNAP="${fixture}" SNAP_USER_COMMON="${fixture}/com
 gui_pid=$!
 yarf --platform Mir "${stage}/runtime-suite" --outdir "${stage}/out/runtime" \
     2>&1 | tee "${stage}/yarf-runtime.log"
-for ((i = 0; i < 100; i++)); do
-    [[ -f ${fixture}/window-ready ]] && break
-    kill -0 "${gui_pid}" 2>/dev/null || { echo "Real GTK worker exited before window handoff" >&2; exit 1; }
-    sleep 0.1
-done
-[[ -f ${fixture}/window-ready ]] || { echo "Real GTK worker did not wait for the game window" >&2; exit 1; }
-touch "${fixture}/release"
+[[ ! -f ${fixture}/window-ready && ! -f ${fixture}/game-running ]] \
+    || { echo "Real GTK worker launched the game before login" >&2; exit 1; }
+kill -0 "${gui_pid}" 2>/dev/null || { echo "Real GTK worker exited while waiting for login" >&2; exit 1; }
+# Closing the launcher at the login gate must cancel the worker and clean up Wine.
+# shellcheck disable=SC2016
+snap run --shell yarf -c \
+    'python3 "$1/input.py" "$2" key Alt_L F4' _ "${stage}" "${socket}" 2>&1 | cat
 for ((i = 0; i < 100; i++)); do
     kill -0 "${gui_pid}" 2>/dev/null || break
     sleep 0.1
 done
 if kill -0 "${gui_pid}" 2>/dev/null; then
-    echo "Real GTK worker did not exit after the game closed" >&2
+    echo "Real GTK worker did not exit after cancelling login" >&2
     exit 1
 fi
-wait "${gui_pid}"
+if wait "${gui_pid}"; then
+    echo "Cancelled real GTK worker unexpectedly returned success" >&2
+    exit 1
+fi
 gui_pid=""
-grep -q 'Zwift closed, exiting' "${fixture}/common/zwift.log"
+grep -q 'Launcher cancelled' "${fixture}/common/zwift.log"
 grep -q '<USER_RESOLUTION_PREF>800x600</USER_RESOLUTION_PREF>' "${data}/prefs.xml"
 [[ $(cat "${fixture}/cleanup") == $'-k\n-w' ]] \
     || { echo "Real GTK worker did not clean up Wine" >&2; exit 1; }

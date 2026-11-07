@@ -323,6 +323,7 @@ mod tests {
             tools: &tools,
             gamemoderun: None,
             game_args: &[],
+            token_file: None,
             startup_attempts: 1,
             startup_interval: Duration::ZERO,
             game_poll_interval: Duration::ZERO,
@@ -364,6 +365,9 @@ mod tests {
                     {
                         eprintln!("Unexpected runtime failure in test: {detail}");
                         decision.send(false).unwrap();
+                    }
+                    if let crate::gui::Event::LoginRequired { ref decision } = event {
+                        decision.send(true).unwrap();
                     }
                     let finished = matches!(event, crate::gui::Event::Finished(_));
                     received.push(event);

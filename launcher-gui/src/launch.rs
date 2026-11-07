@@ -16,6 +16,9 @@ pub struct LaunchConfig<'a> {
     /// Path to gamemoderun when enabled and available.
     pub gamemoderun: Option<&'a Path>,
     pub game_args: &'a [String],
+    /// OAuth token file written by the GUI login; its JSON is passed to the
+    /// game at launch time, after login has completed.
+    pub token_file: Option<&'a Path>,
     pub startup_attempts: u32,
     pub startup_interval: Duration,
     pub game_poll_interval: Duration,
@@ -136,6 +139,36 @@ fn stop_background_tasks(config: &LaunchConfig<'_>, logger: &Logger) {
     }
 }
 
+/// Read the saved OAuth token and turn it into a `--token=<json>` argument.
+///
+/// The file is read at launch time (after login) rather than at startup so a
+/// fresh token from the login dialog reaches the game. When a file is required,
+/// a missing or invalid token must not silently launch an unauthenticated game.
+fn token_arguments(token_file: Option<&Path>) -> io::Result<Vec<String>> {
+    let Some(token_file) = token_file else {
+        return Ok(Vec::new());
+    };
+    let text = std::fs::read_to_string(token_file).map_err(|error| {
+        io::Error::other(format!(
+            "Unable to read Zwift login token {}: {error}",
+            token_file.display()
+        ))
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
+        io::Error::other(format!(
+            "Invalid Zwift login token in {}: {error}",
+            token_file.display()
+        ))
+    })?;
+    if value["access_token"].as_str().is_none_or(str::is_empty) {
+        return Err(io::Error::other("Zwift login token has no access token"));
+    }
+    // Zwift expects the token JSON itself, compact, not a file path.
+    let json = serde_json::to_string(&value)
+        .map_err(|error| io::Error::other(format!("Unable to serialize login token: {error}")))?;
+    Ok(vec![format!("--token={json}")])
+}
+
 /// Starts the game and optionally waits for its first window.
 ///
 /// The caller closes its progress UI after this returns, then calls
@@ -146,6 +179,7 @@ pub fn start(
     wait_for_window: bool,
     progress: &mut impl FnMut(u8, &str),
 ) -> io::Result<WindowOutcome> {
+    let token_args = token_arguments(config.token_file)?;
     let directory = wine_directory(config, logger)?;
     progress(95, "Starting Zwift");
     run_command(
@@ -180,7 +214,8 @@ pub fn start(
             .arg(config.runfromprocess)
             .arg(launcher_pid.to_string())
             .arg("ZwiftApp.exe")
-            .args(config.game_args);
+            .args(config.game_args)
+            .args(&token_args);
         run_command(&mut game, logger, "Zwift")?;
         wait_for_task(config, logger, "ZwiftApp.exe")?;
         Ok(())
@@ -310,6 +345,7 @@ esac
                 tools: &self.tools,
                 gamemoderun: None,
                 game_args: &[],
+                token_file: None,
                 startup_attempts: 1,
                 startup_interval: Duration::ZERO,
                 game_poll_interval: Duration::ZERO,
@@ -449,6 +485,46 @@ esac
         let call = fs::read_to_string(fixture.dir.join("wrapper-call")).unwrap();
         assert!(call.starts_with(&fixture.tools.wine.to_string_lossy().to_string()));
         assert!(call.contains("ZwiftApp.exe --test-argument"));
+    }
+
+    #[test]
+    fn token_is_read_at_launch_and_forwarded_as_compact_json() {
+        let fixture = Fixture::new("token");
+        let prefix = fixture.dir.join("prefix");
+        let runfromprocess = fixture.dir.join("runfromprocess.exe");
+        let token_file = fixture.dir.join("token.json");
+        let config = LaunchConfig {
+            wine_prefix: &prefix,
+            runfromprocess: &runfromprocess,
+            token_file: Some(&token_file),
+            ..fixture.config()
+        };
+        // Login writes the file after the launch configuration has been created.
+        fs::write(&token_file, "{\n  \"access_token\": \"test-only\"\n}").unwrap();
+        let logger = Logger::new(fixture.dir.join("log"), 0, false);
+        logger.init().unwrap();
+        start(&config, &logger, false, &mut |_, _| {}).unwrap();
+        let calls = fs::read_to_string(fixture.dir.join("calls")).unwrap();
+        assert!(calls.contains("ZwiftApp.exe --token={\"access_token\":\"test-only\"}"));
+        assert!(!calls.contains(&format!("--token={}", token_file.display())));
+    }
+
+    #[test]
+    fn required_token_errors_prevent_game_start() {
+        let fixture = Fixture::new("invalid-token");
+        let token_file = fixture.dir.join("token.json");
+        let config = LaunchConfig {
+            token_file: Some(&token_file),
+            ..fixture.config()
+        };
+        let logger = Logger::new(fixture.dir.join("log"), 0, false);
+        logger.init().unwrap();
+        assert!(start(&config, &logger, false, &mut |_, _| {}).is_err());
+        for contents in ["not JSON", "{}", "{\"access_token\":\"\"}"] {
+            fs::write(&token_file, contents).unwrap();
+            assert!(start(&config, &logger, false, &mut |_, _| {}).is_err());
+        }
+        assert!(!fixture.dir.join("calls").exists());
     }
 
     #[test]

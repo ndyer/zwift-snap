@@ -6,11 +6,17 @@ Zwift is proprietary and is **not** included in the snap. It is downloaded from 
 servers into a wine prefix under `$SNAP_USER_COMMON` the first time you run `zwift`.
 
 Every `zwift` run first makes sure Zwift is installed and up to date, with a Rust/GTK4 progress window,
-and then starts it. The first run installs wine prerequisites and Zwift without any
-prompts, which takes several minutes. Later runs check for a newer Zwift version and update
-it when needed. If the check or update fails you can still launch the installed version.
-The output of all steps is in `$SNAP_USER_COMMON/zwift.log`; the error dialogs have a
-`Show log` button.
+then waits for you to click **Login to Zwift** and complete sign-in in the embedded browser.
+The game starts only after login succeeds. The first run installs wine prerequisites and Zwift
+without installer prompts, which takes several minutes. Later runs check for a newer Zwift
+version and update it when needed. If the check or update fails you can still launch the
+installed version after logging in. The output of all steps is in `$SNAP_USER_COMMON/zwift.log`;
+the error dialogs have a `Show log` button.
+
+Login uses OAuth with PKCE and validates the returned state. The token is saved with owner-only
+permissions in `~/snap/zwift/common/pairing-token.json` and passed to the game at launch time.
+Treat this file as a credential; do not share it in logs or bug reports. Each graphical launch
+still requires clicking the login button; an existing token file does not bypass that gate.
 
 https://snapcraft.io/zwift
 
@@ -63,7 +69,8 @@ Rust captures child-process output and sends it directly to the log file, termin
 and in-app log view; the GUI does not tail a file. Closing the launcher cancels its
 work and stops its Wine prefix. Without a display (or with `ZWIFT_NO_GUI=1`), it
 runs in terminal mode: installation errors quit and update errors permit launching
-an installed copy.
+an installed copy. Terminal mode has no embedded-browser login gate and retains the game's
+own login flow (or accepts explicitly supplied game arguments).
 
 ## Status and limitations
 

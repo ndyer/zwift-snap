@@ -13,6 +13,11 @@ pub enum Failure {
 pub trait LauncherUi {
     fn failure(&mut self, failure: Failure, detail: &str) -> bool;
     fn game_ready(&mut self);
+    /// Called before the game is started. Return `false` to abort the launch.
+    /// The default permits launching without login (terminal and preview runs).
+    fn login_required(&mut self) -> bool {
+        true
+    }
 }
 
 /// Operations performed by the launcher in lifecycle order.
@@ -116,6 +121,13 @@ fn run_inner<B: LauncherBackend, U: LauncherUi>(
     backend.configure_display().map_err(|error| {
         LauncherError(format!("Failed to configure Zwift display mode: {error}"))
     })?;
+    check()?;
+    if !ui.login_required() {
+        check()?;
+        return Err(LauncherError(
+            "Zwift login is required before launching".into(),
+        ));
+    }
     check()?;
     backend
         .start()

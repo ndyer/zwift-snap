@@ -49,6 +49,11 @@ mkdir -p "${SNAP_USER_COMMON}" || exit 1
 export GSETTINGS_SCHEMA_DIR="${SNAP}/usr/share/glib-2.0/schemas"
 export XDG_DATA_DIRS="${XDG_DATA_DIRS:+${XDG_DATA_DIRS}:}${SNAP}/usr/share"
 
+# GLib's default module directory points outside the snap. WebKit/libsoup need
+# glib-networking's GnuTLS backend here, otherwise HTTPS reports no TLS support.
+# Export before starting GTK so WebKit's network process inherits the same path.
+export GIO_EXTRA_MODULES="${SNAP}/usr/lib/x86_64-linux-gnu/gio/modules${GIO_EXTRA_MODULES:+:${GIO_EXTRA_MODULES}}"
+
 # gdk-pixbuf loaders, same fix as ubuntu/snapcraft-desktop-helpers common/desktop-exports.
 # The loaders.cache that Debian creates in a postinst script is not part of the staged
 # packages, and it holds absolute paths, so it is generated here. It is regenerated when it is

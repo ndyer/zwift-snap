@@ -191,6 +191,12 @@ while IFS= read -r -d '' f; do
     add_root "${f}"
 done < <(find "${prime}/usr/libexec" -maxdepth 1 -type f -print0 2>/dev/null)
 
+# WebKit launches its private processes and loads the injected bundle by name;
+# the GUI's DT_NEEDED entries do not describe these extra dependency roots.
+while IFS= read -r -d '' f; do
+    add_root "${f}"
+done < <(find "${prime}/usr/lib/x86_64-linux-gnu/webkitgtk-6.0" -type f -print0 2>/dev/null)
+
 # gstreamer plugin scanner, run by winegstreamer to build its plugin registry
 add_root "${prime}/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner"
 

@@ -6,6 +6,7 @@ pub mod display;
 pub mod install;
 pub mod launch;
 pub mod logging;
+pub mod oauth;
 pub mod orchestration;
 pub mod process;
 pub mod runtime;

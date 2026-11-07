@@ -2,8 +2,10 @@
 
 `workshop run smoke` starts a Mir compositor, runs the confined `zwift` Rust
 launcher and drives this suite with yarf. It checks the GTK log button while
-installation is in progress and requires `SIGN UP` in the game. A returning
-profile opening on `LOG IN` does not pass this check. No login is performed.
+installation is in progress, then requires the launcher's `Login to Zwift`
+button and mandatory-login message. The game cannot start until OAuth login
+succeeds, so this credential-free suite stops at that gate. Authenticated game
+startup is tested manually; the pairing suite exercises the game with fake servers.
 
 The first run installs Wine prerequisites and downloads Zwift, taking tens of
 minutes. Later runs reuse the prefix. After a rebuild, purge and reinstall when
