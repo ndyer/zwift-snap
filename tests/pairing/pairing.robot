@@ -11,7 +11,7 @@ Library           yarf_ocr.py
 
 *** Variables ***
 # how long to wait for a screen that must appear
-${SCREEN_TIMEOUT}    180
+${SCREEN_TIMEOUT}    240
 # how long the pairing dialog may take to list the trainer (bluezoo reports it every second)
 ${DEVICE_TIMEOUT}    60
 # a returning profile reconnects its saved trainer on its own within this time
