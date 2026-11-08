@@ -25,10 +25,7 @@ def main() -> int:
             "only 'run' is supported here.\n"
             "Run actions with: workshop run <action> [arguments...]\n"
             "List actions with: workshop --help\n"
-            "Run shell commands directly in /project; do not use workshop exec or shell.\n"
-            "Lifecycle and management commands (such as refresh, info, changes, "
-            "or tasks) can only be run from the host by the user, "
-            "not from within the workshop."
+            "Other workshop commands can not be run from within the workshop."
         )
 
     project = Path(__file__).resolve().parents[2]

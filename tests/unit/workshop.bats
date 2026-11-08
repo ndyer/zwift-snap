@@ -127,9 +127,8 @@ SH
         assert_output --partial "already inside the zwift-snap workshop"
         assert_output --partial "workshop run <action>"
         assert_output --partial "workshop --help"
-        assert_output --partial "Run shell commands directly in /project"
-        assert_output --partial "can only be run from the host by the user"
-        assert_output --partial "not from within the workshop"
+        assert_output --partial "not the host Workshop CLI"
+        assert_output --partial "can not be run from within the workshop"
     done
 }
 
