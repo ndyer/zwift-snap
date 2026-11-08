@@ -8,10 +8,13 @@ The GTK window and game share `ZWIFT_DISPLAY_MODE`: fullscreen by default, or
 `WIDTHxHEIGHT` windowed. The window hides after the first game window appears;
 the launcher stays alive until the game exits. Errors retain the in-app log view.
 Installation failures offer Retry; update failures offer Launch anyway.
-After installation/update, the GUI requires clicking **Login to Zwift** and completing
-OAuth sign-in in an embedded WebKitGTK 6.0 browser before starting the game. PKCE and
-state validation protect the exchange. Closing the browser or an unsuccessful exchange
-leaves the game stopped and allows retrying; closing the launcher cancels the wait.
+A WebKitGTK 6.0 panel is always shown in the bottom section of the window: it starts
+on Zwift's launcher embed page and, once installation/update finishes and the login
+gate opens, navigates automatically to the OAuth sign-in page (PKCE and state
+validation protect the exchange). A successful login leaves the page as-is and lets
+the launch continue; an unsuccessful exchange reloads the login page so it can be
+retried, and closing the launcher cancels the wait. Remember-me cookies persist in
+`$SNAP_USER_COMMON/webkit`.
 The token file in `$SNAP_USER_COMMON/pairing-token.json` has owner-only permissions,
 and its compact JSON is read at launch time and forwarded as `--token=<json>`.
 `ZWIFT_NO_GUI=1`, no display, or failed GTK initialization selects terminal mode,

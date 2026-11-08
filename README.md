@@ -5,8 +5,9 @@ Unofficial snap packaging of [Zwift](https://zwift.com) for Linux.
 Zwift is proprietary and is **not** included in the snap. It is downloaded from Zwift's
 servers into a wine prefix under `$SNAP_USER_COMMON` the first time you run `zwift`.
 
-Every `zwift` run first makes sure Zwift is installed and up to date, with a Rust/GTK4 progress window,
-then waits for you to click **Login to Zwift** and complete sign-in in the embedded browser.
+Every `zwift` run first makes sure Zwift is installed and up to date, with a Rust/GTK4 progress window.
+The window always shows a web panel along its bottom, which starts on Zwift's launcher page and
+switches to the sign-in page once the launcher reaches its login gate.
 The game starts only after login succeeds. The first run installs wine prerequisites and Zwift
 without installer prompts, which takes several minutes. Later runs check for a newer Zwift
 version and update it when needed. If the check or update fails you can still launch the
@@ -16,7 +17,7 @@ the error dialogs have a `Show log` button.
 Login uses OAuth with PKCE and validates the returned state. The token is saved with owner-only
 permissions in `~/snap/zwift/common/pairing-token.json` and passed to the game at launch time.
 Treat this file as a credential; do not share it in logs or bug reports. Each graphical launch
-still requires clicking the login button; an existing token file does not bypass that gate.
+still requires signing in; an existing token file does not bypass that gate.
 
 https://snapcraft.io/zwift
 

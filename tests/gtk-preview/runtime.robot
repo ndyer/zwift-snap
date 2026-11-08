@@ -10,8 +10,8 @@ Real Lifecycle Shows Output And Accepts Launch Anyway
     Click Target    Show log
     Match Text    updater diagnostic    20
     Click Target    Launch anyway
-    Match Text    Login to Zwift    30
-    Match Text    Login is required    20
+    Match Text    Log in to Zwift    30
+    Match Text    Complete the login below    20
 
 *** Keywords ***
 Click Target

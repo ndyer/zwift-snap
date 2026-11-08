@@ -412,10 +412,12 @@ Full detail is in `tests/pairing/README.md`; the essentials:
 
 ## Login and "Remember me" detection
 
-The launcher logs in through an embedded WebKitGTK WebView in `show_login_dialog`
-(`launcher-gui/src/gui.rs`). It does OAuth PKCE against Keycloak (`launcher-gui/src/oauth.rs`),
-watches navigation for the `http://zwift/?code=...` redirect, checks `state`, exchanges the code and
-saves `pairing-token.json`, which `launch.rs` passes to the game as `--token`.
+The launcher logs in through a WebKitGTK WebView in the bottom panel
+(`launcher-gui/src/gui/login_panel.rs`, shown at all times; it loads Zwift's launcher
+embed page until the login gate opens). It does OAuth PKCE against Keycloak
+(`launcher-gui/src/oauth.rs`), watches navigation for the `http://zwift/?code=...`
+redirect, checks `state`, exchanges the code and saves `pairing-token.json`, which
+`launch.rs` passes to the game as `--token`.
 
 - The launcher cannot read the "Remember me" checkbox. The token has no remember-me claim: the
   refresh-token lifetime was 691200 s whether the box was ticked or not.
