@@ -1,6 +1,6 @@
 //! Fresh Wine prefix and Zwift installation.
 
-use crate::logging::Logger;
+use crate::logging::{Logger, OutputObserver};
 use crate::update::{update_using_launcher, UpdateBackend};
 use crate::wine_update::{Tools, WineUpdate};
 use std::collections::HashSet;
@@ -8,12 +8,49 @@ use std::fs;
 use std::io::{self, ErrorKind};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::process::Command;
-use std::sync::mpsc;
+use std::process::{Command, ExitStatus};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 const SETUP_URL: &str = "https://cdn.zwift.com/app/ZwiftSetup.exe";
 pub const EXPECTED_DRIVE_C_BYTES: u64 = 8_537_613_774;
+
+/// The Wine prerequisites, installed by a single winetricks invocation.
+///
+/// winetricks runs every command-line verb in one process, in order, and exits
+/// non-zero on the first failing verb. One call therefore installs all of them and
+/// still stops the install before Zwift is downloaded, while separate calls would
+/// start the script, probe Wine and initialise the prefix once per verb. The order
+/// matters: `dotnet48` selects the Windows version the later verbs expect.
+///
+/// The percentage is the terminal-mode progress of each verb; the GUI replaces it
+/// with the percentage of the sampled prefix size.
+const WINETRICKS_PREREQUISITES: [(u8, &str, &str); 4] = [
+    (
+        8,
+        "Installing .NET Framework 4.8, this takes several minutes",
+        "dotnet48",
+    ),
+    (
+        55,
+        "Installing the Direct3D shader compiler",
+        "d3dcompiler_47",
+    ),
+    (60, "Installing WebView2", "webview2"),
+    (
+        75,
+        "Enabling the Vulkan renderer for video routes",
+        "renderer=vulkan",
+    ),
+];
+
+/// Title shown until winetricks announces its first verb, and kept as a fallback
+/// when its output cannot be read.
+const WINETRICKS_PREREQUISITES_MESSAGE: &str = "Installing the wine prerequisites (.NET Framework 4.8, the Direct3D shader compiler, WebView2 and the Vulkan renderer), this takes several minutes";
+
+/// The line winetricks prints (to stderr) before running each verb.
+const WINETRICKS_VERB_MARKER: &str = "Executing w_do_call ";
 
 /// Phase messages are independent of sampled percentages during a fresh install.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +74,23 @@ pub struct InstallConfig<'a> {
 }
 
 fn run(command: &mut Command, logger: &Logger, label: &str) -> io::Result<()> {
-    let status = logger.run_inherited_output(command)?;
+    finish(logger.run_inherited_output(command)?, label)
+}
+
+/// Like `run`, but observes the child's output while it runs.
+fn run_observed(
+    command: &mut Command,
+    logger: &Logger,
+    label: &str,
+    observer: OutputObserver,
+) -> io::Result<()> {
+    finish(
+        logger.run_inherited_output_observed(command, observer)?,
+        label,
+    )
+}
+
+fn finish(status: ExitStatus, label: &str) -> io::Result<()> {
     if status.success() {
         Ok(())
     } else {
@@ -169,7 +222,8 @@ fn sample_percent(bytes: u64, expected: u64, previous: u8) -> u8 {
 /// Install Wine prerequisites, the Zwift launcher, and the game.
 ///
 /// The progress callback must be thread-safe: size samples arrive from a worker
-/// thread while phase updates arrive from the calling thread.
+/// thread and winetricks phase updates from an output reader thread, while the
+/// remaining phase updates arrive from the calling thread.
 pub fn install(
     config: &InstallConfig<'_>,
     logger: &Logger,
@@ -258,6 +312,142 @@ pub fn install(
     })
 }
 
+/// Derives per-verb progress messages from winetricks' own output.
+///
+/// winetricks offers no other progress signal for the prerequisites, so the
+/// install dialog's per-verb titles are read from the `Executing w_do_call <verb>`
+/// lines it prints while it works. Every one of those lines comes from its single
+/// stderr stream, so their order is preserved even though the two output reader
+/// threads race with each other.
+struct WinetricksProgress {
+    pending: Vec<u8>,
+    next: usize,
+}
+
+impl WinetricksProgress {
+    fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+            next: 0,
+        }
+    }
+
+    /// Consumes a chunk of output and returns the phases it completed.
+    ///
+    /// Output arrives in arbitrary chunks, so a trailing partial line is kept until
+    /// the rest of it has been read.
+    fn feed(&mut self, bytes: &[u8]) -> Vec<(u8, &'static str)> {
+        self.pending.extend_from_slice(bytes);
+        let mut phases = Vec::new();
+        while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let mut line = self.pending.drain(..=end).collect::<Vec<u8>>();
+            line.pop();
+            let line = String::from_utf8_lossy(&line);
+            if let Some(verb) = line
+                .trim_end_matches('\r')
+                .strip_prefix(WINETRICKS_VERB_MARKER)
+            {
+                self.report(verb, &mut phases);
+            }
+        }
+        phases
+    }
+
+    /// Reports each configured verb once, in the configured order.
+    ///
+    /// winetricks also announces the nested verbs it runs for a prerequisite (for
+    /// example `dotnet40` inside `dotnet48`), so only the configured verbs count.
+    /// Anything already reported, out of order or unknown is ignored; a verb that
+    /// was missed entirely is skipped rather than reported late.
+    fn report(&mut self, verb: &str, phases: &mut Vec<(u8, &'static str)>) {
+        for (index, (percent, message, expected)) in
+            WINETRICKS_PREREQUISITES.iter().enumerate().skip(self.next)
+        {
+            if verb == *expected {
+                self.next = index + 1;
+                phases.push((*percent, *message));
+                return;
+            }
+        }
+    }
+}
+
+/// Install the Wine prerequisites with a single winetricks invocation.
+fn install_prerequisites(
+    config: &InstallConfig<'_>,
+    logger: &Logger,
+    progress: &(impl Fn(InstallProgress) + Sync),
+) -> io::Result<()> {
+    progress(InstallProgress::Phase {
+        percent: WINETRICKS_PREREQUISITES[0].0,
+        message: WINETRICKS_PREREQUISITES_MESSAGE.to_string(),
+    });
+
+    let verbs: Vec<&str> = WINETRICKS_PREREQUISITES
+        .iter()
+        .map(|(_, _, verb)| *verb)
+        .collect();
+    let label = format!("winetricks {}", verbs.join(" "));
+    let mut command = Command::new(config.winetricks);
+    command
+        .env("WINEPREFIX", config.wine_prefix)
+        // -q only selects unattended installs. It does not silence the verb markers
+        // the titles below are read from; that is WINETRICKS_SUPER_QUIET.
+        .arg("-q")
+        .args(&verbs);
+
+    let (sender, receiver) = mpsc::channel();
+    let sender = Mutex::new(sender);
+    let parser = Mutex::new(WinetricksProgress::new());
+    let done = Arc::new(AtomicBool::new(false));
+    let observer = {
+        let done = Arc::clone(&done);
+        Arc::new(move |bytes: &[u8]| {
+            if done.load(Ordering::Acquire) {
+                return;
+            }
+            let phases = parser
+                .lock()
+                .expect("winetricks progress lock poisoned")
+                .feed(bytes);
+            let sender = sender.lock().expect("winetricks sender lock poisoned");
+            for phase in phases {
+                let _ = sender.send(phase);
+            }
+        })
+    };
+
+    std::thread::scope(|scope| {
+        let reporter_done = Arc::clone(&done);
+        let reporter = scope.spawn(move || {
+            loop {
+                match receiver.recv_timeout(Duration::from_millis(50)) {
+                    Ok((percent, message)) => progress(InstallProgress::Phase {
+                        percent,
+                        message: message.to_string(),
+                    }),
+                    // Drain everything winetricks sent before stopping: the markers
+                    // arrive just before it exits.
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if reporter_done.load(Ordering::Acquire) {
+                            break;
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
+        let result = run_observed(&mut command, logger, &label, observer);
+        // Stop the reporter before returning: it holds the only borrow of the
+        // progress callback, and the caller emits the next phase right after.
+        done.store(true, Ordering::Release);
+        reporter
+            .join()
+            .expect("winetricks progress reporter panicked");
+        result
+    })
+}
+
 fn install_steps(
     config: &InstallConfig<'_>,
     logger: &Logger,
@@ -279,34 +469,7 @@ fn install_steps(
         "wineboot",
     )?;
     make_user_dirs_private(config.wine_prefix, logger)?;
-
-    for (percent, message, verb) in [
-        (
-            8,
-            "Installing .NET Framework 4.8, this takes several minutes",
-            "dotnet48",
-        ),
-        (
-            55,
-            "Installing the Direct3D shader compiler",
-            "d3dcompiler_47",
-        ),
-        (60, "Installing WebView2", "webview2"),
-        (
-            75,
-            "Enabling the Vulkan renderer for video routes",
-            "renderer=vulkan",
-        ),
-    ] {
-        phase(percent, message);
-        run(
-            Command::new(config.winetricks)
-                .env("WINEPREFIX", config.wine_prefix)
-                .args(["-q", verb]),
-            logger,
-            &format!("winetricks {verb}"),
-        )?;
-    }
+    install_prerequisites(config, logger, progress)?;
 
     let setup = config.user_common.join("ZwiftSetup.exe");
     let setup_log = config.user_common.join("ZwiftSetup.log");
@@ -455,7 +618,9 @@ mod tests {
             script(
                 &dir.join("winetricks"),
                 &format!(
-                    "echo \"winetricks $2\" >> '{0}/calls'\ntest ! -f '{0}/fail-winetricks'\n\
+                    "test \"$1\" = -q\nshift\necho \"winetricks $*\" >> '{0}/calls'\n\
+                     for verb in \"$@\"; do echo \"Executing w_do_call $verb\" >&2; done\n\
+                     test ! -f '{0}/fail-winetricks'\n\
                      if [ -f '{0}/grow-prefix' ]; then dd if=/dev/zero of='{0}/prefix/drive_c/growth' bs=4096 count=16 2>/dev/null; sleep 0.2; fi",
                     dir.display()
                 ),
@@ -529,10 +694,7 @@ mod tests {
             calls.lines().collect::<Vec<_>>(),
             [
                 "wineboot",
-                "winetricks dotnet48",
-                "winetricks d3dcompiler_47",
-                "winetricks webview2",
-                "winetricks renderer=vulkan",
+                "winetricks dotnet48 d3dcompiler_47 webview2 renderer=vulkan",
                 "download",
                 "setup",
                 "server",
@@ -540,6 +702,25 @@ mod tests {
                 "taskkill",
                 "taskkill",
                 "server"
+            ]
+        );
+        let messages: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                InstallProgress::Phase { message, .. } => Some(message.as_str()),
+                InstallProgress::Sample(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            &messages[..7],
+            [
+                "Setting up wine",
+                WINETRICKS_PREREQUISITES_MESSAGE,
+                "Installing .NET Framework 4.8, this takes several minutes",
+                "Installing the Direct3D shader compiler",
+                "Installing WebView2",
+                "Enabling the Vulkan renderer for video routes",
+                "Downloading Zwift",
             ]
         );
         assert!(events
@@ -596,6 +777,38 @@ mod tests {
         assert_eq!(sample_percent(50, 100, 0), 49);
         assert_eq!(sample_percent(1, 100, 49), 49);
         assert_eq!(sample_percent(u64::MAX, 1, 49), 99);
+    }
+
+    #[test]
+    fn winetricks_progress_follows_verb_markers_across_chunks() {
+        let mut progress = WinetricksProgress::new();
+        // a marker split over two reads is held back until the line is complete
+        assert!(progress.feed(b"Executing w_do_call dotne").is_empty());
+        assert_eq!(
+            progress.feed(b"t48\nExecuting w_do_call remove_mono\r\n"),
+            [(
+                8,
+                "Installing .NET Framework 4.8, this takes several minutes"
+            )]
+        );
+        // nested verbs of a prerequisite and unknown verbs are not in the list
+        assert!(progress
+            .feed(b"Executing w_do_call dotnet40\nExecuting w_do_call bogus\n")
+            .is_empty());
+        // an already reported verb is not repeated
+        assert!(progress.feed(b"Executing w_do_call dotnet48\n").is_empty());
+        // a missed verb is skipped rather than reported out of order
+        assert_eq!(
+            progress.feed(b"Executing w_do_call renderer=vulkan\n"),
+            [(75, "Enabling the Vulkan renderer for video routes")]
+        );
+        assert!(progress
+            .feed(b"Executing w_do_call d3dcompiler_47\n")
+            .is_empty());
+        // unrelated output and a trailing partial line are ignored
+        assert!(progress
+            .feed(b"Executing winetricks\nExecuting w_do_call web")
+            .is_empty());
     }
 
     #[test]

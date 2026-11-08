@@ -359,6 +359,14 @@ Full detail is in `tests/pairing/README.md`; the essentials:
   (`dotnet48`, `d3dcompiler_47`, `webview2`) on a desktop. The runtime is not a
   separate content snap: existing core24 Wine runtime libraries do not match this
   build, and splitting it adds a snap without reducing the total download.
+- **winetricks invocation**: the launcher installs all four prerequisites with one
+  `winetricks -q dotnet48 d3dcompiler_47 webview2 renderer=vulkan` call, not one
+  call per verb: winetricks runs every command-line verb in a single process, in
+  order, and exits non-zero on the first failure, so this is faster and still
+  stops the install before Zwift is downloaded. The per-verb dialog titles are
+  read from the `Executing w_do_call <verb>` lines winetricks prints to stderr
+  (`WINETRICKS_VERB_MARKER` in `launcher-gui/src/install.rs`), so the pinned
+  winetricks and the launcher must change together if that output changes.
 - **Bluetooth**: the `zwift-radios-rebased` wine branch implements the BLE
   advertisement watcher (`adv_watcher_Start` in
   `dlls/windows.devices.bluetooth/advertisement.c`, LE-only discovery) and GATT on top
