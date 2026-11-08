@@ -8,9 +8,14 @@
 # when one is available, and on a headless virtual output otherwise (the same recipe
 # as the yarf CI: --platform-display-libs mir:virtual).
 #
-# Usage: SMOKE_DISPLAY=auto|nested|headless tests/smoke.sh [extra yarf arguments]
+# Usage: SMOKE_DISPLAY=auto|nested|headless tests/smoke.sh [--fresh] [extra yarf arguments]
 # The first run downloads Zwift into the wine prefix and can take half an hour;
 # later runs reuse the prefix and are quick.
+#
+# The downloads (the Zwift game tree and winetricks' prerequisites) are also kept
+# in a cache under $HOME/zwift-cache, which the run restores before starting and
+# updates after passing: see tests/tools/dl-cache/dl-cache.sh. Set SMOKE_CACHE=0 or
+# pass --fresh to ignore it and wipe what it staged, for a real cold install.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,6 +32,10 @@ readonly MIR_START_TIMEOUT=60
 readonly YARF_SUITE_DIR="${HOME}/zwift-smoke-suite"
 readonly YARF_OUT_DIR="${HOME}/zwift-smoke-out"
 readonly ZWIFT_LOG="${HOME}/snap/zwift/common/zwift.log"
+
+# the download cache helper, sourced for its DL_CACHE_* variables and functions
+# shellcheck source=tests/tools/dl-cache/dl-cache.sh
+source "${ROOT}/tests/tools/dl-cache/dl-cache.sh"
 
 mir_pid=""
 zwift_pid=""
@@ -95,6 +104,23 @@ clear_prefs() {
     echo "smoke: cleared cached prefs from previous run"
 }
 
+# prepare_install FRESH: put the cached game tree and winetricks downloads into
+# the wine prefix so the installer only has to fetch what changed, or wipe them
+# for a cold install when FRESH is non-empty.
+prepare_install() {
+    local install_dir="${DL_CACHE_PREFIX}/${DL_CACHE_GAME_SUBDIR}"
+    if [[ -n ${1} ]]; then
+        echo "smoke: --fresh, removing ${install_dir} and the staged winetricks downloads"
+        rm -rf "${install_dir}" "${DL_CACHE_WINETRICKS_LIVE}"
+        return 0
+    fi
+    if ! dl_cache_present; then
+        echo "smoke: no Zwift download cache yet, this run downloads everything"
+        return 0
+    fi
+    dl_cache_stage
+}
+
 # start_mir MODE: MODE is "nested" (render on the host display through the workshop
 # desktop interface) or "headless" (virtual output, no display needed).
 start_mir() {
@@ -155,10 +181,29 @@ report_failure() {
 }
 
 main() {
+    # --fresh and SMOKE_CACHE=0 belong to this harness, not to yarf, so keep them
+    # out of the arguments forwarded to the suite
+    local fresh="" arg
+    local -a yarf_args=()
+    for arg in "$@"; do
+        case ${arg} in
+        --fresh) fresh=1 ;;
+        *) yarf_args+=("${arg}") ;;
+        esac
+    done
+    if [[ ${SMOKE_CACHE:-1} == 0 ]]; then
+        fresh=1
+    fi
+
+    # winetricks must keep its downloads where the launcher's cleanup (which
+    # deletes the default cache) cannot remove them, so they can be captured
+    # afterwards. The snap sees $SNAP_USER_COMMON at this same absolute path.
+    export W_CACHE="${DL_CACHE_WINETRICKS_LIVE}"
+
     ensure_snaps
     clear_stale_socket
     clear_prefs
-    mkdir -p "${YARF_OUT_DIR}"
+    prepare_install "${fresh}"
     stage_suite
 
     case "${SMOKE_DISPLAY:-auto}" in
@@ -189,7 +234,7 @@ main() {
 
     # yarf exits 120 with no output when its stdout is a plain file (snap stdio
     # quirk), so let it write through a pipe into the log file instead.
-    if ! yarf --platform Mir "${YARF_SUITE_DIR}" --outdir "${YARF_OUT_DIR}" "$@" \
+    if ! yarf --platform Mir "${YARF_SUITE_DIR}" --outdir "${YARF_OUT_DIR}" "${yarf_args[@]}" \
         2>&1 | tee "${YARF_OUT_DIR}/yarf.log"; then
         echo "smoke: the yarf suite failed, see ${YARF_OUT_DIR}/yarf.log"
         report_failure
@@ -202,6 +247,11 @@ main() {
     if ! pgrep -f ZwiftApp.exe > /dev/null 2>&1; then
         report_failure
         die "the yarf suite passed but the ZwiftApp.exe wine process is not running"
+    fi
+
+    # keep this run's downloads for the next one; a no-op when nothing changed
+    if [[ -d ${DL_CACHE_PREFIX}/${DL_CACHE_GAME_SUBDIR} ]]; then
+        dl_cache_capture || echo "smoke: could not update the download cache" >&2
     fi
 
     echo "smoke: PASSED"

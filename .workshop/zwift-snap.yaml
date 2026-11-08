@@ -49,7 +49,8 @@ actions:
   lint: |
     cd /project
     shellcheck -x launcher/*.sh snap/prune-closure.sh tests/smoke.sh tests/gtk-preview.sh \
-      tests/bluetooth.sh tests/pairing.sh tests/tools/yarf/yarf.sh tests/tools/bluetooth/*.sh \
+      tests/bluetooth.sh tests/pairing.sh tests/dl-cache.sh tests/tools/yarf/yarf.sh \
+      tests/tools/bluetooth/*.sh tests/tools/dl-cache/*.sh \
       tests/unit/*.bats tests/unit/test_helper.bash \
       .workshop/zwift-snap-sdk/hooks/*
     python3 -m py_compile tests/zwift-stub.py tests/tools/yarf/*.py tests/tools/bluetooth/*.py \
@@ -70,7 +71,9 @@ actions:
     cd /project
     # Visual smoke test with yarf: starts a Mir compositor, runs the zwift launcher
     # against it and checks installation reaches the mandatory login gate, without
-    # credentials. The first run downloads Zwift and can take half an hour.
+    # credentials. The first run downloads Zwift and can take half an hour; the
+    # download cache under ~/zwift-cache (see the dl-cache action) makes later runs
+    # quick. Pass --fresh (or SMOKE_CACHE=0) for a real cold install.
     tests/smoke.sh "$@"
   bluetooth: |
     cd /project
@@ -94,6 +97,16 @@ actions:
     #   workshop run zwift-snap yarf screenshot -s wayland-99 ~/shot.png
     #   workshop run zwift-snap yarf input type offline@example.com then key Return
     tests/tools/yarf/yarf.sh "$@"
+  dl-cache: |
+    cd /project
+    # Inspect and manage the Zwift download cache the smoke test uses
+    # (~/zwift-cache: the game tree and winetricks' downloads), so a smoke run does
+    # not have to download several GB again. Subcommands:
+    #   status            what is cached and for which Zwift version
+    #   capture [--force] record the installed prefix's downloads
+    #   stage [--force]   copy the cached downloads into the installed prefix
+    #   clear             delete the cache
+    tests/dl-cache.sh "$@"
   size: |
     cd /project
     du -sh prime/* 2>/dev/null | sort -rh

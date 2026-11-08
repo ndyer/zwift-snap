@@ -10,7 +10,7 @@ time applies to every OCR call of the suite.
 from rapidocr import RapidOCR
 from yarf.rf_libraries.libraries.ocr.rapidocr import RapidOCRReader
 
-OCR_THREADS = 4
+OCR_THREADS = 1
 
 RapidOCRReader().reader = RapidOCR(
     params={
