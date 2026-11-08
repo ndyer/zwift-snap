@@ -13,8 +13,6 @@ pub struct LaunchConfig<'a> {
     pub runfromprocess: &'a Path,
     pub wait_for_window: &'a Path,
     pub tools: &'a Tools,
-    /// Path to gamemoderun when enabled and available.
-    pub gamemoderun: Option<&'a Path>,
     pub game_args: &'a [String],
     /// OAuth token file written by the GUI login; its JSON is passed to the
     /// game at launch time, after login has completed.
@@ -197,19 +195,7 @@ pub fn start(
     let result: io::Result<()> = (|| {
         let launcher_pid = wait_for_task(config, logger, "ZwiftLauncher.exe")?;
         logger.info("Starting Zwift using wine");
-        let mut game = match config.gamemoderun {
-            Some(wrapper) => {
-                logger.info("Using gamemode");
-                let mut cmd = Command::new(wrapper);
-                cmd.arg(&config.tools.wine)
-                    .env("WINEPREFIX", config.wine_prefix);
-                cmd
-            }
-            None => {
-                logger.info("Not using gamemode");
-                wine(config)
-            }
-        };
+        let mut game = wine(config);
         game.args(["start", "/d", &directory, "/unix"])
             .arg(config.runfromprocess)
             .arg(launcher_pid.to_string())
@@ -343,7 +329,6 @@ esac
                 runfromprocess: &self.dir,
                 wait_for_window: &self.dir,
                 tools: &self.tools,
-                gamemoderun: None,
                 game_args: &[],
                 token_file: None,
                 startup_attempts: 1,
@@ -451,40 +436,6 @@ esac
             assert!(calls.contains("taskkill /f /im ZwiftWindowsCrashHandler.exe"));
             assert!(!calls.contains("window.exe"));
         }
-    }
-
-    #[test]
-    fn gamemode_wraps_wine_and_forwards_game_arguments() {
-        let fixture = Fixture::new("gamemode");
-        let wrapper = fixture.dir.join("gamemoderun");
-        write_executable(
-            &wrapper,
-            &format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}/wrapper-call'\nexec \"$@\"\n",
-                fixture.dir.display()
-            ),
-        );
-        let prefix = fixture.dir.join("prefix");
-        let runfromprocess = fixture.dir.join("runfromprocess.exe");
-        let window = fixture.dir.join("window.exe");
-        let args = ["--test-argument".to_owned()];
-        let config = LaunchConfig {
-            wine_prefix: &prefix,
-            runfromprocess: &runfromprocess,
-            wait_for_window: &window,
-            gamemoderun: Some(&wrapper),
-            game_args: &args,
-            ..fixture.config()
-        };
-        let logger = Logger::new(fixture.dir.join("log"), 0, false);
-        logger.init().unwrap();
-        assert_eq!(
-            start(&config, &logger, false, &mut |_, _| {}).unwrap(),
-            WindowOutcome::NotRequested
-        );
-        let call = fs::read_to_string(fixture.dir.join("wrapper-call")).unwrap();
-        assert!(call.starts_with(&fixture.tools.wine.to_string_lossy().to_string()));
-        assert!(call.contains("ZwiftApp.exe --test-argument"));
     }
 
     #[test]

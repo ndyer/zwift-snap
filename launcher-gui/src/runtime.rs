@@ -352,7 +352,6 @@ mod tests {
             runfromprocess: &runfrom,
             wait_for_window: &window,
             tools: &tools,
-            gamemoderun: None,
             game_args: &[],
             token_file: None,
             startup_attempts: 1,

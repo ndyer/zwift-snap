@@ -23,7 +23,6 @@ pub struct Config {
     pub display: DisplayMode,
     pub no_gui: bool,
     pub skip_login: bool,
-    pub no_gamemode: bool,
     pub disable_egl: bool,
     pub verbosity: u8,
     pub color: bool,
@@ -117,7 +116,6 @@ impl Config {
             display,
             no_gui: flag("ZWIFT_NO_GUI", 0)?,
             skip_login: false,
-            no_gamemode: flag("ZWIFT_NO_GAMEMODE", 1)?,
             disable_egl: flag("WINE_DISABLE_EGL", 0)?,
             verbosity: u8::try_from(number("VERBOSITY", 1)?)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
@@ -196,20 +194,6 @@ pub fn run(
     let winetricks = PathBuf::from("winetricks");
     let runfromprocess = config.snap.join("bin/runfromprocess-rs.exe");
     let window = config.snap.join("bin/wait-for-window.exe");
-    let gamemode = (!config.no_gamemode)
-        .then(|| {
-            std::env::var_os("PATH").and_then(|path| {
-                std::env::split_paths(&path)
-                    .map(|dir| dir.join("gamemoderun"))
-                    .find(|path| {
-                        use std::os::unix::fs::PermissionsExt;
-                        path.metadata().is_ok_and(|metadata| {
-                            metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-                        })
-                    })
-            })
-        })
-        .flatten();
     // Read this file only when starting the game, after the GUI login gate. With
     // --skip-login the game prompts for authentication itself, so neither the
     // token file nor the game's --token argument is used.
@@ -233,7 +217,6 @@ pub fn run(
             runfromprocess: &runfromprocess,
             wait_for_window: &window,
             tools: &tools,
-            gamemoderun: gamemode.as_deref(),
             game_args: args,
             token_file: (graphical && !config.skip_login).then_some(token_file.as_path()),
             startup_attempts: 20,
@@ -372,7 +355,6 @@ mod tests {
         assert_eq!(config.prefix, PathBuf::from("/data/.wine"));
         assert_eq!(config.log, PathBuf::from("/data/zwift.log"));
         assert_eq!(config.display, DisplayMode::Fullscreen);
-        assert!(config.no_gamemode);
         assert!(!config.no_gui);
         assert_eq!(config.download_iterations, 240);
         assert_eq!(config.poll_interval, Duration::from_secs(5));
