@@ -4,7 +4,14 @@ use std::process::ExitCode;
 use zwift_gui::display::{configure_file, DisplayMode};
 
 fn main() -> ExitCode {
+    // The launcher's own switches come before the optional "--" separator, everything
+    // after it is handed to the game.
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let skip_login = args.iter().any(|arg| arg == "--skip-login");
+    let args: Vec<String> = args
+        .into_iter()
+        .filter(|arg| arg != "--skip-login")
+        .collect();
     match args.as_slice() {
         #[cfg(feature = "gtk-ui")]
         [cmd] if cmd == "--preview" => {
@@ -42,24 +49,26 @@ fn main() -> ExitCode {
                 }
             }
         }
-        [] => launch(Vec::new()),
-        [cmd, rest @ ..] if cmd == "--" => launch(rest.to_vec()),
+        [] => launch(Vec::new(), skip_login),
+        [cmd, rest @ ..] if cmd == "--" => launch(rest.to_vec(), skip_login),
         _ => {
             eprintln!(
                 "usage: zwift-gui set-display-mode PREFS_FILE (mode from ZWIFT_DISPLAY_MODE)"
             );
             #[cfg(feature = "gtk-ui")]
             eprintln!("       zwift-gui --preview");
-            eprintln!("       zwift-gui [-- GAME_ARGUMENTS...]");
+            eprintln!("       zwift-gui [--skip-login] [-- GAME_ARGUMENTS...]");
             ExitCode::from(2)
         }
     }
 }
 
-fn launch(args: Vec<String>) -> ExitCode {
-    match zwift_gui::application::Config::from_env()
-        .and_then(|config| zwift_gui::application::launch(config, args))
-    {
+fn launch(args: Vec<String>, skip_login: bool) -> ExitCode {
+    let result = zwift_gui::application::Config::from_env().and_then(|mut config| {
+        config.skip_login = skip_login;
+        zwift_gui::application::launch(config, args)
+    });
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");

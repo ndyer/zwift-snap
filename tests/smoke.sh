@@ -88,6 +88,13 @@ clear_stale_socket() {
     fi
 }
 
+# clear_prefs: reset cached Zwift login details (prefs.xml) from previous runs
+clear_prefs() {
+    local prefs_file="${SNAP_USER_COMMON:-$HOME/snap/zwift}/.wine/drive_c/users/workshop/AppData/Local/Zwift/prefs.xml"
+    rm -f "${prefs_file}" 2>/dev/null || true
+    echo "smoke: cleared cached prefs from previous run"
+}
+
 # start_mir MODE: MODE is "nested" (render on the host display through the workshop
 # desktop interface) or "headless" (virtual output, no display needed).
 start_mir() {
@@ -150,6 +157,7 @@ report_failure() {
 main() {
     ensure_snaps
     clear_stale_socket
+    clear_prefs
     mkdir -p "${YARF_OUT_DIR}"
     stage_suite
 
@@ -175,7 +183,8 @@ main() {
 
     # the launcher links the compositor socket into the runtime dir of the snap and
     # runs everything (dialogs and wine) on native wayland
-    snap run zwift > >(tee "${YARF_OUT_DIR}/zwift.out") 2>&1 &
+    # Skip login to go straight to the game (enables robot tests)
+    snap run zwift --skip-login > >(tee "${YARF_OUT_DIR}/zwift.out") 2>&1 &
     zwift_pid=$!
 
     # yarf exits 120 with no output when its stdout is a plain file (snap stdio

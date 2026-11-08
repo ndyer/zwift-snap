@@ -22,6 +22,7 @@ pub struct Config {
     pub cache: PathBuf,
     pub display: DisplayMode,
     pub no_gui: bool,
+    pub skip_login: bool,
     pub no_gamemode: bool,
     pub disable_egl: bool,
     pub verbosity: u8,
@@ -115,6 +116,7 @@ impl Config {
             cache,
             display,
             no_gui: flag("ZWIFT_NO_GUI", 0)?,
+            skip_login: false,
             no_gamemode: flag("ZWIFT_NO_GAMEMODE", 1)?,
             disable_egl: flag("WINE_DISABLE_EGL", 0)?,
             verbosity: u8::try_from(number("VERBOSITY", 1)?)
@@ -309,6 +311,8 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
                             log_ui.log(String::from_utf8_lossy(bytes).into_owned())
                         });
                         let progress_ui = ui.clone();
+                        // Skip login when configured (e.g., --skip-login).
+                        ui.set_require_login(!config.skip_login);
                         let progress = |event: InstallProgress| {
                             if let InstallProgress::Phase { ref message, .. } = event {
                                 logger.info(message);
