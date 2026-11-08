@@ -210,7 +210,9 @@ pub fn run(
             })
         })
         .flatten();
-    // Read this file only when starting the game, after the GUI login gate.
+    // Read this file only when starting the game, after the GUI login gate. With
+    // --skip-login the game prompts for authentication itself, so neither the
+    // token file nor the game's --token argument is used.
     let token_file = config.common.join("pairing-token.json");
     let mut runtime = Runtime {
         install: InstallConfig {
@@ -233,7 +235,7 @@ pub fn run(
             tools: &tools,
             gamemoderun: gamemode.as_deref(),
             game_args: args,
-            token_file: graphical.then_some(token_file.as_path()),
+            token_file: (graphical && !config.skip_login).then_some(token_file.as_path()),
             startup_attempts: 20,
             startup_interval: Duration::from_millis(100),
             game_poll_interval: config.poll_interval,
