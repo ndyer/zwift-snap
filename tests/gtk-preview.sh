@@ -89,6 +89,15 @@ mkdir -p "${fixture}/bin" "${game}" "${data}" "${stage}/out/runtime"
 touch "${game}/ZwiftApp.exe" "${game}/ZwiftLauncher.exe"
 printf '<Zwift sversion="1.0.0 x"/>' > "${game}/Zwift_ver_cur.xml"
 printf '<ZWIFT><CONFIG/></ZWIFT>' > "${data}/prefs.xml"
+# Fabricate what the Wine prerequisites leave behind: `installed()` also requires
+# them, otherwise the launcher takes the install path instead. Kept in step with the
+# sentinels in launcher-gui/src/install.rs.
+prefix="${fixture}/common/.wine"
+mkdir -p "${prefix}/drive_c/windows/Microsoft.NET/Framework64/v4.0.30319"
+touch "${prefix}/drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/mscorlib.dll"
+mkdir -p "${prefix}/drive_c/windows/system32"
+touch "${prefix}/drive_c/windows/system32/d3dcompiler_47.dll"
+mkdir -p "${prefix}/drive_c/Program Files (x86)/Microsoft/EdgeWebView/Application"
 cat > "${fixture}/bin/wget" <<'STUB'
 #!/bin/sh
 printf '<Zwift sversion="2.0.0 x"/>'

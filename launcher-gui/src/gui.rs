@@ -243,7 +243,6 @@ type LoginDecision = std::rc::Rc<std::cell::RefCell<Option<Sender<bool>>>>;
 /// caller then falls back to a non-persistent view.
 fn persistent_webview() -> Option<webkit6::WebView> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-    use webkit6::prelude::*;
 
     let common = std::env::var("SNAP_USER_COMMON").ok()?;
     let data_dir = std::path::PathBuf::from(common).join("webkit");
@@ -306,8 +305,8 @@ fn show_login_dialog(
 
     // WebView for OAuth authorization page.
     use webkit6::prelude::*;
-    use webkit6::{PolicyDecisionType, WebView};
-    let webview = persistent_webview().unwrap_or_else(WebView::new);
+    use webkit6::PolicyDecisionType;
+    let webview = persistent_webview().unwrap_or_default();
     let dialog_weak = dialog.downgrade();
     let status_weak = login_status.downgrade();
     let login_button_weak = login_button.downgrade();

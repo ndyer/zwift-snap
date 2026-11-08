@@ -62,8 +62,21 @@ impl LauncherBackend for Runtime<'_> {
     }
 
     fn installed(&mut self) -> io::Result<bool> {
-        Ok(self.install.install_dir.join("ZwiftApp.exe").is_file()
-            && self.install.install_dir.join("ZwiftLauncher.exe").is_file())
+        if !self.install.install_dir.join("ZwiftApp.exe").is_file()
+            || !self.install.install_dir.join("ZwiftLauncher.exe").is_file()
+        {
+            return Ok(false);
+        }
+        // The game tree alone is not enough: a prefix without the Wine
+        // prerequisites (for example one restored from a game-assets cache) cannot
+        // run the game, so reinstall rather than trust the executables.
+        if let Some(proof) = install::missing_wine_prerequisite(self.install.wine_prefix) {
+            self.logger.warning(&format!(
+                "The wine prefix is missing a winetricks prerequisite ({proof}), reinstalling Zwift"
+            ));
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     fn install(&mut self) -> io::Result<()> {
@@ -207,6 +220,23 @@ mod tests {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    /// Fabricate what the Wine prerequisites leave behind, so `installed()` is true.
+    /// Kept in step with `install::WINETRICKS_PREREQUISITES`.
+    fn write_wine_prerequisites(prefix: &Path) {
+        for proof in [
+            "drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/mscorlib.dll",
+            "drive_c/windows/system32/d3dcompiler_47.dll",
+        ] {
+            let path = prefix.join(proof);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "").unwrap();
+        }
+        fs::create_dir_all(
+            prefix.join("drive_c/Program Files (x86)/Microsoft/EdgeWebView/Application"),
+        )
+        .unwrap();
+    }
+
     #[cfg(not(feature = "gtk-ui"))]
     struct Headless {
         ready: bool,
@@ -234,6 +264,7 @@ mod tests {
         fs::create_dir_all(&user).unwrap();
         fs::create_dir(&common).unwrap();
         fs::create_dir(&game).unwrap();
+        write_wine_prerequisites(&prefix);
         for name in ["ZwiftLauncher.exe", "ZwiftApp.exe"] {
             fs::write(game.join(name), "").unwrap();
         }

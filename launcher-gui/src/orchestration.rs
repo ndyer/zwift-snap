@@ -25,6 +25,8 @@ pub trait LauncherBackend {
     type Error: fmt::Display;
 
     fn prepare(&mut self) -> Result<(), Self::Error>;
+    /// Whether a complete Zwift installation is present, including the Wine
+    /// prerequisites. A `false` result makes the lifecycle take the install path.
     fn installed(&mut self) -> Result<bool, Self::Error>;
     fn install(&mut self) -> Result<(), Self::Error>;
     fn update(&mut self) -> Result<(), Self::Error>;

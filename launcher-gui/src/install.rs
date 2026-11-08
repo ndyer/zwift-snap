@@ -2,6 +2,7 @@
 
 use crate::logging::{Logger, OutputObserver};
 use crate::update::{update_using_launcher, UpdateBackend};
+use crate::version::version_ge;
 use crate::wine_update::{Tools, WineUpdate};
 use std::collections::HashSet;
 use std::fs;
@@ -16,6 +17,21 @@ use std::time::Duration;
 const SETUP_URL: &str = "https://cdn.zwift.com/app/ZwiftSetup.exe";
 pub const EXPECTED_DRIVE_C_BYTES: u64 = 8_537_613_774;
 
+/// One Wine prerequisite installed by the single winetricks invocation.
+struct Prerequisite {
+    /// Terminal-mode progress percentage of this verb; the GUI replaces it with the
+    /// percentage of the sampled prefix size.
+    percent: u8,
+    /// Progress message shown while the verb runs.
+    message: &'static str,
+    /// The winetricks verb to run.
+    verb: &'static str,
+    /// A path relative to the Wine prefix that exists only once the verb succeeded,
+    /// used by `missing_wine_prerequisite`. `None` for verbs that only change the
+    /// registry (`renderer=vulkan`), which cannot be probed without running Wine.
+    proof: Option<&'static str>,
+}
+
 /// The Wine prerequisites, installed by a single winetricks invocation.
 ///
 /// winetricks runs every command-line verb in one process, in order, and exits
@@ -24,25 +40,38 @@ pub const EXPECTED_DRIVE_C_BYTES: u64 = 8_537_613_774;
 /// start the script, probe Wine and initialise the prefix once per verb. The order
 /// matters: `dotnet48` selects the Windows version the later verbs expect.
 ///
-/// The percentage is the terminal-mode progress of each verb; the GUI replaces it
-/// with the percentage of the sampled prefix size.
-const WINETRICKS_PREREQUISITES: [(u8, &str, &str); 4] = [
-    (
-        8,
-        "Installing .NET Framework 4.8, this takes several minutes",
-        "dotnet48",
-    ),
-    (
-        55,
-        "Installing the Direct3D shader compiler",
-        "d3dcompiler_47",
-    ),
-    (60, "Installing WebView2", "webview2"),
-    (
-        75,
-        "Enabling the Vulkan renderer for video routes",
-        "renderer=vulkan",
-    ),
+/// The proof paths are checked against the pinned winetricks upstream, so they and
+/// the launcher must change together: the same reason the verb markers above are
+/// pinned.
+const WINETRICKS_PREREQUISITES: [Prerequisite; 4] = [
+    Prerequisite {
+        percent: 8,
+        message: "Installing .NET Framework 4.8, this takes several minutes",
+        verb: "dotnet48",
+        // dotnet48 installs both 32- and 64-bit frameworks; the 64-bit mscorlib is
+        // the one Zwift's 64-bit process needs, so it is the meaningful proof.
+        proof: Some("drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/mscorlib.dll"),
+    },
+    Prerequisite {
+        percent: 55,
+        message: "Installing the Direct3D shader compiler",
+        verb: "d3dcompiler_47",
+        proof: Some("drive_c/windows/system32/d3dcompiler_47.dll"),
+    },
+    Prerequisite {
+        percent: 60,
+        message: "Installing WebView2",
+        verb: "webview2",
+        // webview2 unpacks its runtime under a versioned subdirectory, so only the
+        // parent directory is stable across versions.
+        proof: Some("drive_c/Program Files (x86)/Microsoft/EdgeWebView/Application"),
+    },
+    Prerequisite {
+        percent: 75,
+        message: "Enabling the Vulkan renderer for video routes",
+        verb: "renderer=vulkan",
+        proof: None,
+    },
 ];
 
 /// Title shown until winetricks announces its first verb, and kept as a fallback
@@ -153,6 +182,22 @@ fn remove_artifact(path: &Path) -> io::Result<()> {
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+/// The proof path of the first Wine prerequisite that is not installed, if any.
+///
+/// Prerequisites without a proof path (registry-only verbs) are skipped: they cannot
+/// be observed from the filesystem.
+pub fn missing_wine_prerequisite(prefix: &Path) -> Option<&'static str> {
+    WINETRICKS_PREREQUISITES.iter().find_map(|prerequisite| {
+        let proof = prerequisite.proof?;
+        (!prefix.join(proof).exists()).then_some(proof)
+    })
+}
+
+/// Whether every Wine prerequisite that can be probed from the filesystem is installed.
+pub fn wine_prerequisites_installed(prefix: &Path) -> bool {
+    missing_wine_prerequisite(prefix).is_none()
 }
 
 /// Find the first Wine user other than Public, matching the shell launcher.
@@ -360,12 +405,10 @@ impl WinetricksProgress {
     /// Anything already reported, out of order or unknown is ignored; a verb that
     /// was missed entirely is skipped rather than reported late.
     fn report(&mut self, verb: &str, phases: &mut Vec<(u8, &'static str)>) {
-        for (index, (percent, message, expected)) in
-            WINETRICKS_PREREQUISITES.iter().enumerate().skip(self.next)
-        {
-            if verb == *expected {
+        for (index, prerequisite) in WINETRICKS_PREREQUISITES.iter().enumerate().skip(self.next) {
+            if verb == prerequisite.verb {
                 self.next = index + 1;
-                phases.push((*percent, *message));
+                phases.push((prerequisite.percent, prerequisite.message));
                 return;
             }
         }
@@ -379,13 +422,13 @@ fn install_prerequisites(
     progress: &(impl Fn(InstallProgress) + Sync),
 ) -> io::Result<()> {
     progress(InstallProgress::Phase {
-        percent: WINETRICKS_PREREQUISITES[0].0,
+        percent: WINETRICKS_PREREQUISITES[0].percent,
         message: WINETRICKS_PREREQUISITES_MESSAGE.to_string(),
     });
 
     let verbs: Vec<&str> = WINETRICKS_PREREQUISITES
         .iter()
-        .map(|(_, _, verb)| *verb)
+        .map(|prerequisite| prerequisite.verb)
         .collect();
     let label = format!("winetricks {}", verbs.join(" "));
     let mut command = Command::new(config.winetricks);
@@ -551,19 +594,32 @@ fn install_steps(
         io::Error::other(format!("Unable to retrieve the latest Zwift version number, Zwift cannot be downloaded: {error}"))
     })?;
     let current = backend.current_version()?;
-    logger.info(&format!(
-        "Zwift launcher installed, downloading Zwift {latest}"
-    ));
-    update_using_launcher(
-        &mut backend,
-        &latest,
-        &current,
-        config.download_iterations,
-        config.poll_interval,
-        90,
-        9,
-    )
-    .map_err(io::Error::other)?;
+    // The installer leaves a 0.0.0 placeholder, so `current` is normally `none`
+    // here and the launcher below downloads the game. But a prefix can already
+    // carry the game at the latest version (for example a restored download cache,
+    // or a reinstall after a missing prerequisite proof): running
+    // `update_using_launcher` then spins its poll loop to the timeout, because
+    // `poll_update` only succeeds once the version *changes*. Mirror
+    // `update_if_needed` and skip the download when nothing needs updating.
+    if version_ge(&current, &latest) {
+        logger.info(&format!(
+            "Zwift is up to date (installed {current}, latest {latest})"
+        ));
+    } else {
+        logger.info(&format!(
+            "Zwift launcher installed, downloading Zwift {latest}"
+        ));
+        update_using_launcher(
+            &mut backend,
+            &latest,
+            &current,
+            config.download_iterations,
+            config.poll_interval,
+            90,
+            9,
+        )
+        .map_err(io::Error::other)?;
+    }
     if !config.install_dir.join("ZwiftApp.exe").is_file()
         || !config.install_dir.join("ZwiftLauncher.exe").is_file()
     {
@@ -738,6 +794,33 @@ mod tests {
             fs::read_to_string(fixture.dir.join("hostdocs/keep")).unwrap(),
             "unchanged"
         );
+    }
+
+    #[test]
+    fn a_prefix_already_at_the_latest_version_skips_the_launcher_download() {
+        // A restored game tree (or a reinstall triggered by a missing prerequisite
+        // proof) leaves the game at the latest version before install_steps runs.
+        // The launcher's own poll can never observe a version change then, so the
+        // download must be skipped rather than run to its timeout.
+        let fixture = Fixture::new("preinstalled");
+        let game = fixture.dir.join("game");
+        fs::create_dir_all(&game).unwrap();
+        fs::write(
+            game.join("Zwift_ver_cur.xml"),
+            r#"<Zwift sversion="1.124.0 current"/>"#,
+        )
+        .unwrap();
+        fs::write(game.join("ZwiftApp.exe"), "").unwrap();
+        let (result, _) = fixture.run(Duration::from_secs(30));
+        result.unwrap();
+        let calls = fs::read_to_string(fixture.dir.join("calls")).unwrap();
+        // The installer still ran, but the launcher was never started.
+        assert!(calls.contains("setup"), "{calls}");
+        assert!(!calls.contains("start"), "{calls}");
+        assert!(!calls.contains("taskkill"), "{calls}");
+        assert!(fs::read_to_string(fixture.dir.join("zwift.log"))
+            .unwrap()
+            .contains("Zwift is up to date"));
     }
 
     #[test]
@@ -918,5 +1001,67 @@ mod tests {
             })
             .collect();
         assert!(percentages.windows(2).all(|pair| pair[0] <= pair[1]));
+    }
+
+    #[test]
+    fn wine_prerequisites_are_detected_from_their_proof_paths() {
+        let dir = std::env::temp_dir().join(format!("zwift-prerequisites-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
+
+        // An empty prefix has no prerequisite at all, so the first one is reported.
+        assert_eq!(
+            missing_wine_prerequisite(&dir),
+            Some("drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/mscorlib.dll")
+        );
+        assert!(!wine_prerequisites_installed(&dir));
+
+        // The proof is a file for the libraries and a directory for EdgeWebView.
+        let proofs = [
+            (
+                "drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/mscorlib.dll",
+                false,
+            ),
+            ("drive_c/windows/system32/d3dcompiler_47.dll", false),
+            (
+                "drive_c/Program Files (x86)/Microsoft/EdgeWebView/Application",
+                true,
+            ),
+        ];
+        for (proof, is_dir) in proofs {
+            let path = dir.join(proof);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            if is_dir {
+                fs::create_dir(&path).unwrap();
+            } else {
+                fs::write(&path, "").unwrap();
+            }
+        }
+        assert!(wine_prerequisites_installed(&dir));
+
+        // Every proof is load-bearing: removing any one alone makes the prefix incomplete.
+        for (proof, is_dir) in proofs {
+            let path = dir.join(proof);
+            if is_dir {
+                fs::remove_dir(&path).unwrap();
+            } else {
+                fs::remove_file(&path).unwrap();
+            }
+            assert_eq!(missing_wine_prerequisite(&dir), Some(proof));
+            assert!(!wine_prerequisites_installed(&dir));
+            if is_dir {
+                fs::create_dir(&path).unwrap();
+            } else {
+                fs::write(&path, "").unwrap();
+            }
+        }
+
+        // The registry-only Vulkan prerequisite has no proof path and is never probed.
+        assert!(WINETRICKS_PREREQUISITES
+            .iter()
+            .filter(|prerequisite| prerequisite.proof.is_none())
+            .map(|prerequisite| prerequisite.verb)
+            .eq(["renderer=vulkan"]));
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

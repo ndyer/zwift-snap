@@ -27,6 +27,7 @@ impl Fixture {
         for name in ["ZwiftApp.exe", "ZwiftLauncher.exe"] {
             fs::write(game.join(name), "").unwrap();
         }
+        fixture.write_wine_prerequisites();
         fs::write(
             game.join("Zwift_ver_cur.xml"),
             "<Zwift sversion=\"1.2.0 x\"/>",
@@ -56,6 +57,25 @@ taskkill|reg.exe) :;;
 esac"#,
         );
         fixture
+    }
+
+    /// Fabricate what the Wine prerequisites leave behind, so the launcher sees the
+    /// prefix as installed. Kept in step with the sentinels in
+    /// `launcher-gui/src/install.rs` (`WINETRICKS_PREREQUISITES`).
+    fn write_wine_prerequisites(&self) {
+        let prefix = self.root.join("common/.wine");
+        for proof in [
+            "drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/mscorlib.dll",
+            "drive_c/windows/system32/d3dcompiler_47.dll",
+        ] {
+            let path = prefix.join(proof);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "").unwrap();
+        }
+        fs::create_dir_all(
+            prefix.join("drive_c/Program Files (x86)/Microsoft/EdgeWebView/Application"),
+        )
+        .unwrap();
     }
 
     fn script(&self, name: &str, body: &str) {
