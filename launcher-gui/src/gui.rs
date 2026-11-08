@@ -236,6 +236,45 @@ type LoginDecision = std::rc::Rc<std::cell::RefCell<Option<Sender<bool>>>>;
 /// Show a login dialog with an embedded WebKitGTK WebView for Zwift OAuth login.
 ///
 /// The WebView loads the Zwift OAuth authorization URL. After the user logs in,
+/// A WebView whose cookies persist in `$SNAP_USER_COMMON/webkit`, so Zwift's
+/// "Remember me" cookie survives a launcher restart. The directory and cookie
+/// database hold live session cookies, so they are created owner-only (0700/0600),
+/// before WebKit opens them. Returns `None` if the store cannot be prepared; the
+/// caller then falls back to a non-persistent view.
+fn persistent_webview() -> Option<webkit6::WebView> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    use webkit6::prelude::*;
+
+    let common = std::env::var("SNAP_USER_COMMON").ok()?;
+    let data_dir = std::path::PathBuf::from(common).join("webkit");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data_dir)
+        .ok()?;
+    let db_path = data_dir.join("cookies.sqlite");
+    // Create the empty database owner-only; SQLite keeps the mode when it opens the file.
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(&db_path)
+        .ok()?;
+
+    let session = webkit6::NetworkSession::new(data_dir.to_str(), None);
+    if let Some(cookies) = session.cookie_manager() {
+        cookies.set_persistent_storage(
+            &db_path.to_string_lossy(),
+            webkit6::CookiePersistentStorage::Sqlite,
+        );
+    }
+    Some(
+        webkit6::WebView::builder()
+            .network_session(&session)
+            .build(),
+    )
+}
+
 /// WebKit redirects to `http://zwift/?code=...`; we intercept that redirect,
 /// extract the authorization code, exchange it for a token, save the token JSON
 /// to disk, and update the login status label.
@@ -268,7 +307,7 @@ fn show_login_dialog(
     // WebView for OAuth authorization page.
     use webkit6::prelude::*;
     use webkit6::{PolicyDecisionType, WebView};
-    let webview = WebView::new();
+    let webview = persistent_webview().unwrap_or_else(WebView::new);
     let dialog_weak = dialog.downgrade();
     let status_weak = login_status.downgrade();
     let login_button_weak = login_button.downgrade();
@@ -363,7 +402,12 @@ fn show_login_dialog(
                 glib::ControlFlow::Break
             });
         } else if let Some(status) = status_weak.upgrade() {
-            status.set_text("Login was not completed. Close the dialog and retry.");
+            match parameter("error").filter(|error| !error.is_empty()) {
+                Some(error) => status.set_text(&format!(
+                    "Login was not completed ({error}). Close the dialog and retry."
+                )),
+                None => status.set_text("Login was not completed. Close the dialog and retry."),
+            }
         }
         true
     });

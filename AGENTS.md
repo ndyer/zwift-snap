@@ -118,6 +118,34 @@ piped `tail` hides the build's live progress (and makes it look hung), while
 for example by appending `| tee build.log` to the appropriate command. Keep
 `pipefail` in mind when chaining commands afterwards.
 
+### Fast iteration with snap try
+
+For launcher changes, avoid a full `build` on each edit. `snap try` mounts an
+unpacked snap directory in place of the installed revision, so the launcher can
+run from the prime tree:
+
+1. Refresh the prime tree (rebuilds only changed parts, e.g. the launcher):
+   `sudo snapcraft prime --destructive-mode`
+2. Mount it: `sudo snap try /project/prime`. `snap list zwift` then shows the
+   revision marked `try` (mounted from `/project/prime`).
+3. Run it: `snap run zwift`. Check `~/snap/zwift/common/zwift.log` for the launcher's log.
+
+Notes:
+- Run `snap try` only after a successful `snapcraft prime`. An empty or missing
+  prime tree fails with a missing `snap.yaml`.
+- Running the dev build directly (`cargo run`) outside the snap fails with
+  `No such file or directory (os error 2)` at `wine start`, because the wine
+  binaries exist only inside the snap. Use `snap try` to test runtime behaviour.
+- Dialogs and the game need a display: start the launcher from a session that
+  has one. The game process keeps running after the launcher is closed.
+- To undo `snap try`, install a `.snap` file over it with
+  `sudo snap install --dangerous <file>.snap` (or `--amend`). This has not been
+  verified against a `try` mount here. Avoid `sudo snap remove zwift` between
+  iterations: it is slow, because the snap's multi-GB data is snapshotted. Do not
+  use `--purge`, because it deletes the wine prefix and login state in
+  `~/snap/zwift/common`.
+- Do not `snap try` a directory that is not a prime tree (for example, the project root).
+
 ## Verification
 
 Before declaring a task done run `lint` and `test`. Run `smoke` when the change
@@ -335,6 +363,52 @@ Full detail is in `tests/pairing/README.md`; the essentials:
 - `tests/tools/yarf/yarf.sh` (the `yarf` action) sends pointer/keyboard input and takes screenshots
   of the running compositor (yarf's own wayland clients inside the yarf snap), for exploring the
   screens by hand when updating the suite for a new Zwift version.
+
+## Login and "Remember me" detection
+
+The launcher logs in through an embedded WebKitGTK WebView in `show_login_dialog`
+(`launcher-gui/src/gui.rs`). It does OAuth PKCE against Keycloak (`launcher-gui/src/oauth.rs`),
+watches navigation for the `http://zwift/?code=...` redirect, checks `state`, exchanges the code and
+saves `pairing-token.json`, which `launch.rs` passes to the game as `--token`.
+
+- The launcher cannot read the "Remember me" checkbox. The token has no remember-me claim: the
+  refresh-token lifetime was 691200 s whether the box was ticked or not.
+- The setting is visible as a cookie in the WebView's network session. The cookies are scoped to
+  `https://secure.zwift.com/auth/realms/zwift/`. Querying `https://secure.zwift.com/` alone returns
+  only `_dd_s_v2` and `sticky`, so use the realm path.
+- Ticked: `KEYCLOAK_REMEMBER_ME` is present (31 bytes), and `KEYCLOAK_IDENTITY` and
+  `KEYCLOAK_SESSION` expire in about a year. Unticked: `KEYCLOAK_REMEMBER_ME` is absent, and
+  `KEYCLOAK_IDENTITY` is a session cookie with no expiry.
+- The login WebView keeps its cookies in `~/snap/zwift/common/webkit/cookies.sqlite`
+  (`persistent_webview` in `gui.rs`), so a remember-me cookie survives a launcher restart. The
+  directory is 0700 and the database 0600. Those cookies are live session secrets: never copy, log
+  or commit them.
+- webkit6 0.4 `CookieManager::all_cookies` needs the `v2_42` feature, which the crate does not enable.
+  Use `CookieManager::cookies(uri, cancellable, callback)` instead.
+- When probing cookies, log names, flags, expiry and length, or a hash prefix. Never log values:
+  they are session secrets and would end up in `zwift.log`.
+
+### zoffline reference (fatsbrown/zwift-offline)
+
+A clone of [fatsbrown/zwift-offline](https://github.com/fatsbrown/zwift-offline), the maintained fork of
+the deprecated zoffline, lives at `~/zwift-offline` (outside the repo). It is not part of the snap. It is a
+local stand-in for Zwift's servers, so it shows the shape of the real login flow but not the real
+account chooser. Findings:
+
+- Its launcher login form, `cdn/static/web/launcher/login_form.html`, has the same "Remember me"
+  checkbox (`name="remember"`). It is a single username and password form. There is no account list.
+- Remember-me is server-side. `login()` in `zwift_offline.py` (~line 651) stores `user.remember` and
+  sets Flask-Login's `remember_token` cookie. This is an analogy for `KEYCLOAK_REMEMBER_ME`, not
+  the same cookie.
+- The launcher handoff is `zwift_offline.py` (~line 4930): the `.../openid-connect/auth` route
+  redirects to `http://zwift/?code=zwift_refresh_token<JWT>`. The JWT carries the session cookie.
+  `oauth.rs` intercepts the same redirect for the real login.
+- The token endpoint (`zwift_offline.py` ~line 4968) returns a fake access and refresh token pair.
+  It does no real identity check.
+- The real token endpoints used by the fork's scripts are `secure.zwift.com/auth/realms/zwift/protocol/openid-connect/token`
+  and `.../tokens/access/codes` (`scripts/get_profile.py` ~line 57).
+- No account-list endpoint was found, either in zoffline or in the launcher's strings. The
+  `ZwiftLauncher.exe` account list is still unexplained.
 
 ## Snap specifics that are easy to break
 
