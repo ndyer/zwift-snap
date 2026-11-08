@@ -31,6 +31,21 @@ lint:
         - usr/lib/x86_64-linux-gnu/libfreebl3.so
         - usr/lib/x86_64-linux-gnu/libnssdbm3.so
         - usr/lib/x86_64-linux-gnu/libnssckbi.so
+    # libenchant-2-2 (WebKit's spellcheck) dlopens these aspell/hunspell
+    # plugins. Their libraries are not staged and no dictionaries ship, so
+    # spellcheck is unavailable in the snap and the plugins are inert.
+    - library:
+        - usr/lib/aspell/x86_64-linux-gnu/context-filter.so
+        - usr/lib/aspell/x86_64-linux-gnu/ddtp-filter.so
+        - usr/lib/aspell/x86_64-linux-gnu/debctrl-filter.so
+        - usr/lib/aspell/x86_64-linux-gnu/email-filter.so
+        - usr/lib/aspell/x86_64-linux-gnu/markdown-filter.so
+        - usr/lib/aspell/x86_64-linux-gnu/nroff-filter.so
+        - usr/lib/aspell/x86_64-linux-gnu/sgml-filter.so
+        - usr/lib/aspell/x86_64-linux-gnu/tex-filter.so
+        - usr/lib/aspell/x86_64-linux-gnu/texinfo-filter.so
+        - usr/lib/x86_64-linux-gnu/enchant-2/enchant_aspell.so
+        - usr/lib/x86_64-linux-gnu/enchant-2/enchant_hunspell.so
 
 plugs:
   gpu-2604:
