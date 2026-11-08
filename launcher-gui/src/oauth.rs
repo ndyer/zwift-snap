@@ -6,12 +6,14 @@
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const AUTH_URL: &str = "https://secure.zwift.com/auth/realms/zwift/protocol/openid-connect/auth";
 const TOKEN_URL: &str = "https://secure.zwift.com/auth/realms/zwift/protocol/openid-connect/token";
 const REDIRECT_URI: &str = "http://zwift/";
 const CLIENT_ID: &str = "Game_Launcher";
 const SCOPE: &str = "openid";
+const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Generate a random PKCE code verifier (base64url-encoded 32 bytes).
 pub fn generate_pkce_verifier() -> String {
@@ -52,6 +54,22 @@ pub fn build_authorization_url(challenge: &str, state: &str) -> String {
     )
 }
 
+/// Build a readable message from a failed token response. Only the `error` and
+/// `error_description` fields are shown, never the rest of the body.
+fn describe_token_error(status: u16, body: &str) -> String {
+    let detail = serde_json::from_str::<Value>(body).ok().and_then(|json| {
+        let error = json["error"].as_str()?;
+        Some(match json["error_description"].as_str() {
+            Some(description) if !description.is_empty() => format!("{error}: {description}"),
+            _ => error.to_owned(),
+        })
+    });
+    match detail {
+        Some(detail) => format!("Token request failed (HTTP {status}): {detail}"),
+        None => format!("Token request failed (HTTP {status})"),
+    }
+}
+
 /// Exchange an authorization code for an OAuth token.
 pub fn exchange_code_for_token(code: &str, verifier: &str) -> Result<Value, String> {
     let body = format!(
@@ -61,11 +79,19 @@ pub fn exchange_code_for_token(code: &str, verifier: &str) -> Result<Value, Stri
         urlencoding::encode(REDIRECT_URI),
         urlencoding::encode(verifier),
     );
-    let response = ureq::post(TOKEN_URL)
+    let response = match ureq::post(TOKEN_URL)
+        .timeout(TOKEN_REQUEST_TIMEOUT)
         .set("Accept", "application/json")
         .set("Content-Type", "application/x-www-form-urlencoded")
         .send_string(&body)
-        .map_err(|e| format!("Token request failed: {e}"))?;
+    {
+        Ok(response) => response,
+        Err(ureq::Error::Status(status, response)) => {
+            let text = response.into_string().unwrap_or_default();
+            return Err(describe_token_error(status, &text));
+        }
+        Err(e) => return Err(format!("Token request failed: {e}")),
+    };
     let body: String = response
         .into_string()
         .map_err(|e| format!("Failed to read token response body: {e}"))?;
@@ -104,4 +130,34 @@ pub fn exchange_and_save(code: &str, verifier: &str) -> Result<(), String> {
         .map(|common| PathBuf::from(common).join("pairing-token.json"))
         .map_err(|_| "SNAP_USER_COMMON is not set".to_owned())?;
     save_token(&token, &token_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::describe_token_error;
+
+    #[test]
+    fn token_error_shows_error_and_description() {
+        let body = r#"{"error":"invalid_grant","error_description":"Code not valid"}"#;
+        assert_eq!(
+            describe_token_error(400, body),
+            "Token request failed (HTTP 400): invalid_grant: Code not valid"
+        );
+    }
+
+    #[test]
+    fn token_error_without_description_shows_error_only() {
+        assert_eq!(
+            describe_token_error(401, r#"{"error":"unauthorized_client"}"#),
+            "Token request failed (HTTP 401): unauthorized_client"
+        );
+    }
+
+    #[test]
+    fn token_error_with_unparseable_body_shows_status_only() {
+        assert_eq!(
+            describe_token_error(502, "<html>bad gateway</html>"),
+            "Token request failed (HTTP 502)"
+        );
+    }
 }
