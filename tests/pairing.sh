@@ -195,6 +195,12 @@ check_trainer() {
     local characteristic devices waited=0
     grep -aq "Device: \"${BLUEZOO_TRAINER_NAME}\" has new connection status: connected" "${GAME_LOG}" \
         || { report_failure; die "Zwift did not connect the mock trainer ${BLUEZOO_TRAINER_NAME}"; }
+    # BlueZ drops LE connections while a discovery runs, so winebth stops discovery before
+    # connecting the trainer and starts it again once the connection is up.
+    grep -aq "Pausing LE discovery on" "${OUT_DIR}/game.log" \
+        || { report_failure; die "winebth did not pause LE discovery while connecting the trainer"; }
+    grep -aq "Resuming LE discovery on" "${OUT_DIR}/game.log" \
+        || { report_failure; die "winebth did not resume LE discovery after connecting the trainer"; }
     # The last device list in the log is the current assignment (captured first: grep -q would
     # close the pipe early and pipefail would report tac's SIGPIPE as a failure)
     while :; do
@@ -216,6 +222,13 @@ check_trainer() {
 # start_game: drive the game directly with the stub's fake OAuth token, inside the snap
 start_game() {
     local run_seconds="${1:-${RUN_SECONDS_DEFAULT}}"
+    # The discovery-pause assertions above read winebth's trace, so +winebth must be on
+    case "${WINEDEBUG:-}" in
+    *winebth*) ;;
+    "") WINEDEBUG="+winebth" ;;
+    *) WINEDEBUG="${WINEDEBUG},+winebth" ;;
+    esac
+    export WINEDEBUG
     cat > "${RUN_SCRIPT}" <<EOF
 set -uo pipefail
 export ZWIFT_NO_GUI=1
@@ -263,6 +276,18 @@ EOF
             | tee "${OUT_DIR}/game.log" > /dev/null
     ) &
     game_pid=$!
+}
+
+# stop_game: shut the prefix down now and wait for the game's snap run to finish, so the
+# winebth driver-unload trace is flushed before it is checked. The keep-alive loop inside
+# the game script exits once ZwiftApp.exe is gone, then shuts the server down itself.
+stop_game() {
+    [[ -n ${game_pid} ]] || return 0
+    # shellcheck disable=SC2016
+    snap run --shell zwift.wine -c 'WINEPREFIX="$HOME/../common/.wine" wineserver -k' \
+        > /dev/null 2>&1 || true
+    wait "${game_pid}" 2> /dev/null || true
+    game_pid=""
 }
 
 main() {
@@ -339,6 +364,14 @@ main() {
     # keep a screenshot of the pairing screen with the connected trainer
     "${ROOT}/tests/tools/yarf/yarf.sh" screenshot -s "${WAYLAND_SOCKET}" "${OUT_DIR}/pairing-screen.png" > /dev/null 2>&1 \
         || echo "pairing: note: could not capture the pairing screenshot"
+
+    if [[ ${explore_mode} == false ]]; then
+        # Stopping the prefix now exercises winebth's driver-shutdown path: a device that is still
+        # connected must be disconnected, so the mock does not keep advertising it as connected.
+        stop_game
+        grep -aq "Disconnecting .* on driver shutdown" "${OUT_DIR}/game.log" \
+            || { report_failure; die "winebth did not disconnect the trainer when the driver shut down"; }
+    fi
 
     if [[ ${explore_mode} == true ]]; then
         echo "pairing: explore mode - game running for ${RUN_SECONDS_EXPLORE}s at pairing screen"

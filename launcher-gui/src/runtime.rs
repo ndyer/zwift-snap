@@ -1,6 +1,7 @@
 //! Adapter connecting the launcher lifecycle to the Rust Wine implementation.
 
 use crate::display::{configure_file, DisplayMode};
+use crate::graphics::{self, Setting as GraphicsSetting};
 use crate::install::{self, InstallConfig, InstallProgress};
 use crate::launch::{self, LaunchConfig};
 use crate::logging::Logger;
@@ -18,6 +19,7 @@ pub struct Runtime<'a> {
     pub logger: &'a Logger,
     pub cache: &'a std::path::Path,
     pub display_mode: DisplayMode,
+    pub graphics: GraphicsSetting,
     pub wait_for_window: bool,
     pub disable_egl: bool,
     pub update_iterations: u32,
@@ -120,6 +122,24 @@ impl LauncherBackend for Runtime<'_> {
         self.logger
             .info(&format!("Set Zwift display mode to {}", self.display_mode));
         Ok(())
+    }
+
+    fn configure_graphics(&mut self) -> io::Result<()> {
+        // Never fail the launch over this: a profile the user did not get is
+        // better than no game, and the game's own GPU table still applies.
+        let originals = self.install.user_common.join("graphics");
+        match graphics::apply(self.install.install_dir, &originals, self.graphics) {
+            Ok(choice) => {
+                self.logger.info(&format!("Graphics profile: {choice}"));
+                Ok(())
+            }
+            Err(error) => {
+                self.logger.warning(&format!(
+                    "Failed to set the Zwift graphics profile ({error}); leaving it to the game"
+                ));
+                Ok(())
+            }
+        }
     }
 
     fn start(&mut self) -> io::Result<()> {
@@ -367,6 +387,7 @@ mod tests {
                 width: 1280,
                 height: 720,
             },
+            graphics: GraphicsSetting::GameDefault,
             wait_for_window: false,
             disable_egl: false,
             update_iterations: 2,

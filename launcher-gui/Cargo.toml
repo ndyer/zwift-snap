@@ -3,7 +3,7 @@ name = "zwift-gui"
 version = "0.1.0"
 edition = "2021"
 description = "Rust replacement for the Zwift snap launcher scripts and yad dialogs"
-license = "Unlicense"
+license = "MIT OR Apache-2.0"
 
 [lib]
 name = "zwift_gui"
@@ -24,6 +24,11 @@ sha2 = "0.10.0"
 serde_json = "1.0"
 getrandom = "0.2"
 urlencoding = "2.1"
+# The graphics profile check loads EGL at runtime, so these stay optional in
+# practice: a missing libEGL or driver only disables the measurement.
+glow = "0.18"
+glutin_egl_sys = "0.7"
+libloading = "0.9"
 
 [features]
 gtk-ui = ["dep:gtk"]

@@ -9,7 +9,7 @@ description: |
   launcher then requires login through an embedded browser before starting Zwift.
 # The version comes from the git tags, see the version-generator part
 adopt-info: version-generator
-license: Unlicense
+license: MIT OR Apache-2.0
 contact: https://github.com/ndyer/zwift-snap/issues
 website: https://github.com/ndyer/zwift-snap
 base: core26

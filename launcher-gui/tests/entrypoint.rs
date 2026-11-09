@@ -59,6 +59,29 @@ esac"#,
         fixture
     }
 
+    fn game_dir(&self) -> PathBuf {
+        self.root
+            .join("common/.wine/drive_c/Program Files (x86)/Zwift")
+    }
+
+    /// Fabricate the game's graphics profile files, so the launcher can write them.
+    /// Tests that do not call this keep the launcher on the "no profile files" path
+    /// and never try to measure the (absent) GPU.
+    fn write_graphics_profiles(&self) {
+        let configs = self.game_dir().join("data/configs");
+        fs::create_dir_all(&configs).unwrap();
+        for profile in ["basic", "medium", "high", "ultra"] {
+            fs::write(configs.join(format!("{profile}.txt")), profile).unwrap();
+        }
+    }
+
+    /// The content of all four graphics profile files, in `Profile::ALL` order.
+    fn graphics_contents(&self) -> [String; 4] {
+        ["basic", "medium", "high", "ultra"].map(|profile| {
+            fs::read_to_string(self.game_dir().join(format!("data/configs/{profile}.txt"))).unwrap()
+        })
+    }
+
     /// Fabricate what the Wine prerequisites leave behind, so the launcher sees the
     /// prefix as installed. Kept in step with the sentinels in
     /// `launcher-gui/src/install.rs` (`WINETRICKS_PREREQUISITES`).
@@ -235,4 +258,57 @@ fn unavailable_display_falls_back_to_terminal() {
         .read("common/zwift.log")
         .contains("using terminal output"));
     assert_eq!(fixture.read("cleanup"), "-k\n-w\n");
+}
+
+#[test]
+fn a_forced_graphics_profile_is_written_into_every_profile_file() {
+    let fixture = Fixture::new();
+    fixture.write_graphics_profiles();
+    let result = output(fixture.command().env("ZWIFT_GRAPHICS_PROFILE", "ultra"));
+    assert!(result.status.success(), "{result:?}");
+    // All four files hold the forced profile's content, so it does not matter
+    // which one the game's GPU table picks.
+    assert_eq!(fixture.graphics_contents(), ["ultra"; 4]);
+    // The game's own content is saved before being overwritten.
+    for profile in ["basic", "medium", "high", "ultra"] {
+        assert_eq!(
+            fixture.read(&format!("common/graphics/{profile}.txt")),
+            profile
+        );
+    }
+    assert_eq!(fixture.read("common/graphics/applied"), "ultra\n");
+    assert!(fixture
+        .read("common/zwift.log")
+        .contains("Graphics profile: ultra (set with ZWIFT_GRAPHICS_PROFILE)"));
+}
+
+#[test]
+fn the_default_graphics_setting_restores_the_game_files() {
+    let fixture = Fixture::new();
+    fixture.write_graphics_profiles();
+    let result = output(fixture.command().env("ZWIFT_GRAPHICS_PROFILE", "high"));
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(fixture.graphics_contents(), ["high"; 4]);
+    // The fake wine reports ZwiftApp.exe only once per fixture.
+    fs::remove_file(fixture.root.join("seen")).unwrap();
+    let result = output(fixture.command().env("ZWIFT_GRAPHICS_PROFILE", "default"));
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(
+        fixture.graphics_contents(),
+        ["basic", "medium", "high", "ultra"]
+    );
+    assert!(!fixture.root.join("common/graphics/applied").exists());
+    assert!(fixture
+        .read("common/zwift.log")
+        .contains("Graphics profile: game default (left to the game)"));
+}
+
+#[test]
+fn invalid_graphics_profile_never_starts_wine() {
+    let fixture = Fixture::new();
+    let result = output(fixture.command().env("ZWIFT_GRAPHICS_PROFILE", "fastest"));
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("Unknown graphics profile"));
+    assert!(!fixture.root.join("commands").exists());
+    assert!(!fixture.root.join("cleanup").exists());
 }

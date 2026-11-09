@@ -31,6 +31,11 @@ pub trait LauncherBackend {
     fn install(&mut self) -> Result<(), Self::Error>;
     fn update(&mut self) -> Result<(), Self::Error>;
     fn configure_display(&mut self) -> Result<(), Self::Error>;
+    /// Writes the graphics profile into the installed game. The default does
+    /// nothing, so a backend only implements it when it can touch the game files.
+    fn configure_graphics(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
     fn start(&mut self) -> Result<(), Self::Error>;
     fn wait_for_exit(&mut self) -> Result<(), Self::Error>;
     fn cleanup(&mut self) -> Result<(), Self::Error>;
@@ -124,6 +129,12 @@ fn run_inner<B: LauncherBackend, U: LauncherUi>(
         LauncherError(format!("Failed to configure Zwift display mode: {error}"))
     })?;
     check()?;
+    backend.configure_graphics().map_err(|error| {
+        LauncherError(format!(
+            "Failed to configure Zwift graphics profile: {error}"
+        ))
+    })?;
+    check()?;
     if !ui.login_required() {
         check()?;
         return Err(LauncherError(
@@ -192,6 +203,10 @@ mod tests {
             self.calls.push("display");
             Ok(())
         }
+        fn configure_graphics(&mut self) -> Result<(), Self::Error> {
+            self.calls.push("graphics");
+            Ok(())
+        }
         fn start(&mut self) -> Result<(), Self::Error> {
             self.calls.push("start");
             self.start
@@ -240,6 +255,7 @@ mod tests {
                 "install",
                 "installed",
                 "display",
+                "graphics",
                 "start",
                 "wait",
                 "cleanup"

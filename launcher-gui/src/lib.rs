@@ -3,6 +3,8 @@
 pub mod application;
 pub mod cancel;
 pub mod display;
+pub mod gpu_test;
+pub mod graphics;
 pub mod install;
 pub mod launch;
 pub mod logging;

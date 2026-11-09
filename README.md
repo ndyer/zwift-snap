@@ -51,6 +51,7 @@ debug audio run `WINEDEBUG=+pulse,+mmdevapi zwift`.
 ## Environment variables
 
 - `ZWIFT_DISPLAY_MODE` — shared launcher/game display mode, either `fullscreen` (default) or a resolution like `1920x1080`. A custom resolution implies windowed mode (fullscreen disabled).
+- `ZWIFT_GRAPHICS_PROFILE` — Zwift graphics profile to use: `auto` (default), `basic`, `medium`, `high`, `ultra` or `default`.
 - `WINE_DISABLE_EGL`
 - `ZWIFT_NO_GUI` (set to `1` for no dialogs, only terminal output)
 - `ZWIFT_BLUETOOTH_DEBUG` (set to `1` to enable Wine Bluetooth traces for hardware testing)
@@ -59,6 +60,22 @@ debug audio run `WINEDEBUG=+pulse,+mmdevapi zwift`.
 Display preferences are added when missing, including on a fresh install. If an
 existing preferences file cannot be updated, the launcher reports an error instead
 of starting with the wrong display mode.
+
+## Graphics profile
+
+Zwift picks its graphics profile from an internal GPU table that rates many cards below
+what they can render. The launcher can override that. With `ZWIFT_GRAPHICS_PROFILE=auto`
+(the default) it measures the GPU at launch and writes the matching profile; a fixed value
+(`basic`, `medium`, `high`, `ultra`) skips the measurement, and `default` leaves Zwift's own
+files alone so its GPU table decides again.
+
+The profiles are the game's own `data/configs/*.txt` files. Before overwriting them the
+launcher saves a copy of each next to the prefix in `~/snap/zwift/common/graphics/` and
+writes the chosen profile's content into *all four* files, so it does not matter which one
+the game picks. A patcher update that replaces a file is recognised and its saved copy
+refreshed. The choice is logged as `Graphics profile: ...` in `zwift.log`; if the GPU test
+cannot run (no GPU access, for example) the launcher logs a warning and leaves the files to
+the game.
 
 To test a real Bluetooth device, run `ZWIFT_BLUETOOTH_DEBUG=1 zwift`. This enables Wine's
 `+bluetooth` and `+winebth` channels and writes the runtime trace to
@@ -84,3 +101,16 @@ own login flow (or accepts explicitly supplied game arguments).
   device does not show up, pair it through the Zwift companion app.
 
 Development and testing guidance is in [AGENTS.md](AGENTS.md).
+
+## License
+
+The launcher and snap packaging in this repository are licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+Zwift itself is proprietary and is not covered by these licenses; it is downloaded
+separately at runtime.
+

@@ -458,6 +458,51 @@ account chooser. Findings:
 - No account-list endpoint was found, either in zoffline or in the launcher's strings. The
   `ZwiftLauncher.exe` account list is still unexplained.
 
+## Graphics profile
+
+The launcher can override Zwift's GPU table, which rates many cards below what they can
+render. `ZWIFT_GRAPHICS_PROFILE` (parsed in `application.rs`, applied in
+`graphics.rs`) selects `auto` (default), `basic`, `medium`, `high`, `ultra` or `default`:
+
+- `auto` measures the GPU at launch (`gpu_test.rs`, a port of the benchmark from
+  [bpauli/zwift-bootstrap](https://github.com/bpauli/zwift-bootstrap), see the module doc for
+  attribution) and maps the frame time to a profile with `MAX_FRAME_MS_FOR_60_FPS`.
+- A fixed profile skips the measurement.
+- `default` leaves Zwift's files untouched, so its own GPU table decides again.
+
+The profiles are the game's `data/configs/*.txt`. The launcher writes the chosen profile into
+*all four* files (so it does not matter which the game reads) and keeps the originals in
+`~/snap/zwift/common/graphics/` plus an `applied` marker recording what it wrote. On the next
+run a file whose content differs from the marker is treated as patcher-updated and its saved
+original is refreshed before the profile is applied again. `graphics.rs` has the unit tests;
+`tests/entrypoint.rs` covers the end-to-end write/restore/validation paths.
+
+`gpu_test.rs` uses bpauli's `glow` + `glutin_egl_sys` + `libloading` stack (not the
+`khronos-egl` + `glow` combination that was first considered) so the published frame-time
+thresholds stay calibrated against the same measurement. The GPU test needs EGL; without it
+the launcher logs a warning and leaves the files to the game.
+
+### Not adopted from bpauli/zwift-bootstrap
+
+- ANT+ support: strict confinement has no `CAP_NET_ADMIN`, so the snap cannot open the raw
+  sockets an ANT+ USB stick needs. Not implementable here.
+- The 30–50 ms BLE connection interval: same `CAP_NET_ADMIN` constraint.
+- The direct-CDN installer: the snap keeps downloading Zwift through the official launcher
+  flow (`install.rs`), which the patcher understands; a hand-rolled CDN download was deferred.
+
+## Bluetooth discovery vs. connect (wine fork)
+
+BlueZ drops LE connections while a discovery is running, so `winebth.c` in the
+`zwift-radios-rebased` wine branch stops LE discovery before it connects a device and starts
+it again once the connection is up. The state is per radio (`le_discovery_refs`,
+`discovery_paused`, guarded by `discovery_cs`) and driven by the `connecting` flags of the
+radio's devices, so a device destroyed mid-connect cannot leak a pause. Discovery is paused
+*before* `props_cs` is taken, because stopping it blocks on the event loop thread, which needs
+`props_cs`. When the driver is removed (`IRP_MN_REMOVE_DEVICE`) it disconnects any device
+that is still connected, so a killed prefix does not leave the peer advertising it as
+connected. `tests/pairing.sh` asserts the pause/resume lines and the shutdown disconnect from
+the `+winebth` trace.
+
 ## Snap specifics that are easy to break
 
 - **Pruning**: the wine part aggressively prunes (man pages, locales, wine's build

@@ -2,6 +2,7 @@
 
 use crate::cancel::Cancellation;
 use crate::display::DisplayMode;
+use crate::graphics::Setting as GraphicsSetting;
 use crate::install::{InstallConfig, InstallProgress, EXPECTED_DRIVE_C_BYTES};
 use crate::launch::LaunchConfig;
 use crate::logging::Logger;
@@ -21,6 +22,7 @@ pub struct Config {
     pub log: PathBuf,
     pub cache: PathBuf,
     pub display: DisplayMode,
+    pub graphics: GraphicsSetting,
     pub no_gui: bool,
     pub skip_login: bool,
     pub disable_egl: bool,
@@ -100,6 +102,16 @@ impl Config {
             })?)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
         };
+        let graphics = match value("ZWIFT_GRAPHICS_PROFILE") {
+            None => GraphicsSetting::Auto,
+            Some(profile) => GraphicsSetting::parse(profile.to_str().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "ZWIFT_GRAPHICS_PROFILE is not UTF-8",
+                )
+            })?)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
+        };
         let sample_interval = Duration::from_secs(number("ZWIFT_PROGRESS_INTERVAL", 5)?);
         if sample_interval.is_zero() {
             return Err(io::Error::new(
@@ -114,6 +126,7 @@ impl Config {
             log,
             cache,
             display,
+            graphics,
             no_gui: flag("ZWIFT_NO_GUI", 0)?,
             skip_login: false,
             disable_egl: flag("WINE_DISABLE_EGL", 0)?,
@@ -226,6 +239,7 @@ pub fn run(
         logger,
         cache: &config.cache,
         display_mode: config.display.clone(),
+        graphics: config.graphics,
         wait_for_window: graphical,
         disable_egl: config.disable_egl
             && std::env::var("XDG_SESSION_TYPE").as_deref() != Ok("wayland"),
