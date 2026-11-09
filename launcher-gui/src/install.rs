@@ -37,37 +37,25 @@ struct Prerequisite {
 /// winetricks runs every command-line verb in one process, in order, and exits
 /// non-zero on the first failing verb. One call therefore installs all of them and
 /// still stops the install before Zwift is downloaded, while separate calls would
-/// start the script, probe Wine and initialise the prefix once per verb. The order
-/// matters: `dotnet48` selects the Windows version the later verbs expect.
+/// start the script, probe Wine and initialise the prefix once per verb.
+///
+/// `.NET Framework 4.8` and `WebView2` are deliberately absent: both existed for
+/// Zwift's own `ZwiftLauncher.exe`, a .NET launcher hosting a WebView2 UI. The
+/// launcher shim replaces that program and nothing runs it any more, so neither is
+/// downloaded. The game itself is a native 64-bit binary and needs neither.
 ///
 /// The proof paths are checked against the pinned winetricks upstream, so they and
 /// the launcher must change together: the same reason the verb markers above are
 /// pinned.
-const WINETRICKS_PREREQUISITES: [Prerequisite; 4] = [
+const WINETRICKS_PREREQUISITES: [Prerequisite; 2] = [
     Prerequisite {
-        percent: 8,
-        message: "Installing .NET Framework 4.8, this takes several minutes",
-        verb: "dotnet48",
-        // dotnet48 installs both 32- and 64-bit frameworks; the 64-bit mscorlib is
-        // the one Zwift's 64-bit process needs, so it is the meaningful proof.
-        proof: Some("drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/mscorlib.dll"),
-    },
-    Prerequisite {
-        percent: 55,
+        percent: 10,
         message: "Installing the Direct3D shader compiler",
         verb: "d3dcompiler_47",
         proof: Some("drive_c/windows/system32/d3dcompiler_47.dll"),
     },
     Prerequisite {
-        percent: 60,
-        message: "Installing WebView2",
-        verb: "webview2",
-        // webview2 unpacks its runtime under a versioned subdirectory, so only the
-        // parent directory is stable across versions.
-        proof: Some("drive_c/Program Files (x86)/Microsoft/EdgeWebView/Application"),
-    },
-    Prerequisite {
-        percent: 75,
+        percent: 20,
         message: "Enabling the Vulkan renderer for video routes",
         verb: "renderer=vulkan",
         proof: None,
@@ -76,7 +64,8 @@ const WINETRICKS_PREREQUISITES: [Prerequisite; 4] = [
 
 /// Title shown until winetricks announces its first verb, and kept as a fallback
 /// when its output cannot be read.
-const WINETRICKS_PREREQUISITES_MESSAGE: &str = "Installing the wine prerequisites (.NET Framework 4.8, the Direct3D shader compiler, WebView2 and the Vulkan renderer), this takes several minutes";
+const WINETRICKS_PREREQUISITES_MESSAGE: &str =
+    "Installing the wine prerequisites (the Direct3D shader compiler and the Vulkan renderer)";
 
 /// The line winetricks prints (to stderr) before running each verb.
 const WINETRICKS_VERB_MARKER: &str = "Executing w_do_call ";
@@ -418,8 +407,8 @@ impl WinetricksProgress {
 
     /// Reports each configured verb once, in the configured order.
     ///
-    /// winetricks also announces the nested verbs it runs for a prerequisite (for
-    /// example `dotnet40` inside `dotnet48`), so only the configured verbs count.
+    /// winetricks also announces verbs it runs for its own setup, and verbs we do
+    /// not configure, so only the configured verbs count.
     /// Anything already reported, out of order or unknown is ignored; a verb that
     /// was missed entirely is skipped rather than reported late.
     fn report(&mut self, verb: &str, phases: &mut Vec<(u8, &'static str)>) {
@@ -712,10 +701,7 @@ mod tests {
         let calls = fixture.calls();
         assert_eq!(
             calls.lines().collect::<Vec<_>>(),
-            [
-                "wineboot",
-                "winetricks dotnet48 d3dcompiler_47 webview2 renderer=vulkan",
-            ]
+            ["wineboot", "winetricks d3dcompiler_47 renderer=vulkan"]
         );
         let messages: Vec<_> = events
             .iter()
@@ -725,13 +711,11 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            &messages[..7],
+            &messages[..5],
             [
                 "Setting up wine",
                 WINETRICKS_PREREQUISITES_MESSAGE,
-                "Installing .NET Framework 4.8, this takes several minutes",
                 "Installing the Direct3D shader compiler",
-                "Installing WebView2",
                 "Enabling the Vulkan renderer for video routes",
                 "Downloading Zwift",
             ]
@@ -828,7 +812,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("winetricks dotnet48"));
+            .contains("winetricks d3dcompiler_47"));
         assert!(!fixture.game("ZwiftApp.exe").exists());
     }
 
@@ -857,31 +841,26 @@ mod tests {
     fn winetricks_progress_follows_verb_markers_across_chunks() {
         let mut progress = WinetricksProgress::new();
         // a marker split over two reads is held back until the line is complete
-        assert!(progress.feed(b"Executing w_do_call dotne").is_empty());
+        assert!(progress.feed(b"Executing w_do_call d3dcomp").is_empty());
         assert_eq!(
-            progress.feed(b"t48\nExecuting w_do_call remove_mono\r\n"),
-            [(
-                8,
-                "Installing .NET Framework 4.8, this takes several minutes"
-            )]
+            progress.feed(b"iler_47\nExecuting w_do_call remove_mono\r\n"),
+            [(10, "Installing the Direct3D shader compiler")]
         );
-        // nested verbs of a prerequisite and unknown verbs are not in the list
+        // verbs winetricks runs for its own setup, and unknown verbs, are not listed
         assert!(progress
-            .feed(b"Executing w_do_call dotnet40\nExecuting w_do_call bogus\n")
+            .feed(b"Executing w_do_call remove_mono\nExecuting w_do_call bogus\n")
             .is_empty());
         // an already reported verb is not repeated
-        assert!(progress.feed(b"Executing w_do_call dotnet48\n").is_empty());
-        // a missed verb is skipped rather than reported out of order
-        assert_eq!(
-            progress.feed(b"Executing w_do_call renderer=vulkan\n"),
-            [(75, "Enabling the Vulkan renderer for video routes")]
-        );
         assert!(progress
             .feed(b"Executing w_do_call d3dcompiler_47\n")
             .is_empty());
+        assert_eq!(
+            progress.feed(b"Executing w_do_call renderer=vulkan\n"),
+            [(20, "Enabling the Vulkan renderer for video routes")]
+        );
         // unrelated output and a trailing partial line are ignored
         assert!(progress
-            .feed(b"Executing winetricks\nExecuting w_do_call web")
+            .feed(b"Executing winetricks\nExecuting w_do_call rend")
             .is_empty());
     }
 
@@ -1014,52 +993,23 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir(&dir).unwrap();
 
-        // An empty prefix has no prerequisite at all, so the first one is reported.
+        // An empty prefix has no prerequisite at all, so the probed one is reported.
         assert_eq!(
             missing_wine_prerequisite(&dir),
-            Some("drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/mscorlib.dll")
+            Some("drive_c/windows/system32/d3dcompiler_47.dll")
         );
         assert!(!wine_prerequisites_installed(&dir));
 
-        // The proof is a file for the libraries and a directory for EdgeWebView.
-        let proofs = [
-            (
-                "drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/mscorlib.dll",
-                false,
-            ),
-            ("drive_c/windows/system32/d3dcompiler_47.dll", false),
-            (
-                "drive_c/Program Files (x86)/Microsoft/EdgeWebView/Application",
-                true,
-            ),
-        ];
-        for (proof, is_dir) in proofs {
-            let path = dir.join(proof);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            if is_dir {
-                fs::create_dir(&path).unwrap();
-            } else {
-                fs::write(&path, "").unwrap();
-            }
-        }
+        let proof = "drive_c/windows/system32/d3dcompiler_47.dll";
+        let path = dir.join(proof);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "").unwrap();
         assert!(wine_prerequisites_installed(&dir));
 
-        // Every proof is load-bearing: removing any one alone makes the prefix incomplete.
-        for (proof, is_dir) in proofs {
-            let path = dir.join(proof);
-            if is_dir {
-                fs::remove_dir(&path).unwrap();
-            } else {
-                fs::remove_file(&path).unwrap();
-            }
-            assert_eq!(missing_wine_prerequisite(&dir), Some(proof));
-            assert!(!wine_prerequisites_installed(&dir));
-            if is_dir {
-                fs::create_dir(&path).unwrap();
-            } else {
-                fs::write(&path, "").unwrap();
-            }
-        }
+        // The proof is load-bearing: without it the prefix counts as incomplete.
+        fs::remove_file(&path).unwrap();
+        assert_eq!(missing_wine_prerequisite(&dir), Some(proof));
+        assert!(!wine_prerequisites_installed(&dir));
 
         // The registry-only Vulkan prerequisite has no proof path and is never probed.
         assert!(WINETRICKS_PREREQUISITES

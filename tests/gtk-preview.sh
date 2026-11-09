@@ -104,11 +104,8 @@ printf '<ZWIFT><CONFIG/></ZWIFT>' > "${data}/prefs.xml"
 # them, otherwise the launcher takes the install path instead. Kept in step with the
 # sentinels in launcher-gui/src/install.rs.
 prefix="${fixture}/common/.wine"
-mkdir -p "${prefix}/drive_c/windows/Microsoft.NET/Framework64/v4.0.30319"
-touch "${prefix}/drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/mscorlib.dll"
 mkdir -p "${prefix}/drive_c/windows/system32"
 touch "${prefix}/drive_c/windows/system32/d3dcompiler_47.dll"
-mkdir -p "${prefix}/drive_c/Program Files (x86)/Microsoft/EdgeWebView/Application"
 cat > "${fixture}/bin/winepath" <<'STUB'
 #!/bin/sh
 printf 'C:\\Zwift\n'

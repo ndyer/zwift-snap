@@ -235,18 +235,9 @@ mod tests {
     /// Fabricate what the Wine prerequisites leave behind, so `installed()` is true.
     /// Kept in step with `install::WINETRICKS_PREREQUISITES`.
     fn write_wine_prerequisites(prefix: &Path) {
-        for proof in [
-            "drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/mscorlib.dll",
-            "drive_c/windows/system32/d3dcompiler_47.dll",
-        ] {
-            let path = prefix.join(proof);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, "").unwrap();
-        }
-        fs::create_dir_all(
-            prefix.join("drive_c/Program Files (x86)/Microsoft/EdgeWebView/Application"),
-        )
-        .unwrap();
+        let path = prefix.join("drive_c/windows/system32/d3dcompiler_47.dll");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "").unwrap();
     }
 
     #[cfg(not(feature = "gtk-ui"))]
