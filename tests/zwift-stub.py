@@ -339,7 +339,8 @@ def main() -> None:
         server.context = context
         port = server.server_address[1]
         if settings.token_file:
-            # runfromprocess forwards a Windows command line; spaces split the token argument.
+            # The token travels as --token=<json> on a Windows command line; keep it
+            # compact so quoting cannot split it.
             settings.token_file.write_text(json.dumps(fake_token(), separators=(",", ":")))
         if settings.ready_file:
             Path(settings.ready_file + ".pid").write_text(f"{os.getpid()}\n")

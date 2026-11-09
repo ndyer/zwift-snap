@@ -8,7 +8,6 @@ use crate::logging::Logger;
 use crate::orchestration::LauncherBackend;
 use crate::process::run_output_timeout;
 use crate::update;
-use crate::wine_update::WineUpdate;
 use std::io::{self, ErrorKind};
 use std::process::Command;
 use std::time::Duration;
@@ -22,7 +21,6 @@ pub struct Runtime<'a> {
     pub graphics: GraphicsSetting,
     pub wait_for_window: bool,
     pub disable_egl: bool,
-    pub update_iterations: u32,
     pub progress: &'a (dyn Fn(InstallProgress) + Sync),
 }
 
@@ -87,24 +85,18 @@ impl LauncherBackend for Runtime<'_> {
 
     fn update(&mut self) -> io::Result<()> {
         let progress = self.progress;
-        let mut on_progress = |percent, message: &str| {
+        let config = update::UpdateConfig {
+            install_dir: self.install.install_dir,
+            staging_dir: self.install.staging_dir,
+            jobs: self.install.jobs,
+            cdn_base: self.install.cdn_base,
+        };
+        update::update_if_needed(&config, self.logger, &|percent, message| {
             progress(InstallProgress::Phase {
                 percent,
                 message: message.to_string(),
             })
-        };
-        let mut backend = WineUpdate {
-            install_dir: self.install.install_dir,
-            wine_prefix: Some(self.install.wine_prefix),
-            tools: self.install.tools,
-            logger: self.logger,
-            on_progress: &mut on_progress,
-        };
-        update::update_if_needed(
-            &mut backend,
-            self.update_iterations,
-            self.install.poll_interval,
-        )
+        })
         .map(|_| ())
         .map_err(io::Error::other)
     }
@@ -209,6 +201,7 @@ impl LauncherBackend for Runtime<'_> {
         if let Err(error) = install::cleanup_artifacts(
             self.install.wine_prefix,
             self.install.user_common,
+            self.install.staging_dir,
             self.cache,
         ) {
             errors.push(format!("Installer artifact cleanup: {error}"));
@@ -221,8 +214,7 @@ impl LauncherBackend for Runtime<'_> {
     }
 }
 
-/// Default update polling limit: 60 polls at the caller's configured interval.
-pub const DEFAULT_UPDATE_ITERATIONS: u32 = 60;
+/// Default interval for the launch steps that poll for the game.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 #[cfg(test)]
@@ -230,7 +222,7 @@ mod tests {
     use super::*;
     #[cfg(not(feature = "gtk-ui"))]
     use crate::orchestration::{self, Failure, LauncherUi};
-    use crate::wine_update::Tools;
+    use crate::wine_tools::Tools;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
@@ -276,6 +268,8 @@ mod tests {
     fn runs_installed_game_and_cleans_up_with_stub_wine() {
         let _lock = crate::SCRIPT_TEST_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("zwift-runtime-{}", std::process::id()));
+        // A cancelled earlier run may have left this behind under a reused pid.
+        let _ = fs::remove_dir_all(&dir);
         fs::create_dir(&dir).unwrap();
         let prefix = dir.join("prefix");
         let common = dir.join("common");
@@ -290,25 +284,37 @@ mod tests {
         }
         fs::write(
             game.join("Zwift_ver_cur.xml"),
-            "<Zwift sversion=\"1.124.0 x\"/>",
+            "<Zwift version=\"1.124.0\" sversion=\"1.124.0 x\" manifest=\"manifest.xml\"/>",
         )
         .unwrap();
         fs::write(user.join("prefs.xml"), "<ZWIFT><CONFIG/></ZWIFT>").unwrap();
+        // A prefix installed by an older launcher; the cleanup reclaims it.
         fs::write(common.join("ZwiftSetup.exe"), "old setup").unwrap();
+        // The game is up to date, so the update transfers nothing: serve the same
+        // version from a local CDN.
+        let cdn = dir.join("cdn");
+        crate::test_support::write_cdn(
+            &cdn,
+            "1.124.0",
+            &[("ZwiftApp.exe", ""), ("ZwiftLauncher.exe", "")],
+        );
+        // The snap's windows-helpers part, copied into the game directory by
+        // the launch step.
+        let shim = dir.join("snap/bin/ZwiftLauncher.exe");
+        fs::create_dir_all(shim.parent().unwrap()).unwrap();
+        fs::write(&shim, "shim").unwrap();
         let tools = Tools {
             wine: dir.join("wine"),
             winepath: dir.join("winepath"),
             wineserver: dir.join("wineserver"),
-            wget: dir.join("wget"),
         };
         script(&tools.winepath, "printf 'C:\\\\Zwift\\n'");
-        script(&tools.wget, "printf '<Zwift sversion=\"1.124.0 x\"/>'");
         script(
             &tools.wineserver,
             &format!(
                 "if [ \"$1\" = -k ]; then echo stopped >> '{0}/calls'; fi\n\
                  if [ \"$1\" = -w ]; then\n\
-                   i=0; while [ ! -f '{0}/launcher-done' ] || [ ! -f '{0}/game-done' ]; do\n\
+                   i=0; while [ ! -f '{0}/game-done' ]; do\n\
                      i=$((i + 1)); [ \"$i\" -lt 200 ] || exit 1; sleep 0.05;\n\
                    done\n\
                  fi",
@@ -319,12 +325,10 @@ mod tests {
             &tools.wine,
             &format!(
                 "case \"$1\" in\n\
-                 start) if [ \"$4\" = ZwiftLauncher.exe ]; then name=launcher; else name=game; fi\n\
-                   (i=0; while [ ! -f '{0}/'$name'-release' ]; do\n\
+                 start) (i=0; while [ ! -f '{0}/game-release' ]; do\n\
                       i=$((i + 1)); if [ \"$i\" -ge 200 ]; then : > '{0}/timed-out'; exit 1; fi; sleep 0.05;\n\
-                    done; printf '%s descendant output\\n' \"$name\"; : > '{0}/'$name'-done') & ;;\n\
+                    done; printf 'game descendant output\\n'; : > '{0}/game-done') & ;;\n\
                  tasklist) case \"$5\" in\n\
-                   *ZwiftLauncher.exe) : > '{0}/launcher-release'; printf 'PID: 41\\n';;\n\
                    *ZwiftApp.exe) : > '{0}/game-release'; if [ ! -f '{0}/seen' ]; then : > '{0}/seen'; printf 'PID: 42\\n'; fi;;\n\
                  esac;;\n\
                  taskkill) :;;\n\
@@ -350,26 +354,29 @@ mod tests {
             progress_ui.progress(event.clone());
             events.lock().unwrap().push(event);
         };
-        let runfrom = dir.join("runfrom.exe");
         let window = dir.join("window.exe");
         let wineboot = dir.join("wineboot");
         let winetricks = dir.join("winetricks");
+        let staging = common.join("download");
+        let cdn_base = format!("file://{}", cdn.display());
         let install = InstallConfig {
             wine_prefix: &prefix,
             user_common: &common,
             install_dir: &game,
+            staging_dir: &staging,
+            launcher_shim: &shim,
             wineboot: &wineboot,
             winetricks: &winetricks,
             tools: &tools,
-            download_iterations: 2,
-            poll_interval: Duration::ZERO,
+            cdn_base: &cdn_base,
+            jobs: 2,
             expected_drive_c_bytes: 0,
             sample_interval: Duration::from_secs(1),
         };
         let launch = LaunchConfig {
             wine_prefix: &prefix,
             install_dir: &game,
-            runfromprocess: &runfrom,
+            launcher_shim: &shim,
             wait_for_window: &window,
             tools: &tools,
             game_args: &[],
@@ -390,7 +397,6 @@ mod tests {
             graphics: GraphicsSetting::GameDefault,
             wait_for_window: false,
             disable_egl: false,
-            update_iterations: 2,
             progress: &progress,
         };
         #[cfg(not(feature = "gtk-ui"))]
@@ -447,17 +453,17 @@ mod tests {
             .contains("<USER_RESOLUTION_PREF>1280x720</USER_RESOLUTION_PREF>"));
         assert_eq!(fs::read_to_string(dir.join("calls")).unwrap(), "stopped\n");
         let output = fs::read_to_string(logger.path()).unwrap();
-        assert!(output.contains("launcher descendant output"));
         assert!(output.contains("game descendant output"));
         let streamed = streamed.lock().unwrap();
-        assert!(streamed
-            .windows(b"launcher descendant output".len())
-            .any(|window| window == b"launcher descendant output"));
         assert!(streamed
             .windows(b"game descendant output".len())
             .any(|window| window == b"game descendant output"));
         assert!(!dir.join("timed-out").exists());
         assert!(!common.join("ZwiftSetup.exe").exists());
+        assert_eq!(
+            fs::read_to_string(game.join("ZwiftLauncher.exe")).unwrap(),
+            "shim"
+        );
         assert!(events
             .lock()
             .unwrap()

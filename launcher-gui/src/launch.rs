@@ -1,7 +1,16 @@
-//! Start Zwift with the Windows launcher as its parent process.
+//! Start Zwift through a small Windows helper that acts as its launcher.
+//!
+//! `ZwiftApp.exe` reads its parent process's image path and only starts when
+//! that is `ZwiftLauncher.exe`, `ZwiftHelper.exe` or `devenv.exe`. Otherwise it
+//! tries to start Zwift's own launcher itself and exits, or fails with "Could
+//! not run Update process" (ERROR ZA1). The snap ships its own
+//! `ZwiftLauncher.exe` (see `launcher-windows/src/shim.rs`) that starts the
+//! command line it is given and waits for it, so
+//! `wine start ... ZwiftLauncher.exe ZwiftApp.exe ...` both supplies that parent
+//! name and forwards the game's exit code.
 
 use crate::logging::Logger;
-use crate::wine_update::Tools;
+use crate::wine_tools::Tools;
 use std::io;
 use std::path::Path;
 use std::process::Command;
@@ -10,7 +19,9 @@ use std::time::Duration;
 pub struct LaunchConfig<'a> {
     pub wine_prefix: &'a Path,
     pub install_dir: &'a Path,
-    pub runfromprocess: &'a Path,
+    /// The snap's `ZwiftLauncher.exe`, copied into the install directory before
+    /// every launch so a patcher or an older snap cannot leave a stale copy.
+    pub launcher_shim: &'a Path,
     pub wait_for_window: &'a Path,
     pub tools: &'a Tools,
     pub game_args: &'a [String],
@@ -123,8 +134,16 @@ fn run_command(command: &mut Command, logger: &Logger, label: &str) -> io::Resul
     Ok(())
 }
 
-fn stop_background_tasks(config: &LaunchConfig<'_>, logger: &Logger) {
-    for task in ["ZwiftLauncher.exe", "ZwiftWindowsCrashHandler.exe"] {
+fn stop_background_tasks(config: &LaunchConfig<'_>, logger: &Logger, keep_launcher: bool) {
+    // ZwiftLauncher.exe is our own shim and the game's parent: it must keep
+    // running so that it reaps the game, reports its exit code and stays the
+    // parent process the game checked at startup. After a failed start it is
+    // stopped so that a retry is not blocked by a half-started shim.
+    let mut tasks = vec!["ZwiftWindowsCrashHandler.exe"];
+    if !keep_launcher {
+        tasks.push("ZwiftLauncher.exe");
+    }
+    for task in tasks {
         match logger.command_output(wine(config).args(["taskkill", "/f", "/im", task])) {
             Ok(output) if output.status.success() => {}
             Ok(output) => logger.warning(&format!(
@@ -135,6 +154,24 @@ fn stop_background_tasks(config: &LaunchConfig<'_>, logger: &Logger) {
             Err(error) => logger.warning(&format!("Unable to stop {task}: {error}")),
         }
     }
+}
+
+/// Copy the snap's `ZwiftLauncher.exe` into the install directory.
+///
+/// The game needs it there next to `ZwiftApp.exe`, and the launcher's
+/// `installed()` check requires it, so it is refreshed on every launch: a snap
+/// update then replaces the shim without a reinstall. Only the content decides,
+/// so an unchanged shim is not rewritten and the patcher has nothing to notice.
+pub fn ensure_launcher_shim(install_dir: &Path, shim: &Path) -> io::Result<()> {
+    let contents = std::fs::read(shim)
+        .map_err(|error| io::Error::other(format!("Unable to read {}: {error}", shim.display())))?;
+    let target = install_dir.join("ZwiftLauncher.exe");
+    if std::fs::read(&target).is_ok_and(|existing| existing == contents) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(install_dir)?;
+    std::fs::write(&target, contents)
+        .map_err(|error| io::Error::other(format!("Unable to write {}: {error}", target.display())))
 }
 
 /// Read the saved OAuth token and turn it into a `--token=<json>` argument.
@@ -179,34 +216,24 @@ pub fn start(
 ) -> io::Result<WindowOutcome> {
     let token_args = token_arguments(config.token_file)?;
     let directory = wine_directory(config, logger)?;
+    ensure_launcher_shim(config.install_dir, config.launcher_shim)?;
     progress(95, "Starting Zwift");
-    run_command(
-        wine(config).args([
-            "start",
-            "/d",
-            &directory,
-            "ZwiftLauncher.exe",
-            "SilentLaunch",
-        ]),
-        logger,
-        "Zwift launcher",
-    )?;
-
-    let result: io::Result<()> = (|| {
-        let launcher_pid = wait_for_task(config, logger, "ZwiftLauncher.exe")?;
-        logger.info("Starting Zwift using wine");
-        let mut game = wine(config);
-        game.args(["start", "/d", &directory, "/unix"])
-            .arg(config.runfromprocess)
-            .arg(launcher_pid.to_string())
-            .arg("ZwiftApp.exe")
-            .args(config.game_args)
-            .args(&token_args);
-        run_command(&mut game, logger, "Zwift")?;
-        wait_for_task(config, logger, "ZwiftApp.exe")?;
-        Ok(())
-    })();
-    stop_background_tasks(config, logger);
+    logger.info("Starting Zwift using wine");
+    let mut game = wine(config);
+    game.args([
+        "start",
+        "/d",
+        &directory,
+        "ZwiftLauncher.exe",
+        "ZwiftApp.exe",
+    ])
+    .args(config.game_args)
+    .args(&token_args);
+    // The shim starts the game and waits for it, so wine start returns once the
+    // shim is up; the game therefore has to be found through tasklist.
+    let result = run_command(&mut game, logger, "Zwift")
+        .and_then(|()| wait_for_task(config, logger, "ZwiftApp.exe").map(|_| ()));
+    stop_background_tasks(config, logger, result.is_ok());
     result?;
     logger.ok("Zwift started using wine");
 
@@ -254,6 +281,8 @@ mod tests {
 
     struct Fixture {
         dir: PathBuf,
+        /// The snap's helper, the source of the copy in the install directory.
+        shim: PathBuf,
         tools: Tools,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
@@ -270,12 +299,15 @@ mod tests {
             let lock = crate::SCRIPT_TEST_LOCK.lock().unwrap();
             let dir =
                 std::env::temp_dir().join(format!("zwift-launch-{name}-{}", std::process::id()));
+            // A cancelled earlier run leaves its directory behind, and the pid may
+            // have been reused since: a bare `create_dir` would fail here, poison
+            // the test lock and take every other lock-taking test with it.
+            let _ = fs::remove_dir_all(&dir);
             fs::create_dir(&dir).unwrap();
             let tools = Tools {
                 wine: dir.join("wine"),
                 winepath: dir.join("winepath"),
                 wineserver: dir.join("wineserver"),
-                wget: dir.join("wget"),
             };
             write_executable(&tools.winepath, "#!/bin/sh\nprintf 'C:\\\\Zwift\\n'\n");
             write_executable(
@@ -287,24 +319,20 @@ test "$WINEPREFIX" = '{0}/prefix'
 printf '%s\n' "$*" >> '{0}/calls'
 case "$1" in
     start)
-        if [ "$4" = ZwiftLauncher.exe ]; then
-            test ! -f '{0}/fail-launcher'
-        else
-            test "$4" = /unix
-            test "$5" = '{0}/runfromprocess.exe'
-            test "$6" = 4141
-            test "$7" = ZwiftApp.exe
-            test ! -f '{0}/fail-game'
-        fi;;
+        test "$2" = /d
+        test "$3" = 'C:\Zwift'
+        test "$4" = ZwiftLauncher.exe
+        test "$5" = ZwiftApp.exe
+        test ! -f '{0}/fail-start';;
     tasklist)
         test ! -f '{0}/fail-tasklist'
         case "$5" in
-            *ZwiftLauncher.exe) test ! -f '{0}/missing-launcher' && printf 'PID: 4141\n' || true;;
             *ZwiftApp.exe)
                 if [ -f '{0}/exit-after-start' ]; then
                     if [ -f '{0}/game-seen' ]; then exit 0; fi
                     : > '{0}/game-seen'
                 fi
+                test ! -f '{0}/missing-game'
                 test ! -f '{0}/game-exited' && printf 'PID: 777\n' || true;;
         esac;;
     taskkill) :;;
@@ -315,8 +343,14 @@ esac
                     dir.display()
                 ),
             );
+            // The snap's windows-helpers part, copied into the install
+            // directory by start().
+            let shim = dir.join("bin/ZwiftLauncher.exe");
+            fs::create_dir_all(shim.parent().unwrap()).unwrap();
+            fs::write(&shim, "shim").unwrap();
             Self {
                 dir,
+                shim,
                 tools,
                 _lock: lock,
             }
@@ -326,7 +360,7 @@ esac
             LaunchConfig {
                 wine_prefix: &self.dir,
                 install_dir: &self.dir,
-                runfromprocess: &self.dir,
+                launcher_shim: &self.shim,
                 wait_for_window: &self.dir,
                 tools: &self.tools,
                 game_args: &[],
@@ -339,11 +373,9 @@ esac
 
         fn run(&self, window: bool) -> (io::Result<WindowOutcome>, Vec<(u8, String)>) {
             let prefix = self.dir.join("prefix");
-            let runfromprocess = self.dir.join("runfromprocess.exe");
             let wait_for_window = self.dir.join("window.exe");
             let config = LaunchConfig {
                 wine_prefix: &prefix,
-                runfromprocess: &runfromprocess,
                 wait_for_window: &wait_for_window,
                 ..self.config()
             };
@@ -364,7 +396,7 @@ esac
     }
 
     #[test]
-    fn starts_game_with_launcher_pid_and_waits_for_window() {
+    fn starts_game_through_the_shim_and_waits_for_window() {
         let fixture = Fixture::new("success");
         let (result, events) = fixture.run(true);
         assert_eq!(result.unwrap(), WindowOutcome::Visible);
@@ -373,13 +405,34 @@ esac
             [95, 99]
         );
         let calls = fs::read_to_string(fixture.dir.join("calls")).unwrap();
-        assert!(calls.contains("ZwiftLauncher.exe SilentLaunch"));
-        assert!(calls.contains("runfromprocess.exe 4141 ZwiftApp.exe"));
-        assert!(calls.contains("taskkill /f /im ZwiftLauncher.exe"));
+        assert!(calls.contains("start /d C:\\Zwift ZwiftLauncher.exe ZwiftApp.exe"));
         assert!(calls.contains("window.exe 777"));
+        // The shim is the parent the game checks and reaps the game, so it must
+        // survive the launch; only the crash handler is stopped.
+        assert!(!calls.contains("taskkill /f /im ZwiftLauncher.exe"));
+        assert!(calls.contains("taskkill /f /im ZwiftWindowsCrashHandler.exe"));
         assert!(fs::read_to_string(fixture.dir.join("log"))
             .unwrap()
             .contains("window-output"));
+    }
+
+    #[test]
+    fn the_launcher_shim_is_copied_into_the_install_directory() {
+        let fixture = Fixture::new("shim-copy");
+        let installed = fixture.dir.join("ZwiftLauncher.exe");
+        fs::write(&installed, "stale").unwrap();
+        // The launch itself is covered by the tests above; this one is only about
+        // the copied shim, so a successful run is all it needs.
+        fixture.run(false).0.unwrap();
+        assert_eq!(fs::read_to_string(&installed).unwrap(), "shim");
+        // An unchanged copy is left alone, so the patcher's mtime checks see no
+        // change between runs.
+        let modified = fs::metadata(&installed).unwrap().modified().unwrap();
+        fixture.run(false).0.unwrap();
+        assert_eq!(
+            fs::metadata(&installed).unwrap().modified().unwrap(),
+            modified
+        );
     }
 
     #[test]
@@ -426,12 +479,14 @@ esac
 
     #[test]
     fn startup_errors_stop_background_tasks() {
-        for marker in ["missing-launcher", "fail-game", "fail-tasklist"] {
+        for marker in ["fail-start", "missing-game", "fail-tasklist"] {
             let fixture = Fixture::new(marker);
             fs::write(fixture.dir.join(marker), "").unwrap();
             let (result, _) = fixture.run(true);
             assert!(result.is_err());
             let calls = fs::read_to_string(fixture.dir.join("calls")).unwrap();
+            // A failed start stops the shim too, so a retry is not blocked by a
+            // half-started one.
             assert!(calls.contains("taskkill /f /im ZwiftLauncher.exe"));
             assert!(calls.contains("taskkill /f /im ZwiftWindowsCrashHandler.exe"));
             assert!(!calls.contains("window.exe"));
@@ -442,11 +497,9 @@ esac
     fn token_is_read_at_launch_and_forwarded_as_compact_json() {
         let fixture = Fixture::new("token");
         let prefix = fixture.dir.join("prefix");
-        let runfromprocess = fixture.dir.join("runfromprocess.exe");
         let token_file = fixture.dir.join("token.json");
         let config = LaunchConfig {
             wine_prefix: &prefix,
-            runfromprocess: &runfromprocess,
             token_file: Some(&token_file),
             ..fixture.config()
         };
@@ -456,7 +509,8 @@ esac
         logger.init().unwrap();
         start(&config, &logger, false, &mut |_, _| {}).unwrap();
         let calls = fs::read_to_string(fixture.dir.join("calls")).unwrap();
-        assert!(calls.contains("ZwiftApp.exe --token={\"access_token\":\"test-only\"}"));
+        assert!(calls
+            .contains("ZwiftLauncher.exe ZwiftApp.exe --token={\"access_token\":\"test-only\"}"));
         assert!(!calls.contains(&format!("--token={}", token_file.display())));
     }
 
@@ -479,13 +533,12 @@ esac
     }
 
     #[test]
-    fn failed_launcher_command_does_not_start_game() {
-        let fixture = Fixture::new("fail-launcher");
-        fs::write(fixture.dir.join("fail-launcher"), "").unwrap();
+    fn a_failed_wine_start_does_not_wait_for_a_window() {
+        let fixture = Fixture::new("fail-start-report");
+        fs::write(fixture.dir.join("fail-start"), "").unwrap();
         let (result, _) = fixture.run(true);
-        assert!(result.unwrap_err().to_string().contains("Zwift launcher"));
+        assert!(result.unwrap_err().to_string().contains("Zwift failed"));
         let calls = fs::read_to_string(fixture.dir.join("calls")).unwrap();
-        assert!(!calls.contains("runfromprocess.exe"));
         assert!(!calls.contains("window.exe"));
     }
 

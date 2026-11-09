@@ -6,8 +6,9 @@
 # (secure.zwift.com) and game (us-or-rly101.zwift.com) servers; the game is pointed at it with
 # https_proxy and trusts its throwaway CA (appended to the prefix's data/cacert.pem, restored
 # afterwards). The game is driven directly (the launcher's Wine parent-process sequence, with a
-# fake token), not through the real launcher, so the Zwift patcher never runs and cannot overwrite
-# the CA. The stub's pre-onboarded profile skips onboarding; yarf only drives device pairing.
+# fake token), not through the real launcher, so the launcher's sync never re-downloads the
+# game files over the CA. The stub's pre-onboarded profile skips onboarding; yarf only drives
+# device pairing.
 #
 # Usage: SMOKE_DISPLAY=auto|nested|headless tests/pairing.sh [--explore] [extra yarf arguments]
 # With --explore, the game keeps running after reaching the pairing screen for manual
@@ -256,13 +257,16 @@ wait_until_wine_task_started() {
     return 1
 }
 zwift_wine_dir="\$(winepath -w "\${ZWIFT_INSTALL_DIR}")"
-wine start /d "\${zwift_wine_dir}" ZwiftLauncher.exe SilentLaunch || exit 1
-wait_until_wine_task_started ZwiftLauncher.exe || exit 1
-launcher_pid="\$(wine_task_pid ZwiftLauncher.exe)" || exit 1
+# ZwiftApp.exe only starts when its parent image is called ZwiftLauncher.exe. The
+# snap's copy of that name is the shim that starts the command line it is given
+# (the real launcher would patch the game instead); the launcher puts it there
+# too, see launcher-gui/src/launch.rs.
+cp "\${SNAP}/bin/ZwiftLauncher.exe" "\${ZWIFT_INSTALL_DIR}/ZwiftLauncher.exe" || exit 1
 token="\$(cat "\$HOME/../common/pairing-token.json")" || exit 1
-wine start /d "\${zwift_wine_dir}" /unix "\${SNAP}/bin/runfromprocess-rs.exe" "\${launcher_pid}" ZwiftApp.exe "--token=\${token}"
+wine start /d "\${zwift_wine_dir}" ZwiftLauncher.exe ZwiftApp.exe "--token=\${token}"
 wait_until_wine_task_started ZwiftApp.exe || exit 1
-wine taskkill /f /im ZwiftLauncher.exe > /dev/null 2>&1 || true
+# The shim is the game's parent: it reaps it and forwards its exit code, so it
+# stays up for as long as the game runs.
 for _ in \$(seq 1 ${run_seconds}); do
     wine_task_pid ZwiftApp.exe > /dev/null || break
     sleep 1

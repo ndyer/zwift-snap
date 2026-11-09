@@ -9,3 +9,4 @@ wine-src/
 __pycache__/
 launcher-gui/target/
 /build.log
+launcher-windows/target/

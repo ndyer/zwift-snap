@@ -6,9 +6,9 @@
 # runs, so the harness keeps them in a cache under $HOME/zwift-cache:
 #
 #   game/        the whole drive_c/Program Files (x86)/Zwift directory of the wine
-#                prefix: what ZwiftSetup.exe installs and what the patcher then
-#                downloads into. Restoring it satisfies the launcher's installed()
-#                check, so a staged prefix launches without installing anything.
+#                prefix: what the launcher's own CDN sync writes there. Restoring it
+#                satisfies the launcher's installed() check, so a staged prefix
+#                launches without installing anything.
 #   winetricks/  winetricks' own download cache (its W_CACHE directory)
 #   meta.json    the Zwift version and capture time, so staleness is visible
 #
@@ -71,12 +71,12 @@ _dl_cache_meta() {
 }
 
 # dl_cache_stage [--force]: copy the cached game directory and winetricks downloads
-# into the wine prefix. `cp -a` keeps modification times, which the Zwift patcher
-# compares against its manifest. A prefix that already holds the cached version
-# is left alone unless --force is given (the copy moves gigabytes).
+# into the wine prefix. `cp -a` keeps modification times, so a restored tree is
+# indistinguishable from the captured one. A prefix that already holds the cached
+# version is left alone unless --force is given (the copy moves gigabytes).
 #
-# A changed version is not handled here: the patcher downloads the delta itself,
-# which is its job.
+# A changed version is not handled here: the launcher's sync diffs the installed
+# files against the CDN manifest and fetches the difference itself.
 dl_cache_stage() {
     local force=""
     [[ ${1:-} == "--force" ]] && force=1

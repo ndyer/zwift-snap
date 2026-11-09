@@ -1,0 +1,43 @@
+[package]
+name = "zwift-windows-helpers"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Windows-side helpers the snap runs under wine"
+
+# Both binaries are PE files for the wine prefix, not for the host. Name them
+# explicitly: ZwiftLauncher.exe must keep that exact file name (see
+# src/zwift_launcher.rs) and autobins would not produce it from a snake_case
+# source file.
+autobins = false
+
+[[bin]]
+name = "ZwiftLauncher"
+path = "src/zwift_launcher.rs"
+
+[[bin]]
+name = "wait-for-window"
+path = "src/wait_for_window.rs"
+
+# The same crate and features the retired runfromprocess part used, so the
+# cross build is a known-good combination for this target. Scoped to Windows so
+# `cargo test --lib` works on the build host: the library holds the logic that
+# does not call win32.
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.51"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Environment",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[profile.release]
+opt-level = 'z'     # optimize for size
+lto = true
+codegen-units = 1
+panic = 'abort'
+strip = true

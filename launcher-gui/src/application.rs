@@ -1,14 +1,15 @@
 //! Snap entry point configuration and wiring for the real launcher.
 
 use crate::cancel::Cancellation;
+use crate::cdn;
 use crate::display::DisplayMode;
 use crate::graphics::Setting as GraphicsSetting;
 use crate::install::{InstallConfig, InstallProgress, EXPECTED_DRIVE_C_BYTES};
 use crate::launch::LaunchConfig;
 use crate::logging::Logger;
 use crate::orchestration::{self, Failure, LauncherUi};
-use crate::runtime::{Runtime, DEFAULT_UPDATE_ITERATIONS};
-use crate::wine_update::Tools;
+use crate::runtime::Runtime;
+use crate::wine_tools::Tools;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
@@ -29,7 +30,10 @@ pub struct Config {
     pub verbosity: u8,
     pub color: bool,
     pub poll_interval: Duration,
-    pub download_iterations: u32,
+    /// The CDN root the game is downloaded from; `ZWIFT_CDN_BASE` overrides it,
+    /// which is how the tests run the download against a local directory.
+    pub cdn_base: String,
+    pub jobs: usize,
     pub expected_bytes: u64,
     pub sample_interval: Duration,
 }
@@ -134,7 +138,16 @@ impl Config {
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
             color: flag("COLORED_OUTPUT", 0)?,
             poll_interval: Duration::from_secs(number("ZWIFT_POLL_INTERVAL", 5)?),
-            download_iterations: u32::try_from(number("ZWIFT_DOWNLOAD_ITERATIONS", 240)?)
+            cdn_base: match value("ZWIFT_CDN_BASE") {
+                None => cdn::DEFAULT_BASE.to_string(),
+                Some(base) => base
+                    .to_str()
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "ZWIFT_CDN_BASE is not UTF-8")
+                    })?
+                    .to_string(),
+            },
+            jobs: usize::try_from(number("ZWIFT_DOWNLOAD_JOBS", 8)?)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
             expected_bytes: number("ZWIFT_EXPECTED_DRIVE_C_BYTES", EXPECTED_DRIVE_C_BYTES)?,
             sample_interval,
@@ -205,7 +218,10 @@ pub fn run(
     let tools = Tools::default();
     let wineboot = PathBuf::from("wineboot");
     let winetricks = PathBuf::from("winetricks");
-    let runfromprocess = config.snap.join("bin/runfromprocess-rs.exe");
+    let launcher_shim = config.snap.join("bin/ZwiftLauncher.exe");
+    // In-flight transfers live on the same filesystem as the game, so a verified
+    // file can be renamed into place instead of copied.
+    let staging = config.common.join("download");
     let window = config.snap.join("bin/wait-for-window.exe");
     // Read this file only when starting the game, after the GUI login gate. With
     // --skip-login the game prompts for authentication itself, so neither the
@@ -216,18 +232,20 @@ pub fn run(
             wine_prefix: &config.prefix,
             user_common: &config.common,
             install_dir: &install_dir,
+            staging_dir: &staging,
+            launcher_shim: &launcher_shim,
             wineboot: &wineboot,
             winetricks: &winetricks,
             tools: &tools,
-            download_iterations: config.download_iterations,
-            poll_interval: config.poll_interval,
+            cdn_base: &config.cdn_base,
+            jobs: config.jobs,
             expected_drive_c_bytes: if graphical { config.expected_bytes } else { 0 },
             sample_interval: config.sample_interval,
         },
         launch: LaunchConfig {
             wine_prefix: &config.prefix,
             install_dir: &install_dir,
-            runfromprocess: &runfromprocess,
+            launcher_shim: &launcher_shim,
             wait_for_window: &window,
             tools: &tools,
             game_args: args,
@@ -243,7 +261,6 @@ pub fn run(
         wait_for_window: graphical,
         disable_egl: config.disable_egl
             && std::env::var("XDG_SESSION_TYPE").as_deref() != Ok("wayland"),
-        update_iterations: DEFAULT_UPDATE_ITERATIONS,
         progress,
     };
     orchestration::run_cancellable(&mut runtime, ui, logger.cancellation())
@@ -370,7 +387,8 @@ mod tests {
         assert_eq!(config.log, PathBuf::from("/data/zwift.log"));
         assert_eq!(config.display, DisplayMode::Fullscreen);
         assert!(!config.no_gui);
-        assert_eq!(config.download_iterations, 240);
+        assert_eq!(config.cdn_base, cdn::DEFAULT_BASE);
+        assert_eq!(config.jobs, 8);
         assert_eq!(config.poll_interval, Duration::from_secs(5));
     }
 
@@ -383,6 +401,8 @@ mod tests {
             ("ZWIFT_DISPLAY_MODE", "800x600"),
             ("ZWIFT_NO_GUI", "1"),
             ("ZWIFT_POLL_INTERVAL", "0"),
+            ("ZWIFT_CDN_BASE", "file:///cdn"),
+            ("ZWIFT_DOWNLOAD_JOBS", "3"),
         ])
         .unwrap();
         assert_eq!(config.prefix, PathBuf::from("/prefix"));
@@ -395,11 +415,13 @@ mod tests {
         );
         assert!(config.no_gui);
         assert_eq!(config.poll_interval, Duration::ZERO);
+        assert_eq!(config.cdn_base, "file:///cdn");
+        assert_eq!(config.jobs, 3);
         for (name, value) in [
             ("WINEPREFIX", "relative"),
             ("ZWIFT_DISPLAY_MODE", "invalid"),
             ("ZWIFT_PROGRESS_INTERVAL", "0"),
-            ("ZWIFT_DOWNLOAD_ITERATIONS", "-1"),
+            ("ZWIFT_DOWNLOAD_JOBS", "-1"),
             ("ZWIFT_NO_GUI", "2"),
         ] {
             assert!(

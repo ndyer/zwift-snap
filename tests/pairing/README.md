@@ -22,7 +22,10 @@ The zwift snap must be installed and Zwift already downloaded into the prefix, s
 - The game trusts the stub because its CA is appended to the prefix's `data/cacert.pem` for the
   duration of the test (backed up and restored afterwards). The game is driven directly (the
   parent-process sequence of `launcher-gui/src/launch.rs`, with a fake login token) rather than through the real
-  launcher, so the Zwift patcher never runs and cannot overwrite the CA.
+  launcher, so the Zwift patcher never runs and cannot overwrite the CA. That sequence starts
+  the snap's own `bin/ZwiftLauncher.exe` (copied into the game directory as the real launcher
+  does), which is the parent process name `ZwiftApp.exe` demands and forwards the command line
+  it is given.
 - The stub answers the OAuth token endpoint with a fake (unsigned) token and the handful of game
   API calls the game blocks on before the pairing screen: `/api/auth`, `/api/users/login` (a
   protobuf `LoginResponse`), `/api/profiles/me` (a pre-onboarded protobuf profile), the world list and
@@ -31,7 +34,7 @@ The zwift snap must be installed and Zwift already downloaded into the prefix, s
 - The stub writes fake `Game_Launcher` OAuth token JSON with `--token-file`; the harness passes
   it to `ZwiftApp.exe --token` to bypass the login form. The client refreshes it through the
   stub's OAuth endpoint, not the real service. JSON must be compact (no spaces), because
-  `runfromprocess` forwards a Windows command line. The temporary token file is removed on exit.
+  the token travels on a Windows command line. The temporary token file is removed on exit.
 - [`tests/pairing/pairing.robot`](pairing.robot) drives the UI with yarf: it waits directly
   for the pairing screen, then pairs the mock
   trainer as Power Source (see Bluetooth below). tests/pairing.sh then

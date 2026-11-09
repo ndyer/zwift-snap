@@ -19,7 +19,7 @@ def dependencies(name):
     return result
 
 assert "zwift-gui" not in dependencies("wine")
-assert {"wine", "zwift-gui", "launcher-runtime", "winetricks", "runfromprocess"} <= dependencies("runtime-prune")
+assert {"wine", "zwift-gui", "launcher-runtime", "winetricks", "windows-helpers"} <= dependencies("runtime-prune")
 assert "runtime-prune" in dependencies("gpu-2604")
 assert "prune-closure.sh" not in parts["wine"].get("override-prime", "")
 assert "prune-closure.sh" in parts["runtime-prune"]["override-prime"]

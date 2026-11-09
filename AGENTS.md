@@ -6,7 +6,10 @@ Guidance for AI coding agents working in this repository.
 
 An unofficial snap launcher for [Zwift](https://zwift.com) for Linux. Zwift itself is
 proprietary and NOT part of the snap — the Rust launcher downloads and updates it
-into a wine prefix at runtime. Wine is built from source by the snap's `wine` part:
+into a wine prefix at runtime, straight from Zwift's CDN manifest
+(`launcher-gui/src/{cdn,manifest,sync,download}.rs`). Zwift's own installer
+(`ZwiftSetup.exe`) and patcher are never downloaded or run. Wine is built from source
+by the snap's `wine` part:
 [ndyer/wine](https://github.com/ndyer/wine), a fork of the official wine-mirror/wine
 GitHub mirror, at the `source-branch` in `snap/snapcraft.yaml` (currently
 `zwift-radios-rebased`: wine-11.21 plus BLE support — advertisement watcher, GATT,
@@ -15,8 +18,12 @@ Windows.Devices.Radios; new-style WoW64, no i386 host libs). Strict confinement,
 ## Layout
 
 ```
-launcher-gui/      Rust/gtk-rs launcher, lifecycle, logging and Rust unit/integration tests
-launcher/          shared wine-env.sh bootstrap, pulse-client.conf and Windows window helper
+launcher-gui/      Rust/gtk-rs launcher: lifecycle, logging, the CDN sync, and the Rust
+                   unit/integration tests
+launcher-windows/  Rust crate cross-compiled to the Windows binaries the snap ships:
+                   bin/ZwiftLauncher.exe (the parent process ZwiftApp.exe demands) and
+                   bin/wait-for-window.exe
+launcher/          shared wine-env.sh bootstrap and pulse-client.conf
 snap/snapcraft.yaml     the snap definition (parts, prune filters, plugs, layouts)
 snap/prune-closure.sh   DT_NEEDED closure walk that prunes unreachable libraries
 tests/             unit tests (bats in tests/unit, stubs in tests/unit/stubs), the visual smoke
@@ -37,6 +44,39 @@ overlay/, prime/, stage/, parts/   build trees, gitignored, never edit by hand
 The snap has three apps: `zwift` (the launcher), `wine`, `winecfg`; the last two let
 users run arbitrary wine commands. All share the command-chain
 `gpu-2604-wrapper -> wine-env.sh`.
+
+## Zwift download and update
+
+The launcher fetches the game itself, straight from Zwift's CDN. Nothing Zwift ships is
+executed as an installer: `ZwiftSetup.exe` is never downloaded and the patcher never runs.
+Four modules split the work:
+
+- `manifest.rs` — the XML: `Zwift_ver_cur.xml` (the current version, with `sversion` and
+  the manifest name) and the manifest (`<path>`, `<length>`, `<modified>`, `<checksum>`).
+  Checksums are signed 32-bit decimals, where `-1` means "absent".
+- `cdn.rs` — the transfer layer: URLs built from the base
+  (`DEFAULT_BASE`, `https://cdn.zwift.com/gameassets/Zwift_Updates_Root/`), retries with
+  backoff, and the `Fetcher` trait, whose `file://` implementation lets the tests and
+  offline checks run without the network.
+- `download.rs` — a worker pool over a shared queue. A file is fetched into the staging
+  directory and renamed into place only after its length and checksum verified, so an
+  interrupted run leaves no truncated file that a later diff would consider present, and
+  at most `jobs` files are staged at once.
+- `sync.rs` — `assess`/`diff`/`sync`: compare the installed version against the served
+  one, then download only the files whose length or checksum differ. An update is
+  therefore a delta, and a current install transfers nothing.
+
+`install.rs` (fresh prefix) and `update.rs` (existing prefix) drive the sync; the version
+the launcher records is the server's own `Zwift_ver_cur.xml`, written after every sync
+(`version.rs`).
+
+Two environment variables, both parsed in `application.rs`, configure it:
+`ZWIFT_CDN_BASE` overrides the CDN root (a `file://` directory for tests and offline
+checks) and `ZWIFT_DOWNLOAD_JOBS` sets the number of parallel transfers.
+
+The CDN manifest does not carry a `ZwiftLauncher.exe`, and `ZwiftApp.exe` only starts when
+its parent's image path looks like Zwift's launcher, so the snap ships its own shim
+(`launcher-windows/src/shim.rs`) and copies it next to `ZwiftApp.exe` before a launch.
 
 ## Workshop
 
@@ -224,9 +264,9 @@ The smoke test's slow parts are downloads, and they are unchanged between runs, 
 reads or writes it, and nothing of it ships):
 
 - `game/` — the whole `drive_c/Program Files (x86)/Zwift` directory of the wine
-  prefix: what `ZwiftSetup.exe` installs and what the patcher then downloads into.
-  Restoring it satisfies the launcher's `installed()` check, so a staged prefix
-  launches without installing anything.
+  prefix: what the launcher's CDN sync writes there. Restoring it satisfies the
+  launcher's `installed()` check, so a staged prefix launches without installing
+  anything.
 - `winetricks/` — winetricks' own download cache, its `W_CACHE` directory.
 - `meta.json` — the Zwift `sversion` and capture time, so staleness is visible.
 
@@ -245,14 +285,15 @@ Two details it depends on, both verified live:
 - `smoke.sh` exports `W_CACHE` (`~/snap/zwift/common/winetricks-cache`) before `snap
   run` (the snap sees that absolute path unchanged). Without it the launcher's
   cleanup deletes the default `$XDG_CACHE_HOME/winetricks` every run, so winetricks'
-  downloads can never be captured. `cp -a` everywhere, because the Zwift patcher
-  verifies local files by size, checksum *and modification time*.
+  downloads can never be captured. `cp -a` everywhere, so a restored tree is
+  indistinguishable from the captured one.
 
 Only the game directory is cached, not the whole prefix: winetricks prerequisites
 live elsewhere in `drive_c` and are detected separately (`installed()` checks their
 proof paths), so a restored game tree in a prefix without them still reinstalls
 them. The cache is valid for the Zwift version in `meta.json`; a version change is
-left to the patcher, which downloads the delta.
+left to the launcher's sync, which diffs the installed files against the CDN
+manifest and fetches only the difference.
 
 Because `installed()` also requires the winetricks prerequisite proofs, a restored
 game tree alone does not satisfy it: the run takes the `install()` path and
@@ -297,10 +338,12 @@ The default screenshot output is `~/zwift-yarf/shot-<time>.png`. The `input` com
 
 `zwift.wine` defaults to `WINEPREFIX=~/snap/zwift/x1/.wine`, not the real prefix, so set
 `WINEPREFIX=$HOME/snap/zwift/common/.wine` (inside the snap `$SNAP_USER_COMMON/.wine`).
-Starting `ZwiftApp.exe` directly only spawns the .NET launcher; to start the game itself
-repeat the launcher sequence in `launcher-gui/src/launch.rs`: `wine start ZwiftLauncher.exe
-SilentLaunch`, read its pid, then `wine start /unix $SNAP/bin/runfromprocess-rs.exe <pid>
-ZwiftApp.exe <args>`. Run it from a script file in `~/snap/zwift/common` through
+Starting `ZwiftApp.exe` directly does not work: it reads its parent's image path and only
+runs under `ZwiftLauncher.exe`, `ZwiftHelper.exe` or `devenv.exe`. The launcher's sequence in
+`launcher-gui/src/launch.rs` is one command — `wine start /d <install dir> ZwiftLauncher.exe
+ZwiftApp.exe <args>` — where `ZwiftLauncher.exe` is the snap's own shim
+(`launcher-windows/src/shim.rs`), copied next to `ZwiftApp.exe` first. Zwift's real launcher
+is not involved anywhere. Run it from a script file in `~/snap/zwift/common` through
 `snap run --shell zwift.wine -c 'bash "$HOME/../common/script.sh"'` and adapt
 the test-local task helpers in `tests/pairing.sh`. Use `ZwiftApp.exe --token=<json>` to skip the
 login form; the game log is `AppData/Local/Zwift/Logs/Log.txt` in the prefix user dir.
@@ -374,8 +417,8 @@ Full detail is in `tests/pairing/README.md`; the essentials:
   [zwift-offline](https://github.com/fatsbrown/zwift-offline).
 - The stub CA is appended to the prefix's `data/cacert.pem` for the test (backed up, restored
   after). The game is driven directly (the launcher's Wine parent-process sequence, with fake
-  `Game_Launcher` OAuth JSON passed via `--token`) rather than through the real launcher, so the Zwift patcher never runs and
-  cannot re-download and overwrite the CA.
+  `Game_Launcher` OAuth JSON passed via `--token`) rather than through the real launcher, so the
+  launcher's sync never re-downloads the game files and cannot overwrite the CA.
 - `tests/pairing/pairing.robot` drives the UI with yarf and clicks buttons by their OCR text
   (resolution independent). The stub's `--token-file` writes a temporary fake token file under
   `~/snap/zwift/common`, removed on exit; token refresh goes through the stub. No login-form
@@ -473,7 +516,7 @@ render. `ZWIFT_GRAPHICS_PROFILE` (parsed in `application.rs`, applied in
 The profiles are the game's `data/configs/*.txt`. The launcher writes the chosen profile into
 *all four* files (so it does not matter which the game reads) and keeps the originals in
 `~/snap/zwift/common/graphics/` plus an `applied` marker recording what it wrote. On the next
-run a file whose content differs from the marker is treated as patcher-updated and its saved
+run a file whose content differs from the marker was replaced by an update and its saved
 original is refreshed before the profile is applied again. `graphics.rs` has the unit tests;
 `tests/entrypoint.rs` covers the end-to-end write/restore/validation paths.
 
@@ -487,8 +530,6 @@ the launcher logs a warning and leaves the files to the game.
 - ANT+ support: strict confinement has no `CAP_NET_ADMIN`, so the snap cannot open the raw
   sockets an ANT+ USB stick needs. Not implementable here.
 - The 30–50 ms BLE connection interval: same `CAP_NET_ADMIN` constraint.
-- The direct-CDN installer: the snap keeps downloading Zwift through the official launcher
-  flow (`install.rs`), which the patcher understands; a hand-rolled CDN download was deferred.
 
 ## Bluetooth discovery vs. connect (wine fork)
 
@@ -508,12 +549,27 @@ the `+winebth` trace.
 - **Pruning**: the wine part aggressively prunes (man pages, locales, wine's build
   toolchain, ~776 static import libraries, plus everything unreachable via the
   `snap/prune-closure.sh` closure walk). Guards in `runtime-prune`'s `override-prime` fail
-  the build on over-pruning (runtime file missing) or a stale prime directory (needs
-  the `clean` action). Bump the `v<N>` comment there when editing
-  `prune-closure.sh`, otherwise craft-parts will not re-run the prime step.
-- **Build ordering**: `runtime-prune` depends on Wine, the Rust launcher and the
-  runtime helpers; GPU cleanup follows it. Never make Wine depend on the launcher
-  just to order pruning: this invalidates Wine's build on every launcher change.
+  the build on over-pruning (runtime file missing) or a stale prime directory. Bump the
+  `v<N>` comment there when editing `prune-closure.sh`, otherwise craft-parts will not
+  re-run the prime step.
+- **Stale prime after removing a part**: both guards above say to run the `clean`
+  action, but that rebuilds Wine (hours). A part deleted from `snapcraft.yaml` leaves
+  its output in `prime/` and `stage/` and its tree in `parts/` forever, because
+  snapcraft cannot clean a part it no longer knows about, and every later build then
+  fails the stale-prime guard with e.g.
+  `prune guard: bin/runfromprocess-rs.exe is a build-time-only file and must not be primed`.
+  Delete the orphaned files and the orphaned part directory by hand instead
+  (`sudo rm -f prime/bin/<file> stage/bin/<file>; sudo rm -rf parts/<part>`) and
+  rebuild: only the later parts restage, Wine is skipped. Check with
+  `unsquashfs -l <snap> | grep <name>` that nothing stale ships.
+- **Build ordering**: `runtime-prune` depends on Wine, the Rust launcher, the runtime
+  helpers and the Windows helpers; GPU cleanup follows it. Never make Wine depend on the
+  launcher just to order pruning: this invalidates Wine's build on every launcher change.
+- **Windows binaries**: `launcher-windows/` is cross-compiled by the `windows-helpers`
+  part (rustup's `x86_64-pc-windows-gnu` target, not snapcraft's Rust plugin, which
+  builds for the host). The binaries land in `bin/` and are on `runtime-prune`'s
+  must-exist list, so removing one there fails the build instead of shipping a snap
+  whose launcher cannot start the game.
 - **Do not prune** `usr/lib/*/samba` (ntlm_auth needs it) and the nss libraries
   listed in the `lint.ignore` block of `snap/snapcraft.yaml` (dlopened by name).
 - **Wine source**: the `wine` part builds [ndyer/wine](https://github.com/ndyer/wine)

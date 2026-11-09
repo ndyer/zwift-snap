@@ -1,9 +1,10 @@
 //! Fresh Wine prefix and Zwift installation.
 
+use crate::cdn::Remote;
+use crate::launch;
 use crate::logging::{Logger, OutputObserver};
-use crate::update::{update_using_launcher, UpdateBackend};
-use crate::version::version_ge;
-use crate::wine_update::{Tools, WineUpdate};
+use crate::sync::{self, SyncConfig};
+use crate::wine_tools::Tools;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, ErrorKind};
@@ -14,7 +15,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-const SETUP_URL: &str = "https://cdn.zwift.com/app/ZwiftSetup.exe";
 pub const EXPECTED_DRIVE_C_BYTES: u64 = 8_537_613_774;
 
 /// One Wine prerequisite installed by the single winetricks invocation.
@@ -92,11 +92,18 @@ pub struct InstallConfig<'a> {
     pub wine_prefix: &'a Path,
     pub user_common: &'a Path,
     pub install_dir: &'a Path,
+    /// Scratch space for in-flight transfers, on `user_common`'s filesystem so a
+    /// verified file can be renamed into place.
+    pub staging_dir: &'a Path,
+    /// The launcher shim that replaces the game's own `ZwiftLauncher.exe`.
+    pub launcher_shim: &'a Path,
     pub wineboot: &'a Path,
     pub winetricks: &'a Path,
     pub tools: &'a Tools,
-    pub download_iterations: u32,
-    pub poll_interval: Duration,
+    /// The CDN root the game is fetched from, or a `file://` directory in tests.
+    pub cdn_base: &'a str,
+    /// Parallel transfers.
+    pub jobs: usize,
     /// Set to zero to disable sampling, for example when running without a GUI.
     pub expected_drive_c_bytes: u64,
     pub sample_interval: Duration,
@@ -135,9 +142,20 @@ fn missing_ok_remove_file(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Remove only installer-owned caches; never follow a directory symlink.
-pub fn cleanup_artifacts(prefix: &Path, common: &Path, cache: &Path) -> io::Result<()> {
+/// Remove only launcher-owned scratch; never follow a directory symlink.
+pub fn cleanup_artifacts(
+    prefix: &Path,
+    common: &Path,
+    staging: &Path,
+    cache: &Path,
+) -> io::Result<()> {
+    // A finished run leaves the staging directory empty; an interrupted one can hold
+    // partial transfers, which the next run refetches from scratch anyway.
+    remove_artifact(staging)?;
+    // A prefix installed by an older launcher still holds the downloaded installer,
+    // which nothing runs any more. It is a hundred megabytes, so reclaim it.
     missing_ok_remove_file(&common.join("ZwiftSetup.exe"))?;
+    missing_ok_remove_file(&common.join("ZwiftSetup.log"))?;
     remove_artifact(&cache.join("winetricks"))?;
     if let Some(user) = resolve_wine_user(prefix)? {
         let temp = user.join("AppData/Local/Temp");
@@ -514,117 +532,33 @@ fn install_steps(
     make_user_dirs_private(config.wine_prefix, logger)?;
     install_prerequisites(config, logger, progress)?;
 
-    let setup = config.user_common.join("ZwiftSetup.exe");
-    let setup_log = config.user_common.join("ZwiftSetup.log");
     phase(80, "Downloading Zwift");
-    run(
-        Command::new(&config.tools.wget)
-            .arg("-O")
-            .arg(&setup)
-            .arg(SETUP_URL),
-        logger,
-        "Zwift installer download",
-    )?;
-    phase(88, "Installing Zwift");
-    missing_ok_remove_file(&setup_log)?;
-    let windows_log = format!("Z:{}", setup_log.to_string_lossy().replace('/', "\\"));
-    let setup_result = run(
-        Command::new(&config.tools.wine)
-            .env("WINEPREFIX", config.wine_prefix)
-            .arg(&setup)
-            .args([
-                "/SP-",
-                "/VERYSILENT",
-                "/SUPPRESSMSGBOXES",
-                "/NORESTART",
-                "/NOCANCEL",
-            ])
-            .arg(format!("/LOG={windows_log}")),
-        logger,
-        "Zwift installer",
-    );
-    match fs::read(&setup_log) {
-        Ok(bytes) if !bytes.is_empty() => {
-            logger.info("Zwift installer log:");
-            logger.write_process_output(&bytes)?;
-        }
-        Ok(_) => logger.warning(&format!(
-            "The Zwift installer wrote no log ({})",
-            setup_log.display()
-        )),
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            logger.warning(&format!(
-                "The Zwift installer wrote no log ({})",
-                setup_log.display()
-            ));
-        }
-        Err(error) => {
-            return Err(io::Error::other(format!(
-                "Unable to read installer log: {error}"
-            )))
-        }
-    }
-    setup_result?;
-    let status = run(
-        Command::new(&config.tools.wineserver)
-            .env("WINEPREFIX", config.wine_prefix)
-            .arg("-k"),
-        logger,
-        "wineserver -k",
-    );
-    if let Err(error) = status {
-        logger.warning(&format!(
-            "Unable to stop wineserver after installation: {error}"
-        ));
-    }
-    if !config.install_dir.join("ZwiftLauncher.exe").is_file() {
-        return Err(io::Error::other(
-            "The installer finished but the Zwift launcher is not installed",
-        ));
-    }
-    let mut update_progress = |percent, message: &str| phase(percent, message);
-    let mut backend = WineUpdate {
+    let fetcher = Remote::new(config.cdn_base);
+    let sync_config = SyncConfig {
         install_dir: config.install_dir,
-        wine_prefix: Some(config.wine_prefix),
-        tools: config.tools,
-        logger,
-        on_progress: &mut update_progress,
+        staging_dir: config.staging_dir,
+        jobs: config.jobs,
     };
-    let latest = backend.latest_version().map_err(|error| {
-        io::Error::other(format!("Unable to retrieve the latest Zwift version number, Zwift cannot be downloaded: {error}"))
-    })?;
-    let current = backend.current_version()?;
-    // The installer leaves a 0.0.0 placeholder, so `current` is normally `none`
-    // here and the launcher below downloads the game. But a prefix can already
-    // carry the game at the latest version (for example a restored download cache,
-    // or a reinstall after a missing prerequisite proof): running
-    // `update_using_launcher` then spins its poll loop to the timeout, because
-    // `poll_update` only succeeds once the version *changes*. Mirror
-    // `update_if_needed` and skip the download when nothing needs updating.
-    if version_ge(&current, &latest) {
-        logger.info(&format!(
-            "Zwift is up to date (installed {current}, latest {latest})"
-        ));
-    } else {
-        logger.info(&format!(
-            "Zwift launcher installed, downloading Zwift {latest}"
-        ));
-        update_using_launcher(
-            &mut backend,
-            &latest,
-            &current,
-            config.download_iterations,
-            config.poll_interval,
-            90,
-            9,
-        )
-        .map_err(io::Error::other)?;
-    }
-    if !config.install_dir.join("ZwiftApp.exe").is_file()
-        || !config.install_dir.join("ZwiftLauncher.exe").is_file()
-    {
+    // The sync reports bytes; map them onto the last stretch of the bar. The GUI
+    // replaces these percentages with the sampled prefix size, so the span only
+    // matters when running without one.
+    let reporting = |done: u64, total: u64| {
+        let share = if total == 0 {
+            0
+        } else {
+            ((u128::from(done) * 18) / u128::from(total)).min(18) as u8
+        };
+        phase(80 + share, "Downloading Zwift");
+    };
+    sync::sync(&fetcher, &sync_config, logger, &reporting)
+        .map_err(|error| io::Error::other(format!("Unable to download Zwift: {error}")))?;
+    // The game directory's own ZwiftLauncher.exe is the downloaded patcher, which
+    // nothing runs any more. Replacing it keeps `installed()` honest and leaves a
+    // binary behind that does what the launcher does, rather than a stale patcher.
+    launch::ensure_launcher_shim(config.install_dir, config.launcher_shim)?;
+    if !config.install_dir.join("ZwiftApp.exe").is_file() {
         return Err(io::Error::other(
-            "The launcher finished but Zwift is not installed",
+            "The Zwift download finished but ZwiftApp.exe is missing",
         ));
     }
     Ok(())
@@ -633,6 +567,7 @@ fn install_steps(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{write_cdn, SERVER_VERSION};
     use std::os::unix::fs::{symlink, PermissionsExt};
     use std::sync::Mutex;
 
@@ -644,15 +579,25 @@ mod tests {
 
     impl Fixture {
         fn new(name: &str) -> Self {
+            Self::with_cdn(
+                name,
+                &[("ZwiftApp.exe", "game"), ("data/Worlds/world.txt", "world")],
+            )
+        }
+
+        fn with_cdn(name: &str, files: &[(&str, &str)]) -> Self {
             let lock = crate::SCRIPT_TEST_LOCK.lock().unwrap();
             let dir =
                 std::env::temp_dir().join(format!("zwift-install-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
             fs::create_dir(&dir).unwrap();
+            write_cdn(&dir.join("cdn"), SERVER_VERSION, files);
+            fs::create_dir_all(dir.join("snap")).unwrap();
+            fs::write(dir.join("snap/ZwiftLauncher.exe"), "shim").unwrap();
             let tools = Tools {
                 wine: dir.join("wine"),
                 winepath: dir.join("winepath"),
                 wineserver: dir.join("wineserver"),
-                wget: dir.join("wget"),
             };
             fs::create_dir_all(dir.join("prefix/drive_c/users/tester")).unwrap();
             fs::create_dir(dir.join("common")).unwrap();
@@ -681,24 +626,14 @@ mod tests {
                     dir.display()
                 ),
             );
-            script(&tools.wget, &format!(
-                "if [ \"$1\" = -O ]; then echo download >> '{0}/calls'; : > \"$2\"; else test ! -f '{0}/fail-version'; printf '<Zwift sversion=\"1.124.0 current\"/>'; fi",
-                dir.display()
-            ));
-            script(&tools.winepath, "printf 'C:\\\\Zwift\\n'");
-            script(
-                &tools.wineserver,
-                &format!("echo server >> '{}/calls'", dir.display()),
-            );
-            script(&tools.wine, &format!(
-                "case \"$1\" in\n\
-                 start) echo start >> '{0}/calls'; printf '<Zwift sversion=\"1.125.0 current\"/>' > '{0}/game/Zwift_ver_cur.xml'; if [ ! -f '{0}/missing-game' ]; then : > '{0}/game/ZwiftApp.exe'; fi;;\n\
-                 tasklist) echo 'PID: 1';;\n\
-                 taskkill) echo taskkill >> '{0}/calls';;\n\
-                 *) echo setup >> '{0}/calls'; test \"$2\" = /SP-; test \"$3\" = /VERYSILENT; test \"$4\" = /SUPPRESSMSGBOXES; test \"$5\" = /NORESTART; test \"$6\" = /NOCANCEL; case \"$7\" in /LOG=Z:*) ;; *) exit 1 ;; esac; echo 'installer diagnostic' > '{0}/common/ZwiftSetup.log'; test ! -f '{0}/fail-setup'; mkdir -p '{0}/game'; : > '{0}/game/ZwiftLauncher.exe';;\n\
-                 esac",
-                dir.display()
-            ));
+            // Nothing in a fresh install may run wine or wineserver any more: the game is
+            // downloaded by the launcher itself, so a call here is a regression.
+            for tool in [&tools.wine, &tools.wineserver] {
+                script(
+                    tool,
+                    &format!("echo \"$0\" >> '{}/calls'\nexit 1", dir.display()),
+                );
+            }
             Self {
                 dir,
                 tools,
@@ -707,22 +642,38 @@ mod tests {
         }
 
         fn run(&self, sample_interval: Duration) -> (io::Result<()>, Vec<InstallProgress>) {
+            self.run_with_cdn(sample_interval, None)
+        }
+
+        fn run_with_cdn(
+            &self,
+            sample_interval: Duration,
+            cdn_base: Option<&str>,
+        ) -> (io::Result<()>, Vec<InstallProgress>) {
             let prefix = self.dir.join("prefix");
             let common = self.dir.join("common");
             let game = self.dir.join("game");
+            let staging = common.join("download");
+            let shim = self.dir.join("snap/ZwiftLauncher.exe");
             let wineboot = self.dir.join("wineboot");
             let winetricks = self.dir.join("winetricks");
             let logger = Logger::new(self.dir.join("zwift.log"), 0, false);
             logger.init().unwrap();
+            let cdn_base = match cdn_base {
+                Some(base) => base.to_string(),
+                None => format!("file://{}", self.dir.join("cdn").display()),
+            };
             let config = InstallConfig {
                 wine_prefix: &prefix,
                 user_common: &common,
                 install_dir: &game,
+                staging_dir: &staging,
+                launcher_shim: &shim,
                 wineboot: &wineboot,
                 winetricks: &winetricks,
                 tools: &self.tools,
-                download_iterations: 2,
-                poll_interval: Duration::ZERO,
+                cdn_base: &cdn_base,
+                jobs: 2,
                 expected_drive_c_bytes: 102_400,
                 sample_interval,
             };
@@ -731,6 +682,18 @@ mod tests {
                 events.lock().unwrap().push(event)
             });
             (result, events.into_inner().unwrap())
+        }
+
+        fn calls(&self) -> String {
+            fs::read_to_string(self.dir.join("calls")).unwrap_or_default()
+        }
+
+        fn log(&self) -> String {
+            fs::read_to_string(self.dir.join("zwift.log")).unwrap_or_default()
+        }
+
+        fn game(&self, name: &str) -> std::path::PathBuf {
+            self.dir.join("game").join(name)
         }
     }
 
@@ -745,19 +708,13 @@ mod tests {
         let fixture = Fixture::new("success");
         let (result, events) = fixture.run(Duration::from_secs(30));
         result.unwrap();
-        let calls = fs::read_to_string(fixture.dir.join("calls")).unwrap();
+        // The game is fetched over the CDN, so no wine process runs after winetricks.
+        let calls = fixture.calls();
         assert_eq!(
             calls.lines().collect::<Vec<_>>(),
             [
                 "wineboot",
                 "winetricks dotnet48 d3dcompiler_47 webview2 renderer=vulkan",
-                "download",
-                "setup",
-                "server",
-                "start",
-                "taskkill",
-                "taskkill",
-                "server"
             ]
         );
         let messages: Vec<_> = events
@@ -782,12 +739,24 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, InstallProgress::Sample(_))));
-        assert!(events.iter().any(|e| matches!(
-            e, InstallProgress::Phase { message, .. } if message.contains("Downloading Zwift")
-        )));
-        assert!(fs::read_to_string(fixture.dir.join("zwift.log"))
-            .unwrap()
-            .contains("installer diagnostic"));
+        // The manifest's files landed in the game directory, the version file was
+        // written, and the program's own ZwiftLauncher.exe was replaced by the shim.
+        assert_eq!(
+            fs::read_to_string(fixture.game("ZwiftApp.exe")).unwrap(),
+            "game"
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.game("data/Worlds/world.txt")).unwrap(),
+            "world"
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.game("ZwiftLauncher.exe")).unwrap(),
+            "shim"
+        );
+        assert_eq!(
+            crate::sync::local_version(&fixture.dir.join("game")),
+            crate::version::Version::parse(SERVER_VERSION).unwrap()
+        );
         let documents = fixture.dir.join("prefix/drive_c/users/tester/Documents");
         assert!(documents.is_dir() && !documents.is_symlink());
         assert_eq!(
@@ -797,30 +766,58 @@ mod tests {
     }
 
     #[test]
-    fn a_prefix_already_at_the_latest_version_skips_the_launcher_download() {
+    fn a_prefix_already_at_the_served_version_downloads_nothing() {
         // A restored game tree (or a reinstall triggered by a missing prerequisite
-        // proof) leaves the game at the latest version before install_steps runs.
-        // The launcher's own poll can never observe a version change then, so the
-        // download must be skipped rather than run to its timeout.
+        // proof) leaves the game at the served version before install_steps runs.
+        // Nothing must be transferred then: the local file is left untouched.
         let fixture = Fixture::new("preinstalled");
         let game = fixture.dir.join("game");
-        fs::create_dir_all(&game).unwrap();
+        fs::create_dir_all(game.join("data/Worlds")).unwrap();
+        fs::write(game.join("ZwiftApp.exe"), "local copy").unwrap();
+        fs::write(game.join("data/Worlds/world.txt"), "world").unwrap();
         fs::write(
-            game.join("Zwift_ver_cur.xml"),
-            r#"<Zwift sversion="1.124.0 current"/>"#,
+            game.join("manifest.xml"),
+            format!(
+                "<Zwift version=\"{SERVER_VERSION}\" folder=\"v1\"><files>\
+                 <file><path>ZwiftApp.exe</path><length>10</length>\
+                 <modified>2024-01-02 03:04:05.000</modified><checksum>{}</checksum></file>\
+                 <file><path>data\\Worlds\\world.txt</path><length>5</length>\
+                 <modified>2024-01-02 03:04:05.000</modified><checksum>{}</checksum></file>\
+                 </files></Zwift>",
+                crc32fast::hash(b"local copy"),
+                crc32fast::hash(b"world")
+            ),
         )
         .unwrap();
-        fs::write(game.join("ZwiftApp.exe"), "").unwrap();
+        fs::write(
+            game.join("Zwift_ver_cur.xml"),
+            format!(
+                "<Zwift version=\"{SERVER_VERSION}\" sversion=\"{SERVER_VERSION} (168455)\" \
+                 manifest=\"manifest.xml\"/>"
+            ),
+        )
+        .unwrap();
         let (result, _) = fixture.run(Duration::from_secs(30));
         result.unwrap();
-        let calls = fs::read_to_string(fixture.dir.join("calls")).unwrap();
-        // The installer still ran, but the launcher was never started.
-        assert!(calls.contains("setup"), "{calls}");
-        assert!(!calls.contains("start"), "{calls}");
-        assert!(!calls.contains("taskkill"), "{calls}");
-        assert!(fs::read_to_string(fixture.dir.join("zwift.log"))
-            .unwrap()
-            .contains("Zwift is up to date"));
+        assert_eq!(
+            fs::read_to_string(fixture.game("ZwiftApp.exe")).unwrap(),
+            "local copy"
+        );
+        assert!(
+            fixture.log().contains("already installed"),
+            "{}",
+            fixture.log()
+        );
+        // The prerequisites still ran, and the shim was still installed.
+        assert!(
+            fixture.calls().contains("winetricks"),
+            "{}",
+            fixture.calls()
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.game("ZwiftLauncher.exe")).unwrap(),
+            "shim"
+        );
     }
 
     #[test]
@@ -832,26 +829,20 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("winetricks dotnet48"));
-        assert!(!fs::read_to_string(fixture.dir.join("calls"))
-            .unwrap()
-            .contains("download"));
+        assert!(!fixture.game("ZwiftApp.exe").exists());
     }
 
     #[test]
-    fn installer_failure_still_captures_installer_log() {
-        let fixture = Fixture::new("setup");
-        fs::write(fixture.dir.join("fail-setup"), "").unwrap();
+    fn a_transfer_failure_fails_the_install() {
+        // The manifest lists a file the CDN cannot serve, which is what a half
+        // populated cache or a truncated upload looks like.
+        let fixture = Fixture::new("transfer");
+        fs::remove_file(fixture.dir.join("cdn/v1/data/Worlds/world.txt")).unwrap();
         let (result, _) = fixture.run(Duration::from_secs(30));
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Zwift installer failed"));
-        assert!(fs::read_to_string(fixture.dir.join("zwift.log"))
-            .unwrap()
-            .contains("installer diagnostic"));
-        assert!(!fs::read_to_string(fixture.dir.join("calls"))
-            .unwrap()
-            .contains("start"));
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("Unable to download Zwift"), "{error}");
+        assert!(error.contains("world.txt"), "{error}");
+        assert!(!fixture.game("ZwiftLauncher.exe").exists());
     }
 
     #[test]
@@ -905,15 +896,20 @@ mod tests {
         let cache = fixture.dir.join("cache");
         fs::create_dir_all(cache.join("winetricks")).unwrap();
         fs::write(cache.join("winetricks/download"), "").unwrap();
-        fs::write(fixture.dir.join("ZwiftSetup.exe"), "").unwrap();
-        cleanup_artifacts(&prefix, &fixture.dir, &cache).unwrap();
+        let staging = fixture.dir.join("common/download");
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("partial"), "").unwrap();
+        // A prefix installed by an older launcher still holds the downloaded installer.
+        fs::write(fixture.dir.join("common/ZwiftSetup.exe"), "").unwrap();
+        cleanup_artifacts(&prefix, &fixture.dir.join("common"), &staging, &cache).unwrap();
         assert_eq!(fs::read_dir(&temp).unwrap().count(), 0);
         assert!(!cache.join("winetricks").exists());
-        assert!(!fixture.dir.join("ZwiftSetup.exe").exists());
+        assert!(!staging.exists());
+        assert!(!fixture.dir.join("common/ZwiftSetup.exe").exists());
         assert!(fixture.dir.join("hostdocs/keep").exists());
         fs::remove_dir(&temp).unwrap();
         std::os::unix::fs::symlink(fixture.dir.join("hostdocs"), &temp).unwrap();
-        assert!(cleanup_artifacts(&prefix, &fixture.dir, &cache).is_err());
+        assert!(cleanup_artifacts(&prefix, &fixture.dir.join("common"), &staging, &cache).is_err());
         assert!(fixture.dir.join("hostdocs/keep").exists());
     }
 
@@ -953,26 +949,35 @@ mod tests {
     #[test]
     fn fresh_install_fails_if_version_lookup_fails() {
         let fixture = Fixture::new("version");
-        fs::write(fixture.dir.join("fail-version"), "").unwrap();
+        fs::remove_file(fixture.dir.join("cdn/Zwift_ver_cur.xml")).unwrap();
         let (result, _) = fixture.run(Duration::from_secs(30));
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Zwift cannot be downloaded"));
-        assert!(!fs::read_to_string(fixture.dir.join("calls"))
-            .unwrap()
-            .contains("start"));
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("Unable to download Zwift"), "{error}");
+        assert!(error.contains("Zwift_ver_cur.xml"), "{error}");
+        assert!(!fixture.game("ZwiftLauncher.exe").exists());
     }
 
     #[test]
-    fn updated_version_without_game_binary_is_not_success() {
-        let fixture = Fixture::new("missing-game");
-        fs::write(fixture.dir.join("missing-game"), "").unwrap();
+    fn an_unwritable_cdn_base_fails_instead_of_installing_nothing() {
+        let fixture = Fixture::new("bad-base");
+        let base = format!("file://{}", fixture.dir.join("absent").display());
+        let (result, _) = fixture.run_with_cdn(Duration::from_secs(30), Some(&base));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unable to download Zwift"));
+    }
+
+    #[test]
+    fn a_manifest_without_zwiftapp_is_not_success() {
+        // The CDN can serve a manifest whose files are incomplete; the launcher must
+        // not report a fresh install as done without the binary it launches.
+        let fixture = Fixture::with_cdn("missing-game", &[("data/Worlds/world.txt", "world")]);
         let (result, _) = fixture.run(Duration::from_secs(30));
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Zwift is not installed"));
+            .contains("ZwiftApp.exe is missing"));
     }
 
     #[test]

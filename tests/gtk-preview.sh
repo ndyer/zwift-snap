@@ -87,7 +87,18 @@ game="${fixture}/common/.wine/drive_c/Program Files (x86)/Zwift"
 data="${fixture}/common/.wine/drive_c/users/tester/AppData/Local/Zwift"
 mkdir -p "${fixture}/bin" "${game}" "${data}" "${stage}/out/runtime"
 touch "${game}/ZwiftApp.exe" "${game}/ZwiftLauncher.exe"
-printf '<Zwift sversion="1.0.0 x"/>' > "${game}/Zwift_ver_cur.xml"
+# The snap's own ZwiftLauncher.exe (the windows-helpers part), copied into the
+# game directory before a launch.
+printf 'shim' > "${fixture}/bin/ZwiftLauncher.exe"
+# The installed version. `parse_ver_cur` needs a `manifest` attribute even though a
+# current install never reads the manifest itself.
+printf '<Zwift version="1.0.0" sversion="1.0.0 x" manifest="manifest.xml"/>' \
+    > "${game}/Zwift_ver_cur.xml"
+# The CDN the launcher syncs against instead of cdn.zwift.com. It serves the same
+# version, so the update check finds the install current and transfers nothing.
+mkdir -p "${fixture}/cdn"
+printf '<Zwift version="1.0.0" sversion="1.0.0 x" manifest="manifest.xml"/>' \
+    > "${fixture}/cdn/Zwift_ver_cur.xml"
 printf '<ZWIFT><CONFIG/></ZWIFT>' > "${data}/prefs.xml"
 # Fabricate what the Wine prerequisites leave behind: `installed()` also requires
 # them, otherwise the launcher takes the install path instead. Kept in step with the
@@ -98,10 +109,6 @@ touch "${prefix}/drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/mscorlib.d
 mkdir -p "${prefix}/drive_c/windows/system32"
 touch "${prefix}/drive_c/windows/system32/d3dcompiler_47.dll"
 mkdir -p "${prefix}/drive_c/Program Files (x86)/Microsoft/EdgeWebView/Application"
-cat > "${fixture}/bin/wget" <<'STUB'
-#!/bin/sh
-printf '<Zwift sversion="2.0.0 x"/>'
-STUB
 cat > "${fixture}/bin/winepath" <<'STUB'
 #!/bin/sh
 printf 'C:\\Zwift\n'
@@ -115,11 +122,6 @@ cat > "${fixture}/bin/wine" <<'STUB'
 set -eu
 case "$1" in
 start)
-    if [ ! -f "$TEST_ROOT/update-failed" ]; then
-        touch "$TEST_ROOT/update-failed"
-        echo 'updater diagnostic' >&2
-        exit 7
-    fi
     echo 'stub launch output';;
 tasklist)
     case "$5" in
@@ -139,6 +141,7 @@ chmod +x "${fixture}/bin/"*
 PATH="${fixture}/bin:${PATH}" SNAP="${fixture}" SNAP_USER_COMMON="${fixture}/common" \
     WINEPREFIX="${fixture}/common/.wine" ZWIFT_LOG="${fixture}/common/zwift.log" \
     TEST_ROOT="${fixture}" ZWIFT_NO_GUI=0 ZWIFT_DISPLAY_MODE=800x600 ZWIFT_POLL_INTERVAL=1 \
+    ZWIFT_CDN_BASE="file://${fixture}/cdn" \
     "${root}/launcher-gui/target/debug/zwift-gui" \
     > >(tee "${stage}/gui-runtime.log") 2>&1 &
 gui_pid=$!

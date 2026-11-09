@@ -8,8 +8,9 @@
 //! The game's own content is saved first, next to the Wine prefix in
 //! `<common>/graphics/`, because writing over the files destroys it. The saved
 //! copies are also the source of what gets written, and `applied` records which
-//! profile was forced so a patcher update that replaces a file is recognised and
-//! that file's original is refreshed.
+//! profile was forced so a file replaced behind this module's back - by the
+//! launcher's own sync of a new game version - is recognised and that file's
+//! original is refreshed.
 //!
 //! `ZWIFT_GRAPHICS_PROFILE` selects the behaviour: `auto` (default) measures,
 //! `basic`/`medium`/`high`/`ultra` force a profile, and `default` restores the
@@ -199,7 +200,7 @@ fn read_applied(originals: &Path) -> Option<Profile> {
 ///
 /// A file only holds the game's content when it is not what this module last
 /// wrote: with `applied` set, anything that differs from that profile's copy was
-/// replaced by the patcher and is the new original.
+/// replaced by an update and is the new original.
 fn refresh_originals(
     install_dir: &Path,
     originals: &Path,
@@ -460,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn a_patcher_update_refreshes_the_saved_original_of_that_file_only() {
+    fn an_update_refreshes_the_saved_original_of_that_file_only() {
         let fixture = Fixture::new();
         apply_with(
             &fixture.install,
@@ -469,7 +470,7 @@ mod tests {
             || panic!("measured a fixed setting"),
         )
         .unwrap();
-        // The patcher replaces one profile file with a new version.
+        // A new game version replaces one profile file.
         fs::write(
             fixture.install.join(Profile::Basic.relative_path()),
             "basic 2",

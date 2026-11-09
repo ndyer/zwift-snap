@@ -4,6 +4,14 @@ The `zwift-gui` binary is the snap's default `zwift` app. It owns installation,
 updates, display preferences, process supervision, cancellation and logging.
 GTK4 widgets are built programmatically with gtk-rs.
 
+Zwift is downloaded by this crate, not by Zwift's installer: `cdn.rs` transfers
+from Zwift's CDN, `manifest.rs` parses the served version and file manifests,
+`download.rs` fills a worker pool that verifies each file's length and checksum
+before moving it into place, and `sync.rs` diffs the installed files against the
+served manifest so an update transfers only what changed. `ZWIFT_CDN_BASE` points
+the launcher at another CDN root (`file://` in the tests) and `ZWIFT_DOWNLOAD_JOBS`
+sets the number of parallel transfers.
+
 The GTK window and game share `ZWIFT_DISPLAY_MODE`: fullscreen by default, or
 `WIDTHxHEIGHT` windowed. The window hides after the first game window appears;
 the launcher stays alive until the game exits. Errors retain the in-app log view.
@@ -25,17 +33,20 @@ and forwards output directly to the GUI. SIGINT, SIGTERM, SIGHUP and closing the
 window cancel subprocesses and polling. Wine server cleanup has independent
 10-second command timeouts.
 
-Two runtime supports remain in `../launcher/`:
+One runtime support remains in `../launcher/`:
 
 - `wine-env.sh` is the shared command-chain wrapper for all three snap apps.
   Library paths must be set before the dynamic loader starts the GTK executable;
   it also prepares Wine, GTK caches, GStreamer and audio.
-- `wait-for-window.c` builds a Windows PE helper using Win32 window enumeration.
-  GTK can enumerate its own windows, not another process's Wayland windows.
-  The helper therefore stays inside Wine rather than being replaced by GDK calls.
 
-`pulse-client.conf` supplies the audio client configuration. Winetricks and
-`runfromprocess-rs.exe` remain external tools, not reimplemented by this crate.
+`pulse-client.conf` supplies the audio client configuration.
+
+The two Windows helpers this crate runs come from the sibling
+[`../launcher-windows/`](../launcher-windows/) crate: `ZwiftLauncher.exe` is the
+parent process `ZwiftApp.exe` demands and `wait-for-window.exe` reports when the
+game window is up. Both use Win32 rather than GTK: GDK can enumerate its own
+windows, not another process's Wayland windows. Winetricks remains an external
+tool.
 
 ## Development
 
@@ -53,11 +64,12 @@ workshop run build
 ```
 
 `gtk-preview` tests simulated install failure/retry, cancellation and both display
-modes, plus the real lifecycle with stub Wine for update failure, live logs,
-Launch anyway, the mandatory login gate and cancellation cleanup. Rust unit tests
+modes, plus the real lifecycle against stub Wine: the update check that finds the
+stub CDN's version already installed, live logs, the mandatory login gate (nothing
+launches before it) and the cancellation cleanup. Rust unit tests
 verify that the worker cannot start the game before login confirmation and reads
 fresh token JSON only at launch. Integration tests execute the binary in terminal
-mode, including failures and SIGTERM.
+mode against a local `file://` CDN, including the cancellation path and SIGTERM.
 
 After installing a build, `workshop run smoke` tests the real confined launcher up
 to the mandatory login gate without using an account. Authenticated game startup

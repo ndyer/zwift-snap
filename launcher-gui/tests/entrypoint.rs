@@ -7,6 +7,9 @@ use std::time::{Duration, Instant};
 
 static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 
+/// The version the fixture's game and CDN both report.
+const VERSION: &str = "1.2.0";
+
 struct Fixture {
     root: PathBuf,
 }
@@ -20,6 +23,9 @@ impl Fixture {
         ));
         let fixture = Self { root };
         fs::create_dir_all(fixture.root.join("bin")).unwrap();
+        // The snap's own ZwiftLauncher.exe (the windows-helpers part), which the
+        // launcher copies into the game directory before starting it.
+        fs::write(fixture.root.join("bin/ZwiftLauncher.exe"), "shim").unwrap();
         let game = fixture
             .root
             .join("common/.wine/drive_c/Program Files (x86)/Zwift");
@@ -28,9 +34,27 @@ impl Fixture {
             fs::write(game.join(name), "").unwrap();
         }
         fixture.write_wine_prerequisites();
+        // The installed version, as the game records it. `parse_ver_cur` requires a
+        // `manifest` attribute even when the manifest file itself is never read,
+        // which is the case here: the served version matches, so the sync stops at
+        // the version check.
         fs::write(
             game.join("Zwift_ver_cur.xml"),
-            "<Zwift sversion=\"1.2.0 x\"/>",
+            format!(
+                "<Zwift version=\"{VERSION}\" sversion=\"{VERSION} x\" manifest=\"manifest.xml\"/>\n"
+            ),
+        )
+        .unwrap();
+        // The CDN the launcher syncs against, standing in for cdn.zwift.com: it
+        // serves the same version, so the update check finds the install current
+        // and transfers nothing. Nothing here can reach the network.
+        let cdn = fixture.root.join("cdn");
+        fs::create_dir(&cdn).unwrap();
+        fs::write(
+            cdn.join("Zwift_ver_cur.xml"),
+            format!(
+                "<Zwift version=\"{VERSION}\" sversion=\"{VERSION} x\" manifest=\"manifest.xml\"/>\n"
+            ),
         )
         .unwrap();
         let data = fixture
@@ -38,16 +62,16 @@ impl Fixture {
             .join("common/.wine/drive_c/users/tester/AppData/Local/Zwift");
         fs::create_dir_all(&data).unwrap();
         fs::write(data.join("prefs.xml"), "<ZWIFT><CONFIG/></ZWIFT>").unwrap();
-        fixture.script("wget", "printf '<Zwift sversion=\"1.2.0 x\"/>'");
         fixture.script("winepath", "printf 'C:\\\\Zwift\\n'");
         fixture.script("wineserver", "echo \"$1\" >> \"$TEST_ROOT/cleanup\"");
         fixture.script(
             "wine",
             r#"printf '%s\n' "$*" >> "$TEST_ROOT/commands"
 case "$1" in
-start) printf 'child output\n'; printf 'child diagnostic\n' >&2;;
+start) test "$4" = ZwiftLauncher.exe; test "$5" = ZwiftApp.exe
+    if [ -n "${TEST_HANG_START:-}" ]; then touch "$TEST_ROOT/waiting"; exec sleep 30; fi
+    printf 'child output\n'; printf 'child diagnostic\n' >&2;;
 tasklist) case "$5" in
-    *ZwiftLauncher.exe) printf 'PID: 41\n';;
     *ZwiftApp.exe) if [ ! -f "$TEST_ROOT/seen" ]; then
         touch "$TEST_ROOT/seen"; printf 'PID: 42\n'
     fi;;
@@ -120,7 +144,11 @@ esac"#,
             .env("TEST_ROOT", &self.root)
             .env("ZWIFT_NO_GUI", "1")
             .env("ZWIFT_DISPLAY_MODE", "800x600")
-            .env("ZWIFT_POLL_INTERVAL", "0");
+            .env("ZWIFT_POLL_INTERVAL", "0")
+            .env(
+                "ZWIFT_CDN_BASE",
+                format!("file://{}", self.root.join("cdn").display()),
+            );
         command
     }
 
@@ -187,7 +215,14 @@ fn terminal_entrypoint_launches_logs_configures_and_cleans_up() {
     assert!(log.contains("child output"));
     assert!(log.contains("child diagnostic"));
     assert!(log.contains("Zwift closed, exiting"));
-    assert!(fixture.read("commands").contains("--example=hello world"));
+    let commands = fixture.read("commands");
+    assert!(commands.contains("start /d C:\\Zwift ZwiftLauncher.exe ZwiftApp.exe"));
+    assert!(commands.contains("--example=hello world"));
+    assert!(!commands.contains("taskkill /f /im ZwiftLauncher.exe"));
+    assert_eq!(
+        fs::read_to_string(fixture.game_dir().join("ZwiftLauncher.exe")).unwrap(),
+        "shim"
+    );
     assert!(fixture
         .read("common/.wine/drive_c/users/tester/AppData/Local/Zwift/prefs.xml")
         .contains("<USER_RESOLUTION_PREF>800x600</USER_RESOLUTION_PREF>"));
@@ -216,12 +251,17 @@ fn start_failure_is_logged_and_returns_failure_after_cleanup() {
     assert_eq!(fixture.read("cleanup"), "-k\n-w\n");
 }
 
+/// A SIGTERM while the launcher is waiting on the game must kill the child it
+/// started and still run the shutdown cleanup.
+///
+/// This used to hang a `wget` stub, because the download ran as a child process.
+/// The download is now in-process, so the interesting child is the game itself.
 #[test]
-fn sigterm_cancels_the_real_worker_and_still_runs_cleanup() {
+fn sigterm_terminates_the_game_child_and_still_runs_cleanup() {
     let fixture = Fixture::new();
-    fixture.script("wget", "touch \"$TEST_ROOT/waiting\"; exec sleep 30");
     let child = fixture
         .command()
+        .env("TEST_HANG_START", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -234,11 +274,10 @@ fn sigterm_cancels_the_real_worker_and_still_runs_cleanup() {
     // SAFETY: this PID belongs to the launcher child started by this test.
     assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
     let result = wait(child);
-    assert!(ready, "worker did not start");
+    let log = fs::read_to_string(fixture.root.join("common/zwift.log")).unwrap_or_default();
+    assert!(ready, "the game did not start:\n{log}");
     assert!(!result.status.success());
-    assert!(fixture
-        .read("common/zwift.log")
-        .contains("Launcher cancelled"));
+    assert!(log.contains("Launcher cancelled"));
     assert_eq!(fixture.read("cleanup"), "-k\n-w\n");
 }
 

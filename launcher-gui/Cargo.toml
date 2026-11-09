@@ -24,6 +24,14 @@ sha2 = "0.10.0"
 serde_json = "1.0"
 getrandom = "0.2"
 urlencoding = "2.1"
+# The update XML is parsed with a real XML parser rather than string matching:
+# manifests are remote input and the paths they carry are used as filesystem paths.
+roxmltree = "0.20"
+# Manifest checksums are CRC-32, verified while the file is being written.
+crc32fast = "1.4"
+# Percent-encoding of individual URL path components; `urlencoding` cannot be used
+# per component because it also escapes `.` and `-`.
+percent-encoding = "2.3"
 # The graphics profile check loads EGL at runtime, so these stay optional in
 # practice: a missing libEGL or driver only disables the measurement.
 glow = "0.18"

@@ -4,14 +4,11 @@ Resource         kvm.resource
 Library          yarf_ocr.py
 
 *** Test Cases ***
-Real Lifecycle Shows Output And Accepts Launch Anyway
-    Match Text    Zwift update failed    30
-    Match Text    Show log    20
-    Click Target    Show log
-    Match Text    updater diagnostic    20
-    Click Target    Launch anyway
-    Match Text    Log in to Zwift    30
+Real Lifecycle Shows Output And Waits At The Login Gate
+    Match Text    Log in to Zwift    45
     Match Text    Complete the login below    20
+    Click Target    Show log
+    Match Text    already installed    20
 
 *** Keywords ***
 Click Target
