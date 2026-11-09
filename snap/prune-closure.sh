@@ -30,7 +30,7 @@ gst_deny_re='lib(flite|onnxruntime|tensorflow-lite|freeaptx|zvbi|ltc|sndfile)\.s
 
 # Binaries of packages that nothing in the snap runs at runtime. The launcher
 # only needs wine, wineboot, winepath, wineserver, winetricks, cabextract,
-# unzip, wget, ntlm_auth and the xdg tools. samba ships a full tool
+# wget, ntlm_auth and the xdg tools. samba ships a full tool
 # chest of which ntlm_auth is the only needed program, and gnupg/debconf/ucf/
 # perl/fontconfig-utils/gtk-update-icon-cache are build or packaging helpers.
 removed_binaries=(
@@ -181,7 +181,7 @@ done < <(find "${prime}/opt/wine-devel" -type f -print0 2>/dev/null)
 
 # helper binaries the launcher and wine call through PATH
 add_root "${prime}/bin/zwift-gui"
-for bin in ntlm_auth cabextract unzip wget bwrap update-mime-database \
+for bin in ntlm_auth cabextract wget bwrap update-mime-database \
     glycin-thumbnailer; do
     add_root "${prime}/usr/bin/${bin}"
 done

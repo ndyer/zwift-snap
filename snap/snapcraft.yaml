@@ -199,6 +199,13 @@ parts:
     # The runtime libraries that the wine-devel package used to pull in as
     # dependencies, now listed directly (derived from the Depends/Recommends of
     # that package, checked against the DT_NEEDED of the built libraries).
+    # Not listed because they are redundant or dead: the X11 and Wayland client
+    # libraries, which the gpu-2604 content snap provides (see the note in the
+    # list below); libglu1-mesa, which nothing links and whose only consumer, caca's
+    # libgl_plugin, prune-closure.sh deletes; libodbc2, which only wine's odbc32.so
+    # dlopens and Zwift never uses; and libsdl2-2.0-0, which nothing links either
+    # (wine's winebus SDL backend dlopens it, but the package ships it inside the
+    # private sdl2-classic/ directory, which is not on the library search path).
     stage-packages:
       - libasound2t64
       - libasound2-plugins
@@ -210,7 +217,6 @@ parts:
       - libfontconfig1
       - libfreetype6
       - libglib2.0-0t64
-      - libglu1-mesa
       - libgnutls30t64
       - libgphoto2-6t64
       - libgphoto2-port12t64
@@ -219,35 +225,36 @@ parts:
       - libgstreamer1.0-0
       - libkrb5-3
       - libncurses6
-      - libodbc2
       - libpcap0.8t64
       - libpcsclite1
       - libcapi20-3t64
       - libpulse0
       - libsane1
-      - libsdl2-2.0-0
       - libudev1
       - libusb-1.0-0
       - libv4l-0
-      - libwayland-client0
-      - libwayland-egl1
-      - libx11-6
+      # The X11 and Wayland client libraries (libwayland-client0, libwayland-egl1,
+      # libx11-6, libxext6, libxfixes3, libxxf86vm1) are not listed: the gpu-2604
+      # content snap provides them and the gpu-2604 part deletes our copies from
+      # prime so they cannot shadow the provider's (lists/mesa-2604.amd64.list),
+      # so listing them only staged files that were thrown away again. Wine's X11
+      # and Wayland drivers resolve them from mesa at runtime, which needs the
+      # gpu-2604 plug connected. libxkbcommon0 and libxkbregistry0 stay: mesa does
+      # not provide them and winewayland.so needs both.
       - libxcomposite1
       - libxcursor1
-      - libxext6
-      - libxfixes3
       - libxi6
       - libxinerama1
       - libxkbcommon0
       - libxkbregistry0
       - libxrandr2
       - libxrender1
-      - libxxf86vm1
       - ocl-icd-libopencl1
-      # needed by winetricks
+      # needed by winetricks. No unzip: only w_try_unzip verbs use it, and the
+      # remaining verbs (d3dcompiler_47, renderer=vulkan) extract .cabs with
+      # cabextract or write registry keys.
       - cabextract
       - ca-certificates
-      - unzip
       - wget
       # ntlm_auth, required by zwift/wine
       - winbind
@@ -306,7 +313,7 @@ parts:
       # snap/prune-closure.sh for the closure walk. Bump this comment after
       # editing that script or Wine's prime filters, craft-parts only
       # re-runs the prime step when the script text tracked in the part state
-      # changes: v9
+      # changes: v10
       # The gschemas.compiled that Debian creates in a trigger is not part of the staged
       # packages. Without it GTK programs abort with "No GSettings schemas are installed".
       glib-compile-schemas "${CRAFT_PRIME}/usr/share/glib-2.0/schemas"
@@ -357,7 +364,6 @@ parts:
           opt/wine-devel/lib/wine/x86_64-unix/ntdll.so \
           usr/bin/ntlm_auth \
           usr/bin/cabextract \
-          usr/bin/unzip \
           usr/bin/wget \
           usr/share/X11/xkb \
           usr/lib/x86_64-linux-gnu/gstreamer-1.0 \

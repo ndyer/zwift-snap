@@ -572,6 +572,22 @@ the `+winebth` trace.
   whose launcher cannot start the game.
 - **Do not prune** `usr/lib/*/samba` (ntlm_auth needs it) and the nss libraries
   listed in the `lint.ignore` block of `snap/snapcraft.yaml` (dlopened by name).
+- **Stage only what ships**: a stage-package whose files are not in the final prime
+  tree is dead weight, and the two mechanisms that delete files make this easy to get
+  wrong. The `gpu-2604` part runs `gpu-2604-cleanup mesa-2604` after `runtime-prune` and
+  deletes everything the Mesa content snap provides, which includes the X11 and Wayland
+  client libraries (`lists/mesa-2604.amd64.list`), so `libwayland-client0`,
+  `libwayland-egl1`, `libx11-6`, `libxext6`, `libxfixes3` and `libxxf86vm1` are
+  deliberately *not* staged: wine's `winex11.so`/`winewayland.so` resolve them from
+  `/snap/zwift/current/gpu-2604/mesa-2604` at runtime, which needs the `gpu-2604` plug
+  connected (an absent `libX11.so.6` in `prime/` is therefore expected, not a pruning
+  bug). `libxkbcommon0`/`libxkbregistry0` are not in that list and must stay staged.
+  `prune-closure.sh` deletes the rest of the unreachable closure (e.g. `libGLU`, and
+  `libsdl2-2.0-0`, whose only copy lands in a private `sdl2-classic/` directory that is
+  not on the library search path), so check a package's files in `prime/` before adding
+  it. Audit per package against `prime/`, not `dpkg -L`: craft-parts extracts
+  stage-packages into a part tree without registering them with the host's dpkg, so
+  `dpkg -L` cannot enumerate 14 of them here.
 - **Wine source**: the `wine` part builds [ndyer/wine](https://github.com/ndyer/wine)
   (fork of wine-mirror/wine) at the `source-branch` in `snap/snapcraft.yaml`
   (`zwift-radios-rebased`, not pinned to a `source-commit`). craft-parts does not
@@ -579,17 +595,21 @@ the `+winebth` trace.
   action (or pin/bump `source-commit`) to pick up new commits on the branch.
 - **Wine runtime**: new-style WoW64 has no `wine64` binary or i386 Unix packages;
   32-bit Windows programs use `lib/wine/i386-windows`. Check the winetricks steps
-  (`dotnet48`, `d3dcompiler_47`, `webview2`) on a desktop. The runtime is not a
+  (`d3dcompiler_47`, `renderer=vulkan`) on a desktop. The runtime is not a
   separate content snap: existing core24 Wine runtime libraries do not match this
   build, and splitting it adds a snap without reducing the total download.
-- **winetricks invocation**: the launcher installs all four prerequisites with one
-  `winetricks -q dotnet48 d3dcompiler_47 webview2 renderer=vulkan` call, not one
+- **winetricks invocation**: the launcher installs both prerequisites with one
+  `winetricks -q d3dcompiler_47 renderer=vulkan` call, not one
   call per verb: winetricks runs every command-line verb in a single process, in
   order, and exits non-zero on the first failure, so this is faster and still
   stops the install before Zwift is downloaded. The per-verb dialog titles are
   read from the `Executing w_do_call <verb>` lines winetricks prints to stderr
   (`WINETRICKS_VERB_MARKER` in `launcher-gui/src/install.rs`), so the pinned
   winetricks and the launcher must change together if that output changes.
+  `.NET Framework 4.8` (`dotnet48`) and `WebView2` (`webview2`) are not installed:
+  they existed for Zwift's own `ZwiftLauncher.exe` (a .NET launcher hosting a
+  WebView2 UI), which the launcher shim replaces and nothing runs any more. The
+  game is a native 64-bit binary and needs neither.
 - **Bluetooth**: the `zwift-radios-rebased` wine branch implements the BLE
   advertisement watcher (`adv_watcher_Start` in
   `dlls/windows.devices.bluetooth/advertisement.c`, LE-only discovery) and GATT on top
