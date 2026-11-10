@@ -30,7 +30,7 @@ gst_deny_re='lib(flite|onnxruntime|tensorflow-lite|freeaptx|zvbi|ltc|sndfile)\.s
 
 # Binaries of packages that nothing in the snap runs at runtime. The launcher
 # only needs wine, wineboot, winepath, wineserver, winetricks, cabextract,
-# wget, ntlm_auth and the xdg tools. samba ships a full tool
+# wget and ntlm_auth. samba ships a full tool
 # chest of which ntlm_auth is the only needed program, and gnupg/debconf/ucf/
 # perl/fontconfig-utils/gtk-update-icon-cache are build or packaging helpers.
 removed_binaries=(

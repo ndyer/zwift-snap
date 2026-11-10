@@ -264,7 +264,14 @@ parts:
       # wayland client-side window decorations
       - libdecor-0-0
       - libdecor-0-plugin-1-gtk
-      - xdg-utils
+      # xdg-utils is deliberately not staged. Its xdg-open would land in
+      # $SNAP/usr/bin, which precedes /usr/bin on PATH, and shadow the base's
+      # /usr/bin/xdg-open. That file is snapd's proxy that hands the URL to the
+      # host's handler through the desktop plug (snapctl user-open). The stock
+      # script instead tries to open the URL inside the snap and exits 0 even
+      # when that fails, so a broken link looks like a success. Everything that
+      # wants xdg-open (the launcher, wine's winebrowser, winetricks) looks it up
+      # on PATH and finds the base's proxy.
       # keyboard layouts, without them wine's wayland driver gets no keyboard input
       - xkb-data
     # Prune files that are not needed at runtime. Do not prune usr/lib/*/samba, it
@@ -313,7 +320,7 @@ parts:
       # snap/prune-closure.sh for the closure walk. Bump this comment after
       # editing that script or Wine's prime filters, craft-parts only
       # re-runs the prime step when the script text tracked in the part state
-      # changes: v11
+      # changes: v12
       # The gschemas.compiled that Debian creates in a trigger is not part of the staged
       # packages. Without it GTK programs abort with "No GSettings schemas are installed".
       glib-compile-schemas "${CRAFT_PRIME}/usr/share/glib-2.0/schemas"

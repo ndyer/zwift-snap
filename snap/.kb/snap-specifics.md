@@ -69,6 +69,22 @@ it. Audit per package against `prime/`, not `dpkg -L`: craft-parts extracts
 stage-packages into a part tree without registering them with the host's dpkg, so
 `dpkg -L` cannot enumerate 14 of them here.
 
+## xdg-open and external links
+
+`xdg-utils` must **not** be staged. The base ships `/usr/bin/xdg-open` as a few lines
+that `exec snapctl user-open "$@"`; `snapctl` forwards the URL to snapd's user
+session daemon, which runs the *host's* `xdg-open`, and this is what makes a link in
+the launcher's WebKit panel open in the user's browser. It needs the `desktop` plug
+(connected on this snap). A staged `xdg-utils` puts a second `xdg-open` in
+`$SNAP/usr/bin`, which precedes `/usr/bin` on `PATH` and therefore shadows the proxy:
+the stock script tries to resolve the URL inside the snap, and — the real trap — it
+exits 0 even when that fails, so a broken link looks like a success and nothing is
+logged. Wine's `winebrowser` and winetricks' `xdg-open` fallbacks look the command up
+on `PATH` too, so they also benefit from the proxy being the only copy. To test the
+path, put a logging `xdg-open` on the *host* and run
+`snap run --shell zwift -c 'snapctl user-open https://example.com'`; snapd's own
+`tests/main/xdg-open` does the same thing with a `mount --bind`.
+
 ## Wine source
 
 The `wine` part builds the local checkout `/project/wine-src`
