@@ -90,11 +90,17 @@ There is no `setup` action: snapcraft, shellcheck, yamllint, bats, bluez, bluezo
 the pkgproxy cache are installed by the `setup-base` hook of the `zwift-snap-sdk` SDK
 at launch and refresh (see `.workshop/zwift-snap-sdk/hooks/setup-base`).
 
-The canonical agent documentation for operating Workshop is the vendored skill under
-`.github/skills/` (`use-workshop`, `onboard-workshop`, `design-sdk`, imported from
-github.com/canonical/use-workshop-skill). Route Workshop CLI questions there — in
-particular `.github/skills/use-workshop/references/in-project-sdk.md` for the SDK
-layout and hook rules used by this project.
+The canonical agent documentation for operating Workshop is the `use-workshop` skill
+(`onboard-workshop` and `design-sdk` are its siblings) under `.github/skills/`. It is not
+vendored: the `setup-project` hook of the `zwift-snap-sdk` SDK runs
+`.workshop/zwift-snap-sdk/fetch-skills.sh` at every launch and applied refresh to fetch the
+pinned upstream release of github.com/canonical/use-workshop-skill there. The
+`.github/skills/` skill directories are gitignored and regenerated each launch, so do not
+edit them (only `.github/skills/README.md` is tracked, with the provenance, the pinned ref
+and the override variables). They are absent until the workshop has been launched once, and
+in environments that see only the repository. Route Workshop CLI questions there — in
+particular `.github/skills/use-workshop/references/in-project-sdk.md` for the SDK layout and
+hook rules used by this project.
 
 The workshop definition is `.workshop/zwift-snap.yaml`; actions are plain bash
 with `errexit`/`pipefail` set. In-project SDKs are listed with a `project-` prefix in

@@ -52,7 +52,7 @@ actions:
       tests/bluetooth.sh tests/pairing.sh tests/dl-cache.sh tests/tools/yarf/yarf.sh \
       tests/tools/bluetooth/*.sh tests/tools/dl-cache/*.sh \
       tests/unit/*.bats tests/unit/test_helper.bash \
-      .workshop/zwift-snap-sdk/hooks/*
+      .workshop/zwift-snap-sdk/hooks/* .workshop/zwift-snap-sdk/fetch-skills.sh
     python3 -m py_compile tests/zwift-stub.py tests/tools/yarf/*.py tests/tools/bluetooth/*.py \
       .workshop/zwift-snap-sdk/workshop
     yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' \

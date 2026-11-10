@@ -6,6 +6,13 @@ prime/
 snap/.snapcraft/
 .workshop.lock
 wine-src/
+# Agent skills are fetched from github.com/canonical/use-workshop-skill at workshop
+# launch by .workshop/zwift-snap-sdk/fetch-skills.sh, not vendored. .github/skills/README.md
+# stays tracked; the skill directories are regenerated and must not be committed.
+.github/skills/use-workshop/
+.github/skills/onboard-workshop/
+.github/skills/design-sdk/
+.github/skills/.fetched-revision
 __pycache__/
 launcher-gui/target/
 /build.log

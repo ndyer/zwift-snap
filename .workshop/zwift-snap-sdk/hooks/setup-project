@@ -1,8 +1,14 @@
 #!/bin/bash
 # setup-project hook of the zwift-snap-sdk SDK. Runs at every launch and after every
 # applied workshop refresh, after the project is mounted and auto-connect has finished.
-# This hook only installs the workshop runner symlink (needs /project mounted).
+# It installs the workshop runner symlink and fetches the upstream agent skills (both
+# need /project mounted).
 set -euo pipefail
 
 # Install the workshop runner.
 sudo ln -sfn /project/.workshop/zwift-snap-sdk/workshop /usr/local/bin/workshop
+
+# Fetch the canonical Workshop agent skills into the working tree so the host-side agent
+# sees them (pinned upstream ref; see fetch-skills.sh). Never fatal: a failure warns and
+# leaves any previous fetch in place, so the launch and refresh still succeed.
+/project/.workshop/zwift-snap-sdk/fetch-skills.sh
