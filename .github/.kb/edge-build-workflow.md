@@ -31,7 +31,9 @@ run yet" and "every previous run failed" mean build, so a failed run is retried
 the next day. `force: true` skips the gate.
 
 This is what makes a daily schedule affordable: an idle day costs one cheap job
-that only runs `gh`.
+that only runs `gh`. It has no checkout, so `GH_REPO` is set to
+`github.repository` explicitly; otherwise `gh` tries to infer the repository
+from Git and fails.
 
 ## Which suites run, and which do not
 
