@@ -22,9 +22,22 @@ snap install mesa-2604 yarf gnome-46-2404 mir-test-tools
 
 # git is what the setup-project hook clones the Wine source and the agent skills with. It
 # is in the base image already; listing it keeps the launch working if that ever changes.
+# The launcher's native dependencies are here because lint, test and gtk-preview all build
+# the zwsnap-gui crate and they run before snapcraft does: the zwsnap-gui part's
+# build-packages only reach the host once the snap is built, which is too late for them.
+# They are the packages that part lists, so the workshop matches the build environment.
+# gcc-mingw-w64-x86-64 is the cross compiler the zwsnap-helpers clippy in lint links with.
 apt-get update && apt-get install -y shellcheck yamllint \
     bats bats-support bats-assert bats-file \
-    git bluez python3-venv python3-yaml libgtk-4-dev pkg-config
+    git bluez python3-venv python3-yaml pkg-config \
+    libgtk-4-dev libwebkitgtk-6.0-dev libjavascriptcoregtk-6.0-dev libsoup-3.0-dev \
+    gcc-mingw-w64-x86-64
+
+# The helpers clippy in the lint action cross-checks against x86_64-pc-windows-gnu, and the
+# rust SDK installs rustup with the host toolchain only. rust is listed above this SDK in
+# sdks:, so by now its rustup is installed and on the workshop user's PATH. rustup reports
+# an already-installed target and does nothing, so a refresh re-running this hook is safe.
+sudo -u workshop --login rustup target add x86_64-pc-windows-gnu
 
 # yarf needs process-control for its OCR; connect it if still disconnected.
 snap connections yarf 2>/dev/null \

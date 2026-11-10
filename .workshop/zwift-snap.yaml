@@ -4,13 +4,15 @@ sdks:
   # pkgproxy SDK: installs and configures pkgproxy early, warms cache with local snaps.
   # Must be listed before zwift-snap-sdk so pkgproxy is configured before other snaps install.
   - name: project-pkgproxy
+  # Rust SDK for building and testing the zwsnap-gui launcher. Listed before zwift-snap-sdk
+  # because hooks run in the order the SDKs are listed, and that SDK's setup-base hook needs
+  # this one's rustup to add the x86_64-pc-windows-gnu target the helpers clippy uses.
+  - name: rust
+    channel: latest/stable
   # Carries the desktop plug of the workshop, defined in .workshop/zwift-snap-sdk/sdk.yaml.
   # The yarf smoke test (tests/smoke.sh) renders its Mir compositor on the host display
   # through it when one is available.
   - name: project-zwift-snap-sdk
-  # Rust SDK for building and testing the zwsnap-gui launcher
-  - name: rust
-    channel: latest/stable
 connections:
   # The desktop interface is not connected automatically at launch, spell it out here.
   # References use the bare SDK name: the project- prefix of the sdks entry only
