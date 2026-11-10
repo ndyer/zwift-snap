@@ -16,9 +16,12 @@ Protobuf message structures and API endpoints derived from
 https://github.com/fatsbrown/zwift-offline.
 
 Usage: zwift-stub.py --dir DIR --log FILE [--port 8443] [--token] [--token-file FILE] [--ready-file FILE]
-  --token       answer the OAuth token endpoint with a fake token (otherwise everything is a 404)
+  --token       answer the OAuth token endpoint with a fake token (without it login cannot succeed)
   --token-file  write fake OAuth token JSON for ZwiftApp.exe --token (tests only)
   --ready-file  write the listening port to this file once the socket is up (and a .pid next to it)
+
+Routes the game reads real content from are listed below; everything else gets an empty answer of
+whatever type the request asks for, because the game retries a missing or unparseable response.
 """
 
 import argparse
@@ -61,6 +64,10 @@ JSON_ROUTES = {
         "structuredEventsUrl": f"{GAME_URL}/api/actions-service/structured-events/batch"},
     ("POST", "/v1/track"): {"success": True},
     ("POST", "/hvc-ingestion-service/batch"): {"success": True},
+    # the game parses these and retries when the body is missing or unparseable
+    ("GET", "/api/workout/schedule/list"): [],
+    # the home screen: an object falls back to the default card instead of an "outcome 23" retry
+    ("GET", "/api/head-unit-bff/game-home"): {},
 }
 
 log_lock = threading.Lock()
@@ -180,17 +187,7 @@ PROTO_ROUTES = {
     ("GET", "/relay/dropin"): world_list,
     ("GET", "/relay/worlds"): world_list,
 }
-
-# Paths the game only needs to see succeed, with an empty body
-EMPTY_ROUTES = {
-    ("POST", "/api/users/logout"),
-    ("GET", "/api/scoring/current"),
-    ("GET", "/api/game-asset-patching-service/manifest"),
-    ("POST", "/api/workout/progress"),
-    ("GET", "/api/power-curve/power-profile/proto"),
-    ("GET", "/api/coach/public/plan-settings"),
-    ("GET", "/api/membership/profiles/me/feature-gate-access"),
-}
+PROTO_TYPE = "application/x-protobuf-lite"
 
 
 def make_certs(directory: Path) -> None:
@@ -233,6 +230,33 @@ def respond(wfile, status: int, body: bytes = b"", content_type: str = "applicat
     wfile.flush()
 
 
+def route(method: str, path: str, headers: dict) -> tuple[int, bytes, str]:
+    """Answer one request as (status, body, content type).
+
+    The login form posts a password grant, the launcher a refresh or code grant: answer them all.
+    Every other route gets a successful but empty answer, which matters because the game treats a
+    404, or a body it cannot parse, as retryable and re-requests with an exponential backoff of up
+    to ~8 s per attempt: an unknown route used to stall the post-login handshake for minutes.
+    An empty body is a valid protobuf message for every response type (all proto3 fields are
+    optional) and the client asks for protobuf on nearly every API call, so the fallback follows
+    the request's Accept header. Keeping a list of known routes instead would mean extending the
+    stub for every game build.
+    """
+    if method == "POST" and path == TOKEN_PATH:
+        # without --token the login must not succeed: a 200 the game cannot parse would show up as a
+        # login bug in its log instead of the deliberate 404 that the flag documents
+        if not settings.token:
+            return 404, b"", "application/json"
+        return 200, json.dumps(fake_token()).encode(), "application/json"
+    if (method, path) in PROTO_ROUTES:
+        return 200, PROTO_ROUTES[(method, path)](), PROTO_TYPE
+    if (method, path) in JSON_ROUTES:
+        return 200, json.dumps(JSON_ROUTES[(method, path)]).encode(), "application/json"
+    if "protobuf" in headers.get("accept", ""):
+        return 200, b"", PROTO_TYPE
+    return 200, json.dumps({}).encode(), "application/json"
+
+
 def serve_requests(rfile, wfile, default_host: str) -> None:
     """Answer the HTTP requests of one (decrypted) connection until it closes."""
     while True:
@@ -248,20 +272,10 @@ def serve_requests(rfile, wfile, default_host: str) -> None:
         fields = ""
         if "x-www-form-urlencoded" in headers.get("content-type", ""):
             fields = " fields=" + ",".join(sorted(urllib.parse.parse_qs(body.decode("latin-1"))))
+        status, answer, content_type = route(method, target.split("?")[0], headers)
         log(f"{method} {host}{target} body={size}B{fields} auth={'yes' if 'authorization' in headers else 'no'}"
-            f" accept={headers.get('accept', '')!r}")
-        path = target.split("?")[0]
-        # the login form posts a password grant, the launcher a refresh/code grant: answer them all
-        if settings.token and method == "POST" and path == TOKEN_PATH:
-            respond(wfile, 200, json.dumps(fake_token()).encode())
-        elif (method, path) in JSON_ROUTES:
-            respond(wfile, 200, json.dumps(JSON_ROUTES[(method, path)]).encode())
-        elif (method, path) in PROTO_ROUTES:
-            respond(wfile, 200, PROTO_ROUTES[(method, path)](), "application/x-protobuf-lite")
-        elif (method, path) in EMPTY_ROUTES or (method == "PUT" and path.startswith("/api/profiles/")):
-            respond(wfile, 200)
-        else:
-            respond(wfile, 404)
+            f" accept={headers.get('accept', '')!r} -> {status} {content_type}")
+        respond(wfile, status, answer, content_type)
         if headers.get("connection", "").lower() == "close":
             return
 

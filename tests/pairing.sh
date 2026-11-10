@@ -34,6 +34,7 @@ readonly CACERT="${PREFIX}/drive_c/Program Files (x86)/Zwift/data/cacert.pem"
 readonly ZWIFT_USER_DIR="${PREFIX}/drive_c/users/${USER}/AppData/Local/Zwift"
 readonly GAME_LOG="${ZWIFT_USER_DIR}/Logs/Log.txt"
 readonly RUN_SCRIPT="${HOME}/snap/zwift/common/pairing-run.sh"
+readonly STOP_SCRIPT="${HOME}/snap/zwift/common/pairing-stop.sh"
 readonly TOKEN_FILE="${HOME}/snap/zwift/common/pairing-token.json"
 # how long the game is kept running while yarf drives it; must outlast the yarf suite
 # in explore mode, extend this to allow manual testing
@@ -66,6 +67,10 @@ source "${ROOT}/tests/tools/bluetooth/bluezoo.sh"
 
 report_failure() {
     echo "pairing: FAILED, artifacts in ${OUT_DIR} (log.html shows the screenshots)"
+    if [[ -d ${OUT_DIR}/frames ]]; then
+        echo "pairing: every captured frame is in ${OUT_DIR}/frames (index.log names the wait), replay them with:"
+        echo "pairing:   tests/tools/yarf/yarf.sh ocr ${OUT_DIR}/frames -g KICKR"
+    fi
     for log in stub/requests.log yarf.log; do
         [[ -f ${OUT_DIR}/${log} ]] && { echo "pairing: tail of ${log}:"; tail -15 "${OUT_DIR}/${log}"; }
     done
@@ -83,8 +88,9 @@ cleanup() {
     # game has already shut the server down.
     if [[ -n ${game_pid} ]]; then
         # shellcheck disable=SC2016
-        snap run --shell zwift.wine -c 'WINEPREFIX="$HOME/../common/.wine" wineserver -k' \
-            > /dev/null 2>&1 || true
+        # snap run fails silently when its stdout is a plain file, so it goes through a pipe
+        snap run --shell zwift.wine -c 'WINEPREFIX="$HOME/../common/.wine" wineserver -k' 2>&1 \
+            | cat > /dev/null || true
         kill -TERM "${game_pid}" 2> /dev/null || true
         wait "${game_pid}" 2> /dev/null || true
         game_pid=""
@@ -93,7 +99,7 @@ cleanup() {
     [[ -z ${mir_pid} ]] || kill "${mir_pid}" 2> /dev/null
     # restore the game's cacert.pem (remove our appended CA)
     [[ -z ${cacert_appended} ]] || restore_cacert
-    rm -f "${RUN_SCRIPT}" "${TOKEN_FILE}"
+    rm -f "${RUN_SCRIPT}" "${STOP_SCRIPT}" "${TOKEN_FILE}"
     rm -f "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${WAYLAND_SOCKET}" \
         "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${WAYLAND_SOCKET}.lock"
 }
@@ -194,8 +200,14 @@ start_stub() {
 # trainer in all its roles, and from the trainer's own log that it subscribed to its data
 check_trainer() {
     local characteristic devices waited=0
-    grep -aq "Device: \"${BLUEZOO_TRAINER_NAME}\" has new connection status: connected" "${GAME_LOG}" \
-        || { report_failure; die "Zwift did not connect the mock trainer ${BLUEZOO_TRAINER_NAME}"; }
+    # Zwift reports the connection asynchronously, so poll instead of sampling the log once
+    until grep -aq "Device: \"${BLUEZOO_TRAINER_NAME}\" has new connection status: connected" "${GAME_LOG}" 2> /dev/null; do
+        ((waited += 1))
+        [[ ${waited} -lt 30 ]] \
+            || { report_failure; die "Zwift did not connect the mock trainer ${BLUEZOO_TRAINER_NAME}"; }
+        sleep 1
+    done
+    waited=0
     # BlueZ drops LE connections while a discovery runs, so winebth stops discovery before
     # connecting the trainer and starts it again once the connection is up.
     grep -aq "Pausing LE discovery on" "${OUT_DIR}/game.log" \
@@ -237,6 +249,12 @@ export https_proxy="${STUB_PROXY}" HTTPS_PROXY="${STUB_PROXY}"
 # winebth would otherwise also expose the mock trainer's own adapter as a radio, and Zwift's
 # watcher would scan from it; see tests/tools/bluetooth/bluezoo.sh
 export ROUVY_BT_ADAPTER=hci0
+# The snap ships neither gecko nor mono, and a wine upgrade updates the prefix on the first
+# run, where wineboot would otherwise open a modal Wine Mono Installer over the game and
+# hang the start. Disable both exactly as the launcher does for its own wineboot (see
+# launcher-gui/src/install.rs); the value carries winemenubuilder because wine-env.sh only
+# applies its own winemenubuilder.exe=d default when this variable is unset.
+export WINEDLLOVERRIDES="mscoree,mshtml=;winemenubuilder.exe=d"
 ${WINEDEBUG:+export WINEDEBUG="${WINEDEBUG}"}
 export WINEPREFIX="\${SNAP_USER_COMMON}/.wine"
 export ZWIFT_INSTALL_DIR="\${WINEPREFIX}/drive_c/Program Files (x86)/Zwift"
@@ -266,12 +284,12 @@ token="\$(cat "\$HOME/../common/pairing-token.json")" || exit 1
 wine start /d "\${zwift_wine_dir}" ZwiftLauncher.exe ZwiftApp.exe "--token=\${token}"
 wait_until_wine_task_started ZwiftApp.exe || exit 1
 # The shim is the game's parent: it reaps it and forwards its exit code, so it
-# stays up for as long as the game runs.
+# stays up for as long as the game runs. The prefix is deliberately left running
+# when the game exits, so that stop_game can unload winebth cleanly.
 for _ in \$(seq 1 ${run_seconds}); do
     wine_task_pid ZwiftApp.exe > /dev/null || break
     sleep 1
 done
-wineserver -k || true
 EOF
     (
         # shellcheck disable=SC2016
@@ -282,14 +300,35 @@ EOF
     game_pid=$!
 }
 
-# stop_game: shut the prefix down now and wait for the game's snap run to finish, so the
-# winebth driver-unload trace is flushed before it is checked. The keep-alive loop inside
-# the game script exits once ZwiftApp.exe is gone, then shuts the server down itself.
+# stop_game: unload winebth, then shut the prefix down and wait for the game's snap run to
+# finish, so the winebth driver-unload trace is flushed before it is checked.
+#
+# A prefix shutdown never removes drivers: 'wineserver -k' SIGKILLs every process, and even
+# wineserver's graceful path only signals an event that nothing consumes, so
+# IRP_MN_REMOVE_DEVICE is never sent and winebth's disconnect-on-driver-shutdown cannot run.
+# The one path that reaches it is a clean stop of the winedevice service group, whose exit
+# from wine_ntoskrnl_main_loop removes the root PnP devices (verified: stopping the group
+# logs IRP_MN_SURPRISE_REMOVAL and IRP_MN_REMOVE_DEVICE on winebth's FDO). The group
+# services are synthesised per load-order group as Winedevice<N> and numbered in driver start
+# order, so stop the ones that exist; at teardown the others are harmless to stop.
 stop_game() {
     [[ -n ${game_pid} ]] || return 0
+    cat > "${STOP_SCRIPT}" <<'EOF'
+set -uo pipefail
+# winebth is in the WinePlugPlay load-order group; winebus, winehid, wineusb and the
+# System Bus Extender drivers are in the others.
+export WINEPREFIX="${SNAP_USER_COMMON}/.wine"
+for n in 1 2 3 4 5 6; do
+    wine sc stop "Winedevice${n}" > /dev/null 2>&1
+done
+# give the driver time to disconnect the trainer over D-Bus, which waits for its event loop
+sleep 5
+wineserver -k || true
+EOF
     # shellcheck disable=SC2016
-    snap run --shell zwift.wine -c 'WINEPREFIX="$HOME/../common/.wine" wineserver -k' \
-        > /dev/null 2>&1 || true
+    # snap run fails silently when its stdout is a plain file, so it goes through a pipe
+    snap run --shell zwift.wine -c 'bash "$HOME/../common/pairing-stop.sh"' 2>&1 \
+        | tee "${OUT_DIR}/stop.log" > /dev/null || true
     wait "${game_pid}" 2> /dev/null || true
     game_pid=""
 }
@@ -315,6 +354,11 @@ main() {
     mkdir -p "${OUT_DIR}" "${YARF_SUITE_DIR}"
     cp -r "${ROOT}/tests/pairing/." "${YARF_SUITE_DIR}/"
     cp "${ROOT}/tests/tools/yarf/yarf_ocr.py" "${YARF_SUITE_DIR}/"
+    cp "${ROOT}/tests/tools/yarf/yarf_frames.py" "${YARF_SUITE_DIR}/"
+    # every frame the suite captures is kept here, so a failed wait can be replayed with
+    # 'tests/tools/yarf/yarf.sh ocr <frames> -g KICKR'
+    mkdir -p "${OUT_DIR}/frames"
+    export YARF_FRAME_DIR="${OUT_DIR}/frames"
 
     clear_stale_socket
     case "${SMOKE_DISPLAY:-auto}" in
@@ -353,27 +397,32 @@ main() {
 
     # yarf exits 120 with no output when its stdout is a plain file, so pipe it through tee
     if ! yarf --platform Mir "${YARF_SUITE_DIR}" --outdir "${OUT_DIR}" "${yarf_args[@]}" 2>&1 | tee "${OUT_DIR}/yarf.log"; then
-        report_failure
-        die "the yarf suite failed"
+        # explore mode is for watching a failing run live, so it carries on to the wait below
+        if [[ ${explore_mode} == true ]]; then
+            echo "pairing: note: the yarf suite failed; continuing in explore mode"
+        else
+            report_failure
+            die "the yarf suite failed"
+        fi
     fi
 
-    # yarf judges the screen; confirm the game actually reached the pairing state
-    if ! grep -aq "ZSF_PAIRING_SCREEN" "${GAME_LOG}" 2> /dev/null; then
-        report_failure
-        die "the yarf suite passed but the game did not reach ZSF_PAIRING_SCREEN"
-    fi
+    if [[ ${explore_mode} == false ]]; then
+        # yarf judges the screen; confirm the game actually reached the pairing state
+        grep -aq "ZSF_PAIRING_SCREEN" "${GAME_LOG}" 2> /dev/null \
+            || { report_failure; die "the yarf suite passed but the game did not reach ZSF_PAIRING_SCREEN"; }
 
-    check_trainer
+        check_trainer
+    fi
 
     # keep a screenshot of the pairing screen with the connected trainer
     "${ROOT}/tests/tools/yarf/yarf.sh" screenshot -s "${WAYLAND_SOCKET}" "${OUT_DIR}/pairing-screen.png" > /dev/null 2>&1 \
         || echo "pairing: note: could not capture the pairing screenshot"
 
     if [[ ${explore_mode} == false ]]; then
-        # Stopping the prefix now exercises winebth's driver-shutdown path: a device that is still
+        # Stopping the prefix now exercises winebth's device-removal path: a device that is still
         # connected must be disconnected, so the mock does not keep advertising it as connected.
         stop_game
-        grep -aq "Disconnecting .* on driver shutdown" "${OUT_DIR}/game.log" \
+        grep -aqE "Disconnecting .* on (device removal|driver shutdown)" "${OUT_DIR}/game.log" \
             || { report_failure; die "winebth did not disconnect the trainer when the driver shut down"; }
     fi
 
@@ -384,6 +433,7 @@ main() {
         echo "pairing: tail the logs with: tail -f ~/zwift-pairing-out/bluezoo.log ~/snap/zwift/common/zwift.log"
         echo "pairing: game log at: ${GAME_LOG}"
         echo "pairing: bluezoo log at: ${OUT_DIR}/bluezoo.log, mock trainer log at: ${OUT_DIR}/trainer.log"
+        echo "pairing: captured frames at: ${OUT_DIR}/frames (replay: tests/tools/yarf/yarf.sh ocr ${OUT_DIR}/frames -g KICKR)"
         # Wait for the game to finish or user interruption
         local waited=0
         while pgrep -f "C:\\\\windows\\\\system32\\\\winedevice.exe" > /dev/null 2>&1; do
