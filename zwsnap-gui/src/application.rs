@@ -314,9 +314,11 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
     {
         match gtk::init() {
             Ok(()) => {
+                let panel_logger = logger.clone();
                 return crate::gui::launch(
                     config.display.clone(),
                     logger.cancellation().clone(),
+                    panel_logger,
                     move |mut ui| {
                         let log_ui = ui.clone();
                         logger.add_sink(move |kind, message| {

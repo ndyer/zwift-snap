@@ -3,11 +3,13 @@
 use crate::cancel::Cancellation;
 use crate::display::DisplayMode;
 use crate::install::InstallProgress;
+use crate::logging::Logger;
 use crate::orchestration::{self, Failure, LauncherBackend, LauncherUi};
 use gtk::glib;
 use gtk::prelude::*;
 use std::io;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::time::Duration;
 
 mod login_panel;
@@ -212,7 +214,7 @@ impl LauncherBackend for PreviewBackend {
 
 /// Preview the interface with simulated events. Does not launch Wine.
 pub fn preview(mode: DisplayMode) -> io::Result<()> {
-    run_application(mode, Cancellation::default(), true, |mut ui| {
+    run_application(mode, Cancellation::default(), true, None, |mut ui| {
         let cancellation = ui.cancellation();
         let mut backend = PreviewBackend {
             ui: ui.clone(),
@@ -228,9 +230,10 @@ pub fn preview(mode: DisplayMode) -> io::Result<()> {
 pub fn launch(
     mode: DisplayMode,
     cancellation: Cancellation,
+    logger: Arc<Logger>,
     worker: impl FnOnce(WorkerUi) -> Result<(), String> + Send + 'static,
 ) -> io::Result<()> {
-    run_application(mode, cancellation, false, worker)
+    run_application(mode, cancellation, false, Some(logger), worker)
 }
 
 type Completion = std::rc::Rc<std::cell::RefCell<Option<Result<(), String>>>>;
@@ -277,6 +280,7 @@ fn run_application(
     mode: DisplayMode,
     cancellation: Cancellation,
     preview: bool,
+    logger: Option<Arc<Logger>>,
     worker: impl FnOnce(WorkerUi) -> Result<(), String> + Send + 'static,
 ) -> io::Result<()> {
     gtk::init().map_err(|error| io::Error::other(format!("Unable to initialize GTK: {error}")))?;
@@ -306,6 +310,7 @@ fn run_application(
             cancellation.clone(),
             preview,
             completion.clone(),
+            logger.clone(),
         );
         window.present();
 
@@ -334,6 +339,7 @@ fn build_window(
     cancellation: Cancellation,
     preview: bool,
     completion: Completion,
+    logger: Option<Arc<Logger>>,
 ) -> gtk::ApplicationWindow {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -352,7 +358,7 @@ fn build_window(
         }
     }
 
-    let panel = std::rc::Rc::new(LoginPanel::new(cancellation.clone()));
+    let panel = std::rc::Rc::new(LoginPanel::new(cancellation.clone(), preview, logger));
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.set_margin_top(24);

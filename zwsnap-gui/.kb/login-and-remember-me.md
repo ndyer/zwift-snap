@@ -13,10 +13,23 @@ IMPORTANT: Read the `.kb/agents.md` file.
 
 The launcher logs in through a WebKitGTK WebView in the bottom panel
 (`zwsnap-gui/src/gui/login_panel.rs`, shown at all times; it loads Zwift's launcher
-embed page until the login gate opens). It does OAuth PKCE against Keycloak
+embed page until the login gate opens, and the `?registration=true` variant on the
+very first run). It does OAuth PKCE against Keycloak
 (`zwsnap-gui/src/oauth.rs`), watches navigation for the `http://zwift/?code=...`
 redirect, checks `state`, exchanges the code and saves `pairing-token.json`, which
 `launch.rs` passes to the game as `--token`.
+
+Link clicks and new-window requests in the panel are opened in the system browser
+with `xdg-open`, never in the panel; only the launcher's own navigations (the embed
+page and the Keycloak authorize URL) are followed there. Because a link click is no
+longer followed in the panel, the panel cannot be navigated away from by the page.
+In the snap this has to be the base's `/usr/bin/xdg-open`, snapd's proxy to the
+host's handler, so `xdg-utils` is not staged (see `snap/.kb/snap-specifics.md`).
+The handoff is logged through the launcher `Logger`: the request at debug, the opener
+invocation at info, and the opener's exit status plus stderr on a helper thread (a
+warning on non-zero exit). `user-open error: cannot open supplied URL` in `zwift.log`
+means the host has no browser — it is not a snap fault, and it is the normal result in
+the workshop, which has no URL handler.
 
 - The launcher cannot read the "Remember me" checkbox. The token has no remember-me claim: the
   refresh-token lifetime was 691200 s whether the box was ticked or not.

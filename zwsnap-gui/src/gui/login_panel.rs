@@ -1,24 +1,142 @@
 //! Persistent WebKitGTK panel pinned to the bottom of the launcher window.
 //!
-//! The panel always shows Zwift's launcher embed page. When the launcher reaches
-//! its login gate it asks the panel to start the OAuth login; the panel loads the
-//! Keycloak authorization URL and, once WebKit navigates to the
-//! `http://zwift/?code=...` redirect, exchanges the code for a token and unblocks
-//! the worker. The page content is never replaced after login (the game window
-//! takes over instead).
+//! The panel always shows Zwift's launcher embed page: the registration variant
+//! on the very first run, the plain page on every run after that. When the
+//! launcher reaches its login gate it asks the panel to start the OAuth login;
+//! the panel loads the Keycloak authorization URL and, once WebKit navigates to
+//! the `http://zwift/?code=...` redirect, exchanges the code for a token and
+//! unblocks the worker. The page content is never replaced after login (the game
+//! window takes over instead).
+//!
+//! Links in the page are handed to the system browser with `xdg-open` rather than
+//! followed inside the panel, which is far too small for a web page.
 
 use crate::cancel::Cancellation;
+use crate::logging::Logger;
 use crate::oauth;
 use gtk::glib;
 use gtk::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 use webkit6::prelude::*;
 
 /// Page shown before Zwift is installed, and until the login gate opens.
 pub const EMBED_URL: &str = "https://cdn.zwift.com/static/web/launcher/embed.html";
+
+/// The same page in its registration variant, shown on the very first run.
+pub const REGISTRATION_URL: &str =
+    "https://cdn.zwift.com/static/web/launcher/embed.html?registration=true";
+
+/// Marker file under `$SNAP_USER_COMMON` recording that the launcher has run
+/// before. Its absence is what makes a run the first one.
+const FIRST_RUN_MARKER: &str = "first-run";
+
+/// The embed page to load. A first run gets Zwift's registration variant.
+fn embed_url(first_run: bool) -> &'static str {
+    if first_run {
+        REGISTRATION_URL
+    } else {
+        EMBED_URL
+    }
+}
+
+/// Consume the first-run marker under `base`: this returns true exactly once, on
+/// the call that creates it. A marker that cannot be created reports a returning
+/// user, so a broken store can never turn the registration page into the
+/// permanent landing page.
+fn take_first_run(base: &std::path::Path) -> bool {
+    let marker = base.join(FIRST_RUN_MARKER);
+    if marker.exists() {
+        return false;
+    }
+    std::fs::create_dir_all(base).is_ok() && std::fs::File::create(&marker).is_ok()
+}
+
+/// Whether this is the launcher's first run, and so whether it should show the
+/// registration page. A preview never consumes the marker, so preview runs stay
+/// reproducible, and a missing store is treated as a returning user.
+fn is_first_run(preview: bool) -> bool {
+    if preview {
+        return false;
+    }
+    match std::env::var_os("SNAP_USER_COMMON") {
+        Some(base) => take_first_run(std::path::Path::new(&base)),
+        None => false,
+    }
+}
+
+/// A URI that must be handed to the system browser rather than loaded in the
+/// panel. Only the schemes a web page may reasonably link to are accepted;
+/// `javascript:`, `file:` and the like stay with WebKit.
+fn external_url(uri: &str) -> Option<&str> {
+    let scheme = uri.split_once(':')?.0;
+    let supported = scheme.eq_ignore_ascii_case("http")
+        || scheme.eq_ignore_ascii_case("https")
+        || scheme.eq_ignore_ascii_case("mailto");
+    supported.then_some(uri)
+}
+
+/// Hand `uri` to the system browser. Inside the snap `xdg-open` is snapd's
+/// `user-open` proxy, so this reaches the host's default handler for the scheme.
+/// The opener runs detached from the UI thread while a helper thread collects its
+/// output: when the host has no handler for the scheme the proxy fails and says
+/// so on stderr, which would otherwise be lost with the child.
+fn open_externally(uri: &str, logger: Option<&Arc<Logger>>) {
+    let opener = std::env::var("ZWIFT_OPEN_COMMAND").unwrap_or_else(|_| "xdg-open".to_owned());
+    if let Some(logger) = logger {
+        logger.info(&format!("Opening {uri} in the system browser ({opener})"));
+    }
+    let spawned = std::process::Command::new(&opener)
+        .arg(uri)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+    match spawned {
+        Ok(child) => {
+            // Waiting also reaps the child. A browser that stays open for the
+            // session simply keeps this thread alive until the launcher exits.
+            let uri = uri.to_owned();
+            let logger = logger.cloned();
+            std::thread::spawn(move || report_opener(&uri, child, logger));
+        }
+        Err(error) => match logger {
+            Some(logger) => logger.error(&format!("Unable to open {uri} in a browser: {error}")),
+            None => eprintln!("Unable to open {uri} in a browser: {error}"),
+        },
+    }
+}
+
+/// Log how the opener ended. snapd's `user-open` proxy exits non-zero and
+/// explains itself on stderr when the host cannot open the URL, which is the only
+/// signal a confined snap gets about the host's handlers.
+fn report_opener(uri: &str, child: std::process::Child, logger: Option<Arc<Logger>>) {
+    let Ok(output) = child.wait_with_output() else {
+        return;
+    };
+    let Some(logger) = logger else {
+        return;
+    };
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.trim();
+    if output.status.success() {
+        if stderr.is_empty() {
+            logger.debug(&format!("{uri} was handed to the host"));
+        } else {
+            logger.debug(&format!("{uri} was handed to the host: {stderr}"));
+        }
+    } else if stderr.is_empty() {
+        logger.warning(&format!(
+            "Unable to open {uri}: the opener exited with {}",
+            output.status
+        ));
+    } else {
+        logger.warning(&format!("Unable to open {uri}: {stderr}"));
+    }
+}
 
 /// Outcome of inspecting a WebKit navigation target.
 #[derive(Debug, PartialEq, Eq)]
@@ -70,7 +188,8 @@ pub struct LoginPanel {
 
 impl LoginPanel {
     /// Build the panel and immediately load the Zwift launcher embed page.
-    pub fn new(cancellation: Cancellation) -> Self {
+    /// `logger` is the launcher's own log, used to record link handling.
+    pub fn new(cancellation: Cancellation, preview: bool, logger: Option<Arc<Logger>>) -> Self {
         use webkit6::PolicyDecisionType;
 
         let webview = super::persistent_webview().unwrap_or_default();
@@ -80,11 +199,15 @@ impl LoginPanel {
             pending: None,
         }));
 
-        // Intercept the OAuth redirect once; the closure outlives individual logins.
+        // Intercept the OAuth redirect and every link the page tries to follow;
+        // the closure outlives individual logins.
         let weak_state = Rc::downgrade(&state);
         let cancellation = cancellation.clone();
         webview.connect_decide_policy(move |webview, decision, decision_type| {
-            if decision_type != PolicyDecisionType::NavigationAction {
+            let navigating = decision_type == PolicyDecisionType::NavigationAction;
+            // A link click arrives as a navigation action and a page asking for a
+            // new window as a new-window action. Everything else is WebKit's.
+            if !navigating && decision_type != PolicyDecisionType::NewWindowAction {
                 return false;
             }
             let Some(mut navigation) = decision
@@ -96,35 +219,64 @@ impl LoginPanel {
             let Some(uri) = navigation.request().and_then(|request| request.uri()) else {
                 return false;
             };
-            let Some(state) = weak_state.upgrade() else {
-                return false;
-            };
-            let expected = state.borrow().state.clone();
-            let Some(outcome) = redirect_outcome(uri.as_str(), &expected) else {
-                return false;
-            };
-            // Never let WebKit load the redirect; we consume it here.
-            decision.ignore();
-            match outcome {
-                Redirect::BadState => {
-                    eprintln!("Zwift login failed: invalid OAuth state");
-                }
-                Redirect::Failed(error) => {
-                    match error {
-                        Some(error) => eprintln!("Zwift login was not completed ({error})"),
-                        None => eprintln!("Zwift login was not completed"),
+            if let Some(logger) = &logger {
+                let kind = if navigating {
+                    "navigation"
+                } else {
+                    "new window"
+                };
+                logger.debug(&format!("WebKit requested a {kind} to {uri}"));
+            }
+
+            if navigating {
+                if let Some(state) = weak_state.upgrade() {
+                    let expected = state.borrow().state.clone();
+                    if let Some(outcome) = redirect_outcome(uri.as_str(), &expected) {
+                        // Never let WebKit load the redirect; we consume it here.
+                        decision.ignore();
+                        match outcome {
+                            Redirect::BadState => {
+                                eprintln!("Zwift login failed: invalid OAuth state");
+                            }
+                            Redirect::Failed(error) => {
+                                match error {
+                                    Some(error) => {
+                                        eprintln!("Zwift login was not completed ({error})")
+                                    }
+                                    None => eprintln!("Zwift login was not completed"),
+                                }
+                                // Return to the login page so the user can try again.
+                                load_login_page(webview, &state);
+                            }
+                            Redirect::Code(code) => {
+                                start_exchange(webview.clone(), state, code, cancellation.clone());
+                            }
+                        }
+                        return true;
                     }
-                    // Return to the login page so the user can try again.
-                    load_login_page(webview, &state);
                 }
-                Redirect::Code(code) => {
-                    start_exchange(webview.clone(), state, code, cancellation.clone());
+                // The launcher loads the Keycloak page itself and the user
+                // completes it by submitting a form; only a deliberate link
+                // click should leave the panel.
+                if navigation.navigation_type() != webkit6::NavigationType::LinkClicked {
+                    return false;
                 }
             }
+
+            // Follow the link in the system browser instead: the panel is far too
+            // small for a web page and offers no way back.
+            let Some(url) = external_url(uri.as_str()) else {
+                if let Some(logger) = &logger {
+                    logger.debug(&format!("Leaving {uri} to WebKit"));
+                }
+                return false;
+            };
+            decision.ignore();
+            open_externally(url, logger.as_ref());
             true
         });
 
-        webview.load_uri(EMBED_URL);
+        webview.load_uri(embed_url(is_first_run(preview)));
 
         let container = gtk::ScrolledWindow::builder()
             .child(&webview)
@@ -267,5 +419,56 @@ mod tests {
             redirect_outcome("http://zwift/?code=a%2Bb&state=abc", "abc"),
             Some(Redirect::Code("a+b".to_owned()))
         );
+    }
+
+    #[test]
+    fn first_run_selects_the_registration_page() {
+        assert_eq!(embed_url(true), REGISTRATION_URL);
+        assert_eq!(embed_url(false), EMBED_URL);
+    }
+
+    #[test]
+    fn only_web_schemes_are_external() {
+        for uri in [
+            "https://zwift.com/support",
+            "http://zwift.com/",
+            "HTTPS://zwift.com/",
+            "mailto:support@zwift.com",
+        ] {
+            assert_eq!(external_url(uri), Some(uri), "{uri} should open externally");
+        }
+        for uri in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "ftp://zwift.com/",
+            "zwift.com/support",
+            "",
+        ] {
+            assert_eq!(external_url(uri), None, "{uri} should stay with WebKit");
+        }
+    }
+
+    #[test]
+    fn first_run_marker_is_consumed_once() {
+        let base = std::env::temp_dir().join(format!("zwsnap-first-run-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        assert!(
+            take_first_run(&base),
+            "the first run should report a first run"
+        );
+        assert!(base.join(FIRST_RUN_MARKER).exists());
+        assert!(!take_first_run(&base), "the second run should not");
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn unwritable_marker_reports_a_returning_user() {
+        // A file where the marker's directory should be makes the marker
+        // impossible to create, so the registration page must not be promised.
+        let path =
+            std::env::temp_dir().join(format!("zwsnap-first-run-file-{}", std::process::id()));
+        std::fs::write(&path, b"not a directory").ok();
+        assert!(!take_first_run(&path.join("nested")));
+        std::fs::remove_file(&path).ok();
     }
 }

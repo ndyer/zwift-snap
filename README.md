@@ -7,7 +7,9 @@ servers into a wine prefix under `$SNAP_USER_COMMON` the first time you run `zwi
 
 Every `zwift` run first makes sure Zwift is installed and up to date, with a Rust/GTK4 progress window.
 The window always shows a web panel along its bottom, which starts on Zwift's launcher page and
-switches to the sign-in page once the launcher reaches its login gate.
+switches to the sign-in page once the launcher reaches its login gate. On the very first run the
+panel shows Zwift's registration page instead. Links in the panel open in your normal browser,
+not inside the panel.
 The game starts only after login succeeds. The first run installs wine prerequisites and Zwift
 without installer prompts, which takes several minutes. Later runs check for a newer Zwift
 version and update it when needed. If the check or update fails you can still launch the
