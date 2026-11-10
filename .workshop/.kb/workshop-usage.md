@@ -1,0 +1,45 @@
+# Preface
+
+How this repository uses the Workshop environment: which action runs what, where the
+SDK lives, and the `project-` prefix subtlety that trips up references. Read this
+before adding an action or a connection.
+
+IMPORTANT: Read the `.kb/agents.md` file.
+
+
+# Concepts
+
+## Running actions
+
+All building and testing happens in a [Workshop](https://ubuntu.com/workshop/docs/)
+environment. Use `workshop run <action> [arguments...]`; `workshop --help` lists
+actions. The local runner's header at `.workshop/zwift-snap-sdk/workshop` documents
+its behavior and limitations.
+
+There is no `setup` action: snapcraft, shellcheck, yamllint, bats, bluez, bluezoo and
+the pkgproxy cache are installed by the `setup-base` hook of the `zwift-snap-sdk` SDK
+at launch and refresh (see `.workshop/zwift-snap-sdk/hooks/setup-base`).
+
+## The Use Workshop skill
+
+The canonical agent documentation for operating Workshop is the `use-workshop` skill
+(`onboard-workshop` and `design-sdk` are its siblings) under `.github/skills/`. It is not
+vendored: the `setup-project` hook of the `zwift-snap-sdk` SDK runs
+`.workshop/zwift-snap-sdk/fetch-skills.sh` at every launch and applied refresh to fetch the
+pinned upstream release of github.com/canonical/use-workshop-skill there. The
+`.github/skills/` skill directories are gitignored and regenerated each launch, so do not
+edit them (only `.github/skills/README.md` is tracked, with the provenance, the pinned ref
+and the override variables). They are absent until the workshop has been launched once, and
+in environments that see only the repository. Route Workshop CLI questions there — in
+particular `.github/skills/use-workshop/references/in-project-sdk.md` for the SDK layout and
+hook rules used by this project.
+
+## Definition, actions and SDK naming
+
+The workshop definition is `.workshop/zwift-snap.yaml`; actions are plain bash
+with `errexit`/`pipefail` set. In-project SDKs are listed with a `project-` prefix in
+`sdks:` (`project-zwift-snap-sdk` for `.workshop/zwift-snap-sdk/sdk.yaml`), but plug and
+slot references elsewhere (e.g. `connections:`) use the bare name (`zwift-snap-sdk`),
+because the `project-` prefix only selects the source and is not part of the name.
+The workshop desktop and gpu interfaces are NOT auto-connected, the `connections:`
+entries are required.

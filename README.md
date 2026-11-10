@@ -100,7 +100,8 @@ own login flow (or accepts explicitly supplied game arguments).
   devices are found (no classic Bluetooth). Game controllers are not available. If a
   device does not show up, pair it through the Zwift companion app.
 
-Development and testing guidance is in [AGENTS.md](AGENTS.md).
+Development and testing guidance lives in the knowledge base: start at
+[AGENTS.md](AGENTS.md) and read [.kb/agents.md](.kb/agents.md).
 
 ## License
 
