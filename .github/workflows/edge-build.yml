@@ -118,17 +118,17 @@ jobs:
         run: workshop exec -- sudo git config --global --add safe.directory /project
 
       - name: Lint
-        run: workshop run lint
+        run: workshop run -- lint
 
       - name: Unit tests
-        run: workshop run test
+        run: workshop run -- test
 
       - name: GTK preview tests
         # Renders into its own virtual Mir output, so it needs no host display.
-        run: workshop run gtk-preview
+        run: workshop run -- gtk-preview
 
       - name: Build the snap
-        run: workshop run build
+        run: workshop run -- build
 
       - name: Check the snap got a real version
         # version-generator falls back to "unknown" when `git describe` fails, which would
@@ -152,7 +152,7 @@ jobs:
           printf 'Built %s\n' "${snaps[@]}"
 
       - name: Install the snap
-        run: workshop run install
+        run: workshop run -- install
 
       - name: Connect the bluez interface
         # snapd does not auto-connect bluez, and an unconnected plug makes the Bluetooth
@@ -160,7 +160,7 @@ jobs:
         run: workshop exec -- sudo snap connect zwift:bluez
 
       - name: Bluetooth plumbing test
-        run: workshop run bluetooth
+        run: workshop run -- bluetooth
 
       - name: Upload the snap
         uses: actions/upload-artifact@v7

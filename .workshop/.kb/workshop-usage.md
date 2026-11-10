@@ -12,9 +12,10 @@ IMPORTANT: Read the `.kb/agents.md` file.
 ## Running actions
 
 All building and testing happens in a [Workshop](https://ubuntu.com/workshop/docs/)
-environment. Use `workshop run <action> [arguments...]`; `workshop --help` lists
-actions. The local runner's header at `.workshop/zwift-snap-sdk/workshop` documents
-its behavior and limitations.
+environment. Use `workshop run -- <action> [arguments...]`; the `--` disambiguates
+the action from the workshop name when they overlap. `workshop --help` lists actions.
+The local runner's header at `.workshop/zwift-snap-sdk/workshop` documents its
+behavior and limitations.
 
 There is no `setup` action: snapcraft, shellcheck, yamllint, bats, bluez, bluezoo and
 the pkgproxy cache are installed by the `setup-base` hook of the `zwift-snap-sdk` SDK
