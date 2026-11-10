@@ -18,7 +18,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cargo build --manifest-path "${root}/launcher-gui/Cargo.toml" --features gtk-ui
+cargo build --manifest-path "${root}/zwsnap-gui/Cargo.toml" --features gtk-ui
 mkdir -p "${stage}/suite" "${stage}/close-suite" "${stage}/runtime-suite" "${stage}/out" "${runtime}/snap.yarf"
 cp "${root}/tests/gtk-preview/preview.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/suite/"
 cp "${root}/tests/gtk-preview/close.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/close-suite/"
@@ -52,7 +52,7 @@ socket_linked=true
 
 echo "Testing cancellation of a pending decision"
 mkdir -p "${stage}/out/close"
-ZWIFT_DISPLAY_MODE=800x600 "${root}/launcher-gui/target/debug/zwift-gui" --preview \
+ZWIFT_DISPLAY_MODE=800x600 "${root}/zwsnap-gui/target/debug/zwsnap-gui" --preview \
     > >(tee "${stage}/gui-close.log") 2>&1 &
 gui_pid=$!
 yarf --platform Mir "${stage}/close-suite" --outdir "${stage}/out/close" \
@@ -75,7 +75,7 @@ grep -q "Launcher cancelled" "${stage}/gui-close.log" \
 for mode in fullscreen 800x600; do
     echo "Testing GTK preview in ${mode} mode"
     mkdir -p "${stage}/out/${mode}"
-    ZWIFT_DISPLAY_MODE="${mode}" "${root}/launcher-gui/target/debug/zwift-gui" --preview \
+    ZWIFT_DISPLAY_MODE="${mode}" "${root}/zwsnap-gui/target/debug/zwsnap-gui" --preview \
         > >(tee "${stage}/gui-${mode}.log") 2>&1 &
     gui_pid=$!
     yarf --platform Mir "${stage}/suite" --outdir "${stage}/out/${mode}" \
@@ -92,7 +92,7 @@ game="${fixture}/common/.wine/drive_c/Program Files (x86)/Zwift"
 data="${fixture}/common/.wine/drive_c/users/tester/AppData/Local/Zwift"
 mkdir -p "${fixture}/bin" "${game}" "${data}" "${stage}/out/runtime"
 touch "${game}/ZwiftApp.exe" "${game}/ZwiftLauncher.exe"
-# The snap's own ZwiftLauncher.exe (the windows-helpers part), copied into the
+# The snap's own ZwiftLauncher.exe (the zwsnap-helpers part), copied into the
 # game directory before a launch.
 printf 'shim' > "${fixture}/bin/ZwiftLauncher.exe"
 # The installed version. `parse_ver_cur` needs a `manifest` attribute even though a
@@ -107,7 +107,7 @@ printf '<Zwift version="1.0.0" sversion="1.0.0 x" manifest="manifest.xml"/>' \
 printf '<ZWIFT><CONFIG/></ZWIFT>' > "${data}/prefs.xml"
 # Fabricate what the Wine prerequisites leave behind: `installed()` also requires
 # them, otherwise the launcher takes the install path instead. Kept in step with the
-# sentinels in launcher-gui/src/install.rs.
+# sentinels in zwsnap-gui/src/install.rs.
 prefix="${fixture}/common/.wine"
 mkdir -p "${prefix}/drive_c/windows/system32"
 touch "${prefix}/drive_c/windows/system32/d3dcompiler_47.dll"
@@ -144,7 +144,7 @@ PATH="${fixture}/bin:${PATH}" SNAP="${fixture}" SNAP_USER_COMMON="${fixture}/com
     WINEPREFIX="${fixture}/common/.wine" ZWIFT_LOG="${fixture}/common/zwift.log" \
     TEST_ROOT="${fixture}" ZWIFT_NO_GUI=0 ZWIFT_DISPLAY_MODE=800x600 ZWIFT_POLL_INTERVAL=1 \
     ZWIFT_CDN_BASE="file://${fixture}/cdn" \
-    "${root}/launcher-gui/target/debug/zwift-gui" \
+    "${root}/zwsnap-gui/target/debug/zwsnap-gui" \
     > >(tee "${stage}/gui-runtime.log") 2>&1 &
 gui_pid=$!
 yarf --platform Mir "${stage}/runtime-suite" --outdir "${stage}/out/runtime" \

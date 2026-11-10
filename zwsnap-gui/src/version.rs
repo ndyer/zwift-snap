@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn current_placeholder_is_none() {
-        let dir = std::env::temp_dir().join(format!("zwift-gui-ver-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("zwsnap-gui-ver-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join("Zwift_ver_cur.xml"),

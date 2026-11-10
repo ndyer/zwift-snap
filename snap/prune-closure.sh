@@ -180,7 +180,7 @@ while IFS= read -r -d '' f; do
 done < <(find "${prime}/opt/wine-devel" -type f -print0 2>/dev/null)
 
 # helper binaries the launcher and wine call through PATH
-add_root "${prime}/bin/zwift-gui"
+add_root "${prime}/bin/zwsnap-gui"
 for bin in ntlm_auth cabextract wget bwrap update-mime-database \
     glycin-thumbnailer; do
     add_root "${prime}/usr/bin/${bin}"

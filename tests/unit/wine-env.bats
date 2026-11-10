@@ -11,14 +11,14 @@ setup() {
 }
 
 @test "wine bootstrap exposes staged GIO TLS modules to child processes" {
-    run env -u GIO_EXTRA_MODULES bash "${ROOT}/launcher/wine-env.sh" printenv GIO_EXTRA_MODULES
+    run env -u GIO_EXTRA_MODULES bash "${ROOT}/zwsnap-runtime/wine-env.sh" printenv GIO_EXTRA_MODULES
     assert_success
     assert_output "${SNAP}/usr/lib/x86_64-linux-gnu/gio/modules"
 }
 
 @test "wine bootstrap preserves extra GIO module paths after staged modules" {
     run env GIO_EXTRA_MODULES=/existing/modules:/other/modules \
-        bash "${ROOT}/launcher/wine-env.sh" printenv GIO_EXTRA_MODULES
+        bash "${ROOT}/zwsnap-runtime/wine-env.sh" printenv GIO_EXTRA_MODULES
     assert_success
     assert_output "${SNAP}/usr/lib/x86_64-linux-gnu/gio/modules:/existing/modules:/other/modules"
 }

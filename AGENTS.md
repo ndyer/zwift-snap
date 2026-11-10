@@ -7,7 +7,7 @@ Guidance for AI coding agents working in this repository.
 An unofficial snap launcher for [Zwift](https://zwift.com) for Linux. Zwift itself is
 proprietary and NOT part of the snap — the Rust launcher downloads and updates it
 into a wine prefix at runtime, straight from Zwift's CDN manifest
-(`launcher-gui/src/{cdn,manifest,sync,download}.rs`). Zwift's own installer
+(`zwsnap-gui/src/{cdn,manifest,sync,download}.rs`). Zwift's own installer
 (`ZwiftSetup.exe`) and patcher are never downloaded or run. Wine is built from source
 by the snap's `wine` part from the local checkout `/project/wine-src`, a clone of
 [ndyer/wine](https://github.com/ndyer/wine) (a fork of the official wine-mirror/wine
@@ -18,12 +18,12 @@ libs. Strict confinement, amd64 only, base `core26`.
 ## Layout
 
 ```
-launcher-gui/      Rust/gtk-rs launcher: lifecycle, logging, the CDN sync, and the Rust
+zwsnap-gui/        Rust/gtk-rs launcher: lifecycle, logging, the CDN sync, and the Rust
                    unit/integration tests
-launcher-windows/  Rust crate cross-compiled to the Windows binaries the snap ships:
+zwsnap-helpers/    Rust crate cross-compiled to the Windows binaries the snap ships:
                    bin/ZwiftLauncher.exe (the parent process ZwiftApp.exe demands) and
                    bin/wait-for-window.exe
-launcher/          shared wine-env.sh bootstrap and pulse-client.conf
+zwsnap-runtime/    shared wine-env.sh bootstrap and pulse-client.conf
 snap/snapcraft.yaml     the snap definition (parts, prune filters, plugs, layouts)
 snap/prune-closure.sh   DT_NEEDED closure walk that prunes unreachable libraries
 tests/             unit tests (bats in tests/unit, stubs in tests/unit/stubs), the visual smoke
@@ -77,7 +77,7 @@ checks) and `ZWIFT_DOWNLOAD_JOBS` sets the number of parallel transfers.
 
 The CDN manifest does not carry a `ZwiftLauncher.exe`, and `ZwiftApp.exe` only starts when
 its parent's image path looks like Zwift's launcher, so the snap ships its own shim
-(`launcher-windows/src/shim.rs`) and copies it next to `ZwiftApp.exe` before a launch.
+(`zwsnap-helpers/src/shim.rs`) and copies it next to `ZwiftApp.exe` before a launch.
 
 ## Workshop
 
@@ -379,9 +379,9 @@ The default screenshot output is `~/zwift-yarf/shot-<time>.png`. The `input` com
 `WINEPREFIX=$HOME/snap/zwift/common/.wine` (inside the snap `$SNAP_USER_COMMON/.wine`).
 Starting `ZwiftApp.exe` directly does not work: it reads its parent's image path and only
 runs under `ZwiftLauncher.exe`, `ZwiftHelper.exe` or `devenv.exe`. The launcher's sequence in
-`launcher-gui/src/launch.rs` is one command — `wine start /d <install dir> ZwiftLauncher.exe
+`zwsnap-gui/src/launch.rs` is one command — `wine start /d <install dir> ZwiftLauncher.exe
 ZwiftApp.exe <args>` — where `ZwiftLauncher.exe` is the snap's own shim
-(`launcher-windows/src/shim.rs`), copied next to `ZwiftApp.exe` first. Zwift's real launcher
+(`zwsnap-helpers/src/shim.rs`), copied next to `ZwiftApp.exe` first. Zwift's real launcher
 is not involved anywhere. Run it from a script file in `~/snap/zwift/common` through
 `snap run --shell zwift.wine -c 'bash "$HOME/../common/script.sh"'` and adapt
 the test-local task helpers in `tests/pairing.sh`. Use `ZwiftApp.exe --token=<json>` to skip the
@@ -510,9 +510,9 @@ Full detail is in `tests/pairing/README.md`; the essentials:
 ## Login and "Remember me" detection
 
 The launcher logs in through a WebKitGTK WebView in the bottom panel
-(`launcher-gui/src/gui/login_panel.rs`, shown at all times; it loads Zwift's launcher
+(`zwsnap-gui/src/gui/login_panel.rs`, shown at all times; it loads Zwift's launcher
 embed page until the login gate opens). It does OAuth PKCE against Keycloak
-(`launcher-gui/src/oauth.rs`), watches navigation for the `http://zwift/?code=...`
+(`zwsnap-gui/src/oauth.rs`), watches navigation for the `http://zwift/?code=...`
 redirect, checks `state`, exchanges the code and saves `pairing-token.json`, which
 `launch.rs` passes to the game as `--token`.
 
@@ -673,7 +673,7 @@ wine entirely.
 - **Build ordering**: `runtime-prune` depends on Wine, the Rust launcher, the runtime
   helpers and the Windows helpers; GPU cleanup follows it. Never make Wine depend on the
   launcher just to order pruning: this invalidates Wine's build on every launcher change.
-- **Windows binaries**: `launcher-windows/` is cross-compiled by the `windows-helpers`
+- **Windows binaries**: `zwsnap-helpers/` is cross-compiled by the `zwsnap-helpers`
   part (rustup's `x86_64-pc-windows-gnu` target, not snapcraft's Rust plugin, which
   builds for the host). The binaries land in `bin/` and are on `runtime-prune`'s
   must-exist list, so removing one there fails the build instead of shipping a snap
@@ -725,7 +725,7 @@ wine entirely.
   order, and exits non-zero on the first failure, so this is faster and still
   stops the install before Zwift is downloaded. The per-verb dialog titles are
   read from the `Executing w_do_call <verb>` lines winetricks prints to stderr
-  (`WINETRICKS_VERB_MARKER` in `launcher-gui/src/install.rs`), so the pinned
+  (`WINETRICKS_VERB_MARKER` in `zwsnap-gui/src/install.rs`), so the pinned
   winetricks and the launcher must change together if that output changes.
   `.NET Framework 4.8` (`dotnet48`) and `WebView2` (`webview2`) are not installed:
   they existed for Zwift's own `ZwiftLauncher.exe` (a .NET launcher hosting a

@@ -317,7 +317,7 @@ fn run_application(
             ui.finished(outcome);
         });
     });
-    app.run_with_args(&["zwift-gui"]);
+    app.run_with_args(&["zwsnap-gui"]);
     let outcome = result.borrow_mut().take();
     if preview {
         return Ok(());

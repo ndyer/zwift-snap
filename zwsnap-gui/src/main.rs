@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use zwift_gui::display::{configure_file, DisplayMode};
+use zwsnap_gui::display::{configure_file, DisplayMode};
 
 fn main() -> ExitCode {
     // The launcher's own switches come before the optional "--" separator, everything
@@ -22,7 +22,7 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            match zwift_gui::gui::preview(mode) {
+            match zwsnap_gui::gui::preview(mode) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("{error}");
@@ -53,20 +53,20 @@ fn main() -> ExitCode {
         [cmd, rest @ ..] if cmd == "--" => launch(rest.to_vec(), skip_login),
         _ => {
             eprintln!(
-                "usage: zwift-gui set-display-mode PREFS_FILE (mode from ZWIFT_DISPLAY_MODE)"
+                "usage: zwsnap-gui set-display-mode PREFS_FILE (mode from ZWIFT_DISPLAY_MODE)"
             );
             #[cfg(feature = "gtk-ui")]
-            eprintln!("       zwift-gui --preview");
-            eprintln!("       zwift-gui [--skip-login] [-- GAME_ARGUMENTS...]");
+            eprintln!("       zwsnap-gui --preview");
+            eprintln!("       zwsnap-gui [--skip-login] [-- GAME_ARGUMENTS...]");
             ExitCode::from(2)
         }
     }
 }
 
 fn launch(args: Vec<String>, skip_login: bool) -> ExitCode {
-    let result = zwift_gui::application::Config::from_env().and_then(|mut config| {
+    let result = zwsnap_gui::application::Config::from_env().and_then(|mut config| {
         config.skip_login = skip_login;
-        zwift_gui::application::launch(config, args)
+        zwsnap_gui::application::launch(config, args)
     });
     match result {
         Ok(()) => ExitCode::SUCCESS,

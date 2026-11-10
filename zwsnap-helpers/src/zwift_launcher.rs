@@ -1,4 +1,4 @@
-//! `ZwiftLauncher.exe`. The work is in [`zwift_windows_helpers::shim`], which
+//! `ZwiftLauncher.exe`. The work is in [`zwsnap_helpers::shim`], which
 //! only exists for Windows targets.
 
 // Zwift's own launcher is a GUI binary; matching it keeps a console window from
@@ -7,10 +7,10 @@
 
 #[cfg(windows)]
 fn main() {
-    std::process::exit(zwift_windows_helpers::shim::run());
+    std::process::exit(zwsnap_helpers::shim::run());
 }
 
 #[cfg(not(windows))]
 fn main() {
-    zwift_windows_helpers::not_windows()
+    zwsnap_helpers::not_windows()
 }

@@ -23,7 +23,7 @@ impl Fixture {
         ));
         let fixture = Self { root };
         fs::create_dir_all(fixture.root.join("bin")).unwrap();
-        // The snap's own ZwiftLauncher.exe (the windows-helpers part), which the
+        // The snap's own ZwiftLauncher.exe (the zwsnap-helpers part), which the
         // launcher copies into the game directory before starting it.
         fs::write(fixture.root.join("bin/ZwiftLauncher.exe"), "shim").unwrap();
         let game = fixture
@@ -108,7 +108,7 @@ esac"#,
 
     /// Fabricate what the Wine prerequisites leave behind, so the launcher sees the
     /// prefix as installed. Kept in step with the sentinels in
-    /// `launcher-gui/src/install.rs` (`WINETRICKS_PREREQUISITES`).
+    /// `zwsnap-gui/src/install.rs` (`WINETRICKS_PREREQUISITES`).
     fn write_wine_prerequisites(&self) {
         let prefix = self.root.join("common/.wine");
         let path = prefix.join("drive_c/windows/system32/d3dcompiler_47.dll");
@@ -123,7 +123,7 @@ esac"#,
     }
 
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_zwift-gui"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_zwsnap-gui"));
         command
             .env_clear()
             .env(

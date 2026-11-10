@@ -14,6 +14,6 @@ wine-src/
 .github/skills/design-sdk/
 .github/skills/.fetched-revision
 __pycache__/
-launcher-gui/target/
+zwsnap-gui/target/
 /build.log
-launcher-windows/target/
+zwsnap-helpers/target/

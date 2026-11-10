@@ -1616,7 +1616,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
-name = "zwift-gui"
+name = "zwsnap-gui"
 version = "0.1.0"
 dependencies = [
  "base64 0.21.7",

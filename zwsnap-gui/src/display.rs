@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn invalid_file_is_left_untouched() {
-        let dir = std::env::temp_dir().join(format!("zwift-gui-prefs-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("zwsnap-gui-prefs-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let p = dir.join("prefs.xml");
         fs::write(&p, "<ZWIFT><CONFIG>\n").unwrap();

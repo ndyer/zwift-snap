@@ -1,6 +1,6 @@
 # Rust Zwift launcher
 
-The `zwift-gui` binary is the snap's default `zwift` app. It owns installation,
+The `zwsnap-gui` binary is the snap's default `zwift` app. It owns installation,
 updates, display preferences, process supervision, cancellation and logging.
 GTK4 widgets are built programmatically with gtk-rs.
 
@@ -33,7 +33,7 @@ and forwards output directly to the GUI. SIGINT, SIGTERM, SIGHUP and closing the
 window cancel subprocesses and polling. Wine server cleanup has independent
 10-second command timeouts.
 
-One runtime support remains in `../launcher/`:
+One runtime support remains in `../zwsnap-runtime/`:
 
 - `wine-env.sh` is the shared command-chain wrapper for all three snap apps.
   Library paths must be set before the dynamic loader starts the GTK executable;
@@ -42,7 +42,7 @@ One runtime support remains in `../launcher/`:
 `pulse-client.conf` supplies the audio client configuration.
 
 The two Windows helpers this crate runs come from the sibling
-[`../launcher-windows/`](../launcher-windows/) crate: `ZwiftLauncher.exe` is the
+[`../zwsnap-helpers/`](../zwsnap-helpers/) crate: `ZwiftLauncher.exe` is the
 parent process `ZwiftApp.exe` demands and `wait-for-window.exe` reports when the
 game window is up. Both use Win32 rather than GTK: GDK can enumerate its own
 windows, not another process's Wayland windows. Winetricks remains an external

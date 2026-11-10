@@ -4,7 +4,7 @@
 //! that is `ZwiftLauncher.exe`, `ZwiftHelper.exe` or `devenv.exe`. Otherwise it
 //! tries to start Zwift's own launcher itself and exits, or fails with "Could
 //! not run Update process" (ERROR ZA1). The snap ships its own
-//! `ZwiftLauncher.exe` (see `launcher-windows/src/shim.rs`) that starts the
+//! `ZwiftLauncher.exe` (see `zwsnap-helpers/src/shim.rs`) that starts the
 //! command line it is given and waits for it, so
 //! `wine start ... ZwiftLauncher.exe ZwiftApp.exe ...` both supplies that parent
 //! name and forwards the game's exit code.
@@ -343,7 +343,7 @@ esac
                     dir.display()
                 ),
             );
-            // The snap's windows-helpers part, copied into the install
+            // The snap's zwsnap-helpers part, copied into the install
             // directory by start().
             let shim = dir.join("bin/ZwiftLauncher.exe");
             fs::create_dir_all(shim.parent().unwrap()).unwrap();

@@ -252,7 +252,7 @@ export ROUVY_BT_ADAPTER=hci0
 # The snap ships neither gecko nor mono, and a wine upgrade updates the prefix on the first
 # run, where wineboot would otherwise open a modal Wine Mono Installer over the game and
 # hang the start. Disable both exactly as the launcher does for its own wineboot (see
-# launcher-gui/src/install.rs); the value carries winemenubuilder because wine-env.sh only
+# zwsnap-gui/src/install.rs); the value carries winemenubuilder because wine-env.sh only
 # applies its own winemenubuilder.exe=d default when this variable is unset.
 export WINEDLLOVERRIDES="mscoree,mshtml=;winemenubuilder.exe=d"
 ${WINEDEBUG:+export WINEDEBUG="${WINEDEBUG}"}
@@ -278,7 +278,7 @@ zwift_wine_dir="\$(winepath -w "\${ZWIFT_INSTALL_DIR}")"
 # ZwiftApp.exe only starts when its parent image is called ZwiftLauncher.exe. The
 # snap's copy of that name is the shim that starts the command line it is given
 # (the real launcher would patch the game instead); the launcher puts it there
-# too, see launcher-gui/src/launch.rs.
+# too, see zwsnap-gui/src/launch.rs.
 cp "\${SNAP}/bin/ZwiftLauncher.exe" "\${ZWIFT_INSTALL_DIR}/ZwiftLauncher.exe" || exit 1
 token="\$(cat "\$HOME/../common/pairing-token.json")" || exit 1
 wine start /d "\${zwift_wine_dir}" ZwiftLauncher.exe ZwiftApp.exe "--token=\${token}"

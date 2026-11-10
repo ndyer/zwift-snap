@@ -1,4 +1,4 @@
-//! `wait-for-window.exe`. The work is in [`zwift_windows_helpers::wait`], which
+//! `wait-for-window.exe`. The work is in [`zwsnap_helpers::wait`], which
 //! only exists for Windows targets.
 //!
 //! This stays a console binary on purpose: it writes diagnostics to stderr on
@@ -6,10 +6,10 @@
 
 #[cfg(windows)]
 fn main() {
-    std::process::exit(zwift_windows_helpers::wait::run());
+    std::process::exit(zwsnap_helpers::wait::run());
 }
 
 #[cfg(not(windows))]
 fn main() {
-    zwift_windows_helpers::not_windows()
+    zwsnap_helpers::not_windows()
 }

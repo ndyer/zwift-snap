@@ -53,7 +53,7 @@ dl_cache_present() {
 }
 
 # dl_cache_version DIR: the Zwift sversion installed in DIR, or empty. Mirrors
-# launcher-gui/src/version.rs: Zwift_ver_cur_filename.txt (NUL padded) names the
+# zwsnap-gui/src/version.rs: Zwift_ver_cur_filename.txt (NUL padded) names the
 # real version file, else Zwift_ver_cur.xml is read.
 dl_cache_version() {
     local dir="${1:?}" name="Zwift_ver_cur.xml"

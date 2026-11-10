@@ -18,12 +18,12 @@ def dependencies(name):
         result.update(dependencies(parent))
     return result
 
-assert "zwift-gui" not in dependencies("wine")
-assert {"wine", "zwift-gui", "launcher-runtime", "winetricks", "windows-helpers"} <= dependencies("runtime-prune")
+assert "zwsnap-gui" not in dependencies("wine")
+assert {"wine", "zwsnap-gui", "zwsnap-runtime", "winetricks", "zwsnap-helpers"} <= dependencies("runtime-prune")
 assert "runtime-prune" in dependencies("gpu-2604")
 assert "prune-closure.sh" not in parts["wine"].get("override-prime", "")
 assert "prune-closure.sh" in parts["runtime-prune"]["override-prime"]
-assert snap["apps"]["zwift"]["command"] == "bin/zwift-gui"
+assert snap["apps"]["zwift"]["command"] == "bin/zwsnap-gui"
 assert "rust-launcher" not in snap["apps"]
 assert "yad" not in parts["wine"]["stage-packages"]
 PY
@@ -37,7 +37,7 @@ import yaml
 
 with open(sys.argv[1]) as source:
     snap = yaml.safe_load(source)
-assert "glib-networking" in snap["parts"]["zwift-gui"]["stage-packages"]
+assert "glib-networking" in snap["parts"]["zwsnap-gui"]["stage-packages"]
 assert "usr/lib/x86_64-linux-gnu/gio/modules/libgiognutls.so" in snap["parts"]["runtime-prune"]["override-prime"]
 directory = "/usr/lib/x86_64-linux-gnu/webkitgtk-6.0"
 assert snap["layout"][directory] == {"bind": "$SNAP" + directory}

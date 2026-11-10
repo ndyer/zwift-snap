@@ -289,7 +289,7 @@ mod tests {
             "1.124.0",
             &[("ZwiftApp.exe", ""), ("ZwiftLauncher.exe", "")],
         );
-        // The snap's windows-helpers part, copied into the game directory by
+        // The snap's zwsnap-helpers part, copied into the game directory by
         // the launch step.
         let shim = dir.join("snap/bin/ZwiftLauncher.exe");
         fs::create_dir_all(shim.parent().unwrap()).unwrap();

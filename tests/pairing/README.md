@@ -21,7 +21,7 @@ The zwift snap must be installed and Zwift already downloaded into the prefix, s
   tunnelled straight through, so only login and the game API are faked.
 - The game trusts the stub because its CA is appended to the prefix's `data/cacert.pem` for the
   duration of the test (backed up and restored afterwards). The game is driven directly (the
-  parent-process sequence of `launcher-gui/src/launch.rs`, with a fake login token) rather than through the real
+  parent-process sequence of `zwsnap-gui/src/launch.rs`, with a fake login token) rather than through the real
   launcher, so the Zwift patcher never runs and cannot overwrite the CA. That sequence starts
   the snap's own `bin/ZwiftLauncher.exe` (copied into the game directory as the real launcher
   does), which is the parent process name `ZwiftApp.exe` demands and forwards the command line

@@ -74,7 +74,7 @@ environment:
 
 apps:
   zwift:
-    command: bin/zwift-gui
+    command: bin/zwsnap-gui
     command-chain: &chain
       - bin/gpu-2604-wrapper
       - bin/wine-env.sh
@@ -99,9 +99,9 @@ apps:
     plugs: *plugs
 
 parts:
-  zwift-gui:
+  zwsnap-gui:
     plugin: rust
-    source: launcher-gui
+    source: zwsnap-gui
     rust-channel: stable
     rust-features: [gtk-ui]
     build-packages:
@@ -117,7 +117,7 @@ parts:
       # TLS is a GIO plugin, not a linked dependency of WebKit/libsoup.
       - glib-networking
     prime:
-      - bin/zwift-gui
+      - bin/zwsnap-gui
       - usr/
 
   wine:
@@ -306,14 +306,14 @@ parts:
     # Pruning needs every runtime part primed, not rebuilt. Keep this dependency
     # downstream of Wine so launcher changes never invalidate Wine's build.
     plugin: nil
-    after: [wine, zwift-gui, launcher-runtime, winetricks, windows-helpers]
+    after: [wine, zwsnap-gui, zwsnap-runtime, winetricks, zwsnap-helpers]
     override-prime: |
       craftctl default
       # Deletes tools, import libraries and unreachable libraries; see
       # snap/prune-closure.sh for the closure walk. Bump this comment after
       # editing that script or Wine's prime filters, craft-parts only
       # re-runs the prime step when the script text tracked in the part state
-      # changes: v10
+      # changes: v11
       # The gschemas.compiled that Debian creates in a trigger is not part of the staged
       # packages. Without it GTK programs abort with "No GSettings schemas are installed".
       glib-compile-schemas "${CRAFT_PRIME}/usr/share/glib-2.0/schemas"
@@ -348,7 +348,7 @@ parts:
       # or wine itself needs at runtime went missing, for example after a change to the
       # stage-packages list or the prime filter above.
       for f in \
-          bin/zwift-gui \
+          bin/zwsnap-gui \
           bin/ZwiftLauncher.exe \
           bin/wait-for-window.exe \
           opt/wine-devel/bin/wine \
@@ -418,15 +418,15 @@ parts:
     override-build: |
       install -Dm755 "${CRAFT_PART_SRC}/winetricks" "${CRAFT_PART_INSTALL}/bin/winetricks"
 
-  windows-helpers:
+  zwsnap-helpers:
     # The Windows side helpers that run inside the wine prefix:
     # ZwiftLauncher.exe is the parent process ZwiftApp.exe demands (see
-    # launcher-windows/src/shim.rs) and wait-for-window.exe tells the launcher
+    # zwsnap-helpers/src/shim.rs) and wait-for-window.exe tells the launcher
     # when the game window is up. Ubuntu has no rust windows target packaged,
     # so use rustup for the cross compile, as the retired runfromprocess part
     # did.
     plugin: nil
-    source: launcher-windows
+    source: zwsnap-helpers
     source-type: local
     build-packages:
       - ca-certificates
@@ -447,11 +447,11 @@ parts:
               "${CRAFT_PART_INSTALL}/bin/${exe}"
       done
 
-  launcher-runtime:
+  zwsnap-runtime:
     # The shell bootstrap wine-env.sh shares with the command-chain, and the
     # pulse-client.conf wine needs for audio.
     plugin: dump
-    source: launcher
+    source: zwsnap-runtime
     organize:
       "*.sh": bin/
       pulse-client.conf: etc/zwift/pulse-client.conf

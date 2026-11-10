@@ -8,7 +8,7 @@ sdks:
   # The yarf smoke test (tests/smoke.sh) renders its Mir compositor on the host display
   # through it when one is available.
   - name: project-zwift-snap-sdk
-  # Rust SDK for building and testing the zwift-gui launcher
+  # Rust SDK for building and testing the zwsnap-gui launcher
   - name: rust
     channel: latest/stable
 connections:
@@ -48,7 +48,7 @@ actions:
     sudo snap install --dangerous "$@" "${newest}"
   lint: |
     cd /project
-    shellcheck -x launcher/*.sh snap/prune-closure.sh tests/smoke.sh tests/gtk-preview.sh \
+    shellcheck -x zwsnap-runtime/*.sh snap/prune-closure.sh tests/smoke.sh tests/gtk-preview.sh \
       tests/bluetooth.sh tests/pairing.sh tests/dl-cache.sh tests/tools/yarf/yarf.sh \
       tests/tools/bluetooth/*.sh tests/tools/dl-cache/*.sh \
       tests/unit/*.bats tests/unit/test_helper.bash \
@@ -57,17 +57,17 @@ actions:
       .workshop/zwift-snap-sdk/workshop
     yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' \
       snap/snapcraft.yaml .workshop/zwift-snap.yaml .workshop/zwift-snap-sdk/sdk.yaml
-    cargo fmt --manifest-path launcher-gui/Cargo.toml --check
-    cargo clippy --manifest-path launcher-gui/Cargo.toml --features gtk-ui --all-targets -- -D warnings
+    cargo fmt --manifest-path zwsnap-gui/Cargo.toml --check
+    cargo clippy --manifest-path zwsnap-gui/Cargo.toml --features gtk-ui --all-targets -- -D warnings
     # The Windows helpers only compile for their real target; checking them for
     # it catches the windows-crate API mistakes that a host build would not.
-    cargo fmt --manifest-path launcher-windows/Cargo.toml --check
-    cargo clippy --manifest-path launcher-windows/Cargo.toml \
+    cargo fmt --manifest-path zwsnap-helpers/Cargo.toml --check
+    cargo clippy --manifest-path zwsnap-helpers/Cargo.toml \
       --target x86_64-pc-windows-gnu --all-targets -- -D warnings
   test: |
     cd /project
     bats tests/unit
-    cargo test --manifest-path launcher-gui/Cargo.toml --features gtk-ui
+    cargo test --manifest-path zwsnap-gui/Cargo.toml --features gtk-ui
   gtk-preview: |
     cd /project
     # Visual tests of the GTK launcher and stub-Wine lifecycle; no real Zwift.

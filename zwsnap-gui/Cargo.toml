@@ -1,16 +1,16 @@
 [package]
-name = "zwift-gui"
+name = "zwsnap-gui"
 version = "0.1.0"
 edition = "2021"
 description = "Rust replacement for the Zwift snap launcher scripts and yad dialogs"
 license = "MIT OR Apache-2.0"
 
 [lib]
-name = "zwift_gui"
+name = "zwsnap_gui"
 path = "src/lib.rs"
 
 [[bin]]
-name = "zwift-gui"
+name = "zwsnap-gui"
 path = "src/main.rs"
 
 [dependencies]
