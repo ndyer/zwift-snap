@@ -2,6 +2,8 @@
 Documentation    Exercises the standalone GTK launcher preview, not Wine or the snap.
 Resource         kvm.resource
 Library          yarf_ocr.py
+# saves every frame the suite captures when YARF_FRAME_DIR is set, for debugging failures
+Library          yarf_frames.py
 
 *** Test Cases ***
 Preview Displays Failure And Log And Retries

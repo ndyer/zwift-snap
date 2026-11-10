@@ -8,6 +8,8 @@ Documentation     Pairs the mock trainer on Zwift's device pairing screen, for t
 Resource          kvm.resource
 # caps the threads of the OCR in Match Text, which otherwise runs on every core
 Library           yarf_ocr.py
+# saves every frame the suite captures when YARF_FRAME_DIR is set, for debugging failures
+Library           yarf_frames.py
 
 *** Variables ***
 # how long to wait for a screen that must appear
@@ -48,10 +50,12 @@ Pair The Trainer
     [Documentation]    Pair the mock trainer as the power source. A returning profile reconnects the trainer it
     ...    paired before by itself, and clicking a connected tile would unpair it, so first give
     ...    the reconnect a chance. Clicking the trainer in the dialog toggles it: click it once.
+    ...    Matching the trainer is what tells the pair dialog apart: the reconnect check above
+    ...    established it is not on the pairing screen, and the dialog's own title is not usable
+    ...    (OCR reads it as PAIRED DEVICES, the screen behind it).
     ${reconnected}=    Run Keyword And Return Status    Match Text    ${TRAINER}    ${RECONNECT_TIMEOUT}
     IF    not ${reconnected}
         Click Zwift Target    POWER SOURCE
-        Match Text    PAIR DEVICE    ${SCREEN_TIMEOUT}
         Match Text    ${TRAINER}    ${DEVICE_TIMEOUT}
         Click Zwift Target    ${TRAINER}
         Sleep    3s

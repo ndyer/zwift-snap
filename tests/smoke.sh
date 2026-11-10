@@ -167,13 +167,21 @@ start_mir() {
 # stage_suite: yarf is a strict snap and cannot read /project, copy the suite home
 stage_suite() {
     rm -rf "${YARF_SUITE_DIR}" "${YARF_OUT_DIR}"
-    mkdir -p "${YARF_SUITE_DIR}" "${YARF_OUT_DIR}"
+    mkdir -p "${YARF_SUITE_DIR}" "${YARF_OUT_DIR}" "${YARF_OUT_DIR}/frames"
     cp -r "${ROOT}/tests/smoke/." "${YARF_SUITE_DIR}/"
     cp "${ROOT}/tests/tools/yarf/yarf_ocr.py" "${YARF_SUITE_DIR}/"
+    cp "${ROOT}/tests/tools/yarf/yarf_frames.py" "${YARF_SUITE_DIR}/"
+    # every frame the suite captures is kept here, so a failed wait can be replayed
+    # with 'tests/tools/yarf/yarf.sh ocr <frames> -g <text>'
+    export YARF_FRAME_DIR="${YARF_OUT_DIR}/frames"
 }
 
 report_failure() {
     echo "smoke: FAILED, artifacts in ${YARF_OUT_DIR} (log.html shows the screenshots)"
+    if [[ -d ${YARF_OUT_DIR}/frames ]]; then
+        echo "smoke: every captured frame is in ${YARF_OUT_DIR}/frames (index.log names the wait), replay them with:"
+        echo "smoke:   tests/tools/yarf/yarf.sh ocr ${YARF_OUT_DIR}/frames -g <text>"
+    fi
     if [[ -f ${ZWIFT_LOG} ]]; then
         echo "smoke: last 30 lines of the zwift launcher log:"
         tail -30 "${ZWIFT_LOG}"

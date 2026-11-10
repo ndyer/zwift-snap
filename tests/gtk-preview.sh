@@ -20,10 +20,15 @@ trap cleanup EXIT
 
 cargo build --manifest-path "${root}/launcher-gui/Cargo.toml" --features gtk-ui
 mkdir -p "${stage}/suite" "${stage}/close-suite" "${stage}/runtime-suite" "${stage}/out" "${runtime}/snap.yarf"
-cp "${root}/tests/gtk-preview/preview.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${stage}/suite/"
-cp "${root}/tests/gtk-preview/close.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${stage}/close-suite/"
-cp "${root}/tests/gtk-preview/runtime.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${stage}/runtime-suite/"
+cp "${root}/tests/gtk-preview/preview.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/suite/"
+cp "${root}/tests/gtk-preview/close.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/close-suite/"
+cp "${root}/tests/gtk-preview/runtime.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/runtime-suite/"
 cp "${root}/tests/tools/yarf/input.py" "${stage}/"
+
+# every frame the suites capture is kept here, so a failed wait can be replayed with
+# 'tests/tools/yarf/yarf.sh ocr <frames> -g <text>'
+mkdir -p "${stage}/frames"
+export YARF_FRAME_DIR="${stage}/frames"
 
 export WAYLAND_DISPLAY="${socket}" XDG_SESSION_TYPE=wayland
 if [[ -e ${runtime}/${socket} || -L ${runtime}/${socket} || -e ${runtime}/${socket}.lock \
