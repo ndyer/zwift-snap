@@ -9,11 +9,11 @@ proprietary and NOT part of the snap — the Rust launcher downloads and updates
 into a wine prefix at runtime, straight from Zwift's CDN manifest
 (`launcher-gui/src/{cdn,manifest,sync,download}.rs`). Zwift's own installer
 (`ZwiftSetup.exe`) and patcher are never downloaded or run. Wine is built from source
-by the snap's `wine` part:
-[ndyer/wine](https://github.com/ndyer/wine), a fork of the official wine-mirror/wine
-GitHub mirror, at the `source-branch` in `snap/snapcraft.yaml` (currently
-`zwift-radios-rebased`: wine-11.21 plus BLE support — advertisement watcher, GATT,
-Windows.Devices.Radios; new-style WoW64, no i386 host libs). Strict confinement, amd64 only, base `core26`.
+by the snap's `wine` part from the local checkout `/project/wine-src`, a clone of
+[ndyer/wine](https://github.com/ndyer/wine) (a fork of the official wine-mirror/wine
+GitHub mirror) on its `zwift-radios-rebased` branch: wine-11.21 plus BLE support —
+advertisement watcher, GATT, Windows.Devices.Radios; new-style WoW64, no i386 host
+libs. Strict confinement, amd64 only, base `core26`.
 
 ## Layout
 
@@ -33,8 +33,9 @@ tests/             unit tests (bats in tests/unit, stubs in tests/unit/stubs), t
   tools/bluetooth/   bluezoo mock tooling shared by both bluetooth tests: the helper bluezoo.sh,
                    the RSSI wrapper bluezoo-run.py, the scan client bluetooth-scan.py and the
                    BLE trainer mock bluetooth-trainer.py
-  tools/yarf/        yarf tooling: the screenshot/input debugging tool yarf.sh (+ screenshot.py,
-                   input.py) and the OCR thread cap yarf_ocr.py used by the robot suites
+  tools/yarf/        yarf tooling: the screenshot/input/OCR debugging tool yarf.sh (+ screenshot.py,
+                   input.py, ocr_frame.py), the OCR thread cap yarf_ocr.py and the frame dump
+                   yarf_frames.py used by the robot suites
   tools/dl-cache/    the smoke test's Zwift download cache helper dl-cache.sh, with the
                    tests/dl-cache.sh entrypoint for it one level up
   .workshop/         workshop definition (build environment) + in-project SDK zwift-snap-sdk
@@ -241,6 +242,9 @@ Yarf gotchas that cost time to discover (all verified live):
 - `Match`/`Match Text` timeouts are integer seconds, not Robot time strings.
 - OCR (`Match Text`) can misread small text. A separate screenshot/OCR pass may
   succeed while the running yarf client's Wayland capture has failed; inspect both.
+- Do not trust the suite's own `print` lines in `yarf.log`: Robot's output buffering loses and
+  interleaves them, so keywords that demonstrably ran can be missing from it. Read the keyword
+  order in `output.xml` (or `log.html`) to see what actually executed.
 - A single missed frame happens even when the dialog is visible: "gone" checks must
   require several consecutive misses.
 - `mir-test-tools.demo-server` names its own wayland socket after `WAYLAND_DISPLAY`
@@ -256,6 +260,35 @@ Yarf gotchas that cost time to discover (all verified live):
   `SMOKE_DISPLAY=nested`, so check its startup output to confirm the requested mode.
   To expose a blank compositor log, reproduce its command with output piped through
   `tee` rather than redirected to a regular file.
+
+### Frame dump and OCR replay
+
+A failed OCR match is hard to argue with after the fact, so the suites keep every frame
+they capture. `tests/tools/yarf/yarf_frames.py` is imported as a Robot `Library` next to
+`yarf_ocr.py` in all five suites and patches yarf's
+`VideoInputBase._grab_and_save_screenshot` plus the `match_text`/`find_text`/`read_text`/
+`_do_match` paths, so capture, matching and timeouts all dump their frame. It exists as a
+patch rather than a yarf plugin because yarf never calls `_start_suite`, so a suite-level
+hook would not fire.
+
+- `YARF_FRAME_DIR` selects the directory and is required — without it the library does
+  nothing, so a plain `yarf` run is unaffected. `YARF_FRAME_LIMIT` caps how many frames are
+  kept (oldest dropped first; `0`, the default, keeps all of them). The harnesses set the
+  former: `~/zwift-pairing-out/frames`, `~/zwift-smoke-out/frames` and gtk-preview's staged
+  `frames/`.
+- Each frame is a PNG named by its 10-digit capture number, and `index.log` maps that
+  number to the wait that captured it (`match_text 'KICKR'`) — the index is what makes a
+  failure diagnosable after the run. Capture number and index continue from the frames
+  already in the directory, so point it at a fresh directory per run; otherwise a
+  previous run's frames stay mixed in.
+- `tests/tools/yarf/yarf.sh ocr [-g SUBSTRING] PATH [PATH ...]` replays OCR over dumped
+  frames (paths, or a directory of them) without a compositor: it prints what each frame
+  reads and, with `-g`, keeps only the frames whose text contains the substring. Use it to
+  prove whether the text was on screen (a yarf/OCR problem) or absent (a game/test problem)
+  when a match timed out — the usual case is that the text was there and `Match Text`
+  misread it.
+- `tests/tools/yarf/ocr_frame.py` is the OCR entry point that `yarf.sh ocr` runs inside the
+  yarf snap; it is frame-file based, so it needs no Wayland connection.
 
 ## Zwift download cache (smoke test)
 
@@ -414,7 +447,11 @@ Full detail is in `tests/pairing/README.md`; the essentials:
   token endpoint must be faked. The stub answers it with an unsigned token and the handful of
   game API calls the game blocks on before pairing (`/api/auth`, `/api/users/login`,
   `/api/profiles/me`, the world list, some empty 200s). The protobuf response shapes come from
-  [zwift-offline](https://github.com/fatsbrown/zwift-offline).
+  [zwift-offline](https://github.com/fatsbrown/zwift-offline). Routes it does not know fall back
+  to an empty 200 whose content type follows the request's `Accept` header
+  (`application/x-protobuf-lite` for protobuf clients, `application/json` otherwise): answering a
+  protobuf endpoint with JSON leaves the game retrying in a tight loop and it never reaches the
+  pairing screen.
 - The stub CA is appended to the prefix's `data/cacert.pem` for the test (backed up, restored
   after). The game is driven directly (the launcher's Wine parent-process sequence, with fake
   `Game_Launcher` OAuth JSON passed via `--token`) rather than through the real launcher, so the
@@ -429,20 +466,31 @@ Full detail is in `tests/pairing/README.md`; the essentials:
   can open a "No ANT+ dongle connected?" tip over the title. The suite then pairs the mock
   trainer: POWER SOURCE → PAIR DEVICE dialog → click KICKR → CLOSE. Clicking a device in the
   dialog toggles it, and clicking a *connected* tile unpairs it, so a returning profile is first
-  given time to reconnect by itself.
+  given time to reconnect by itself. The dialog's own title is not a usable anchor (OCR reads
+  it as PAIRED DEVICES, the screen behind it), so the suite waits for the trainer name instead:
+  the reconnect check just before it proves KICKR is not on the pairing screen, so the name can
+  only appear once the dialog is open.
 - yarf cannot read the snap's data dir, so `tests/pairing.sh` asserts in bash on the game
   `Log.txt`: `ZSF_PAIRING_SCREEN`, `Device: "KICKR" has new connection status: connected`, the
   `Power: KICKR` role in the last `Device List:`, and the indoor-bike-data / cycling-power
   notify subscriptions in `trainer.log`. A fresh pairing assigns only the Power role; Cadence
   and Controllable Trainer show up on some layouts or after re-selecting, so they are not
-  required. Artifacts: `~/zwift-pairing-out/`.
+  required. Zwift reports the connection asynchronously, so `check_trainer` polls the log for
+  the connected status (30 s) instead of sampling it once. Artifacts: `~/zwift-pairing-out/`
+  (`game.log`, `stop.log`, `bluezoo.log`, `trainer.log`, `frames/`).
+- The last assertion is the shutdown disconnect: `stop_game` stops the winedevice group
+  (`pairing-stop.sh`, see the wine section) before killing the prefix, because that is the
+  only path that reaches winebth's device-removal disconnect. A `wineserver -k` on its own
+  would make the assertion unpassable — it was, until the group stop was added.
 - On the pairing screen Zwift starts a native BLE search (BleWin10Lib); wine's advertisement
   watcher turns it into a BlueZ `SetDiscoveryFilter(Transport="le")` + `StartDiscovery` on the
   default radio. Classic BR/EDR devices are therefore never reported to Zwift.
   `tests/pairing.sh --explore` keeps the game on the pairing screen for an hour to watch and
   click live (game log, `bluezoo.log`, `trainer.log`, `tests/tools/yarf/yarf.sh`); run it detached
-  so an interrupted caller does not close the game. Set `WINEDEBUG` (e.g.
-  `+bluetooth,+winebth`) to trace wine's side.
+  so an interrupted caller does not close the game. Explore mode also tolerates a failed yarf
+  suite and skips the post-conditions below, so a failing run can be examined live instead of
+  tearing the game down the moment it fails. Set `WINEDEBUG` (e.g. `+bluetooth,+winebth`, channels
+  comma-separated) to trace wine's side.
 - A killed run skips its EXIT trap and leaves the stub CA in `cacert.pem`; the next run strips it
   before taking its backup.
 - yarf's OCR (RapidOCR on onnxruntime) uses every core by default: one pass over a 1280×1024
@@ -539,10 +587,63 @@ it again once the connection is up. The state is per radio (`le_discovery_refs`,
 `discovery_paused`, guarded by `discovery_cs`) and driven by the `connecting` flags of the
 radio's devices, so a device destroyed mid-connect cannot leak a pause. Discovery is paused
 *before* `props_cs` is taken, because stopping it blocks on the event loop thread, which needs
-`props_cs`. When the driver is removed (`IRP_MN_REMOVE_DEVICE`) it disconnects any device
-that is still connected, so a killed prefix does not leave the peer advertising it as
-connected. `tests/pairing.sh` asserts the pause/resume lines and the shutdown disconnect from
+`props_cs`. `tests/pairing.sh` asserts the pause/resume lines and the shutdown disconnect from
 the `+winebth` trace.
+
+The disconnect-on-teardown runs in `remote_device_pdo_pnp`'s `IRP_MN_REMOVE_DEVICE`, not in the
+FDO's: the PnP manager removes a device's children *before* the device itself, so the FDO's own
+removal pass runs after `remote_device_pdo_pnp`'s `IRP_MN_SURPRISE_REMOVAL` has already
+`list_remove()`d every device from the FDO's list. A disconnect loop there finds an empty list,
+which is what it did: the trace showed the whole PnP teardown and no `Disconnecting` line. The
+FDO loop is kept as a fallback for devices whose PDO was never created. A disconnect on a
+device BlueZ already dropped is harmless — it fails with "Not connected".
+
+That code is only reachable through a *clean* stop of the winedevice service group, and no
+ordinary shutdown gets there:
+
+- `wineserver -k` SIGKILLs every process, so nothing runs at all.
+- wineserver's graceful path only sets `shutdown_event`; no client consumes it
+  (`make_process_system` has no caller in the tree).
+- `ZwUnloadDriver` refuses while devices still exist.
+- Root PnP devices are removed only by `pnp_manager_stop_driver()`, called from the `done:`
+  path of `wine_ntoskrnl_main_loop` — i.e. when `winedevice`'s `stop_event` is set by a plain
+  `SERVICE_CONTROL_STOP`/`SERVICE_CONTROL_SHUTDOWN` delivered to a winedevice group service.
+
+So a killed prefix does leave the peer advertising the connection. `tests/pairing.sh`'s
+`stop_game` therefore stops the group explicitly (`wine sc stop Winedevice<N>` for the group
+services that exist) and only then kills the prefix; the services are synthesised per
+load-order group as `Winedevice<N>` (winebth's group is `WinePlugPlay`), and `<N>` depends on
+driver start order and is not stable, so it stops every candidate. Verified end to end: the
+trace goes `remote_device_pdo_pnp … IRP_MN_REMOVE_DEVICE` → `Disconnecting <device> on device
+removal` → `bluez_device_disconnect` on `/org/bluez/hci0/dev_…` → bluezoo
+`Disconnecting device[00:00:00:22:22:22]`.
+
+Driver debug output inherits the stderr of whoever started `winedevice`, so redirecting the
+`wineboot` that launches it to `/dev/null` throws away every `winebth` trace. Use `-v ":trace:"`
+to grep a trace: a `^[0-9a-f]{4}:trace` pattern hides the non-trace lines such as
+`err:ntoskrnl:ZwUnloadDriver`. A keep-alive user process (`wine cmd /c "ping -n 400
+127.0.0.1" &`) keeps the wineserver from exiting between experiments and resetting the PIDs
+in the log, and `sc query` enumeration prints nothing in wine — read the `Group` values from
+the prefix registry instead.
+
+A rebuilt `winebth.sys` reaches an existing prefix by itself: the driver binary is copied into
+`drive_c/windows/system32/drivers/` at driver install time, and `wineboot` re-runs that install
+(`install_root_pnp_devices`) whenever `wine.inf` is newer than the prefix's
+`.update-timestamp` — which a rebuilt snap always is. Confirm with `strings
+…/system32/drivers/winebth.sys` before wondering why a fix did not take; the stale copy is
+what a fix appears to do nothing against.
+
+Waiting for a D-Bus reply in that driver is a trap. `bluez_dbus_pending_call_wait` used to
+`set_notify` + `sem_wait`, leaving the dispatch to `bluez_dbus_loop` — but the LE-discovery
+resume runs *on* that loop's thread (after `CONNECT_FINISHED`), so nothing could ever
+dispatch the reply. The loop deadlocked, the pause was never undone, and every later GATT
+request — Zwift's model-number read after connecting the trainer — stayed pending forever,
+which looks from outside like a trainer that connected but never answers. It now uses
+`p_dbus_pending_call_block`, which pumps the connection in the calling thread and is still
+bounded by the pending call's timeout. There is exactly one dispatcher (the
+`p_dbus_connection_read_write_dispatch` call in `bluez_dbus_loop`); keep it that way when
+touching the wait, and remember that a blocked event-loop thread stops BLE event delivery to
+wine entirely.
 
 ## Snap specifics that are easy to break
 
@@ -553,7 +654,8 @@ the `+winebth` trace.
   `v<N>` comment there when editing `prune-closure.sh`, otherwise craft-parts will not
   re-run the prime step.
 - **Stale prime after removing a part**: both guards above say to run the `clean`
-  action, but that rebuilds Wine (hours). A part deleted from `snapcraft.yaml` leaves
+  action, but that reinstalls the build environment and rebuilds Wine from scratch
+  (tens of minutes). A part deleted from `snapcraft.yaml` leaves
   its output in `prime/` and `stage/` and its tree in `parts/` forever, because
   snapcraft cannot clean a part it no longer knows about, and every later build then
   fails the stale-prime guard with e.g.
@@ -588,11 +690,24 @@ the `+winebth` trace.
   it. Audit per package against `prime/`, not `dpkg -L`: craft-parts extracts
   stage-packages into a part tree without registering them with the host's dpkg, so
   `dpkg -L` cannot enumerate 14 of them here.
-- **Wine source**: the `wine` part builds [ndyer/wine](https://github.com/ndyer/wine)
-  (fork of wine-mirror/wine) at the `source-branch` in `snap/snapcraft.yaml`
-  (`zwift-radios-rebased`, not pinned to a `source-commit`). craft-parts does not
-  re-pull a git source for new commits on an unchanged branch, so run the `clean`
-  action (or pin/bump `source-commit`) to pick up new commits on the branch.
+- **Wine source**: the `wine` part builds the local checkout `/project/wine-src`
+  (`source: /project/wine-src`, `source-type: local`), a clone of
+  [ndyer/wine](https://github.com/ndyer/wine) (fork of wine-mirror/wine) on its
+  `zwift-radios-rebased` branch. Commit and push there first: the snap builds whatever
+  that working tree holds, dirty or not. Local sources are copied into
+  `parts/wine/build` (`config.status` has `srcdir = .`) while `parts/wine/src`
+  hardlinks `/project/wine-src`, so editing `wine-src/` does *not* change the copies
+  the build tree compiles from. To compile-check a Wine patch in minutes, copy the
+  changed file into the matching `parts/wine/build` path and run
+  `sudo make -C parts/wine/build/dlls/<dir>` (`make -C dlls/<dir> unix` does not exist).
+  Any repull of the part — for example when a property such as `stage-packages`
+  changes — prunes files it does not find in the source, which deletes every object
+  file and `.so` in `parts/wine/build` and silently turns the next build into a full
+  Wine rebuild rather than an incremental one. Confirm with
+  `find parts/wine/build -name '*.o' | wc -l` before starting a build you expect to be
+  quick. A full rebuild costs tens of minutes, not hours: `make -j22` on this
+  22-core machine compiles roughly 1000 objects per minute, so a from-scratch build
+  is done well inside an hour. Do not put off a Wine fix over the build time.
 - **Wine runtime**: new-style WoW64 has no `wine64` binary or i386 Unix packages;
   32-bit Windows programs use `lib/wine/i386-windows`. Check the winetricks steps
   (`d3dcompiler_47`, `renderer=vulkan`) on a desktop. The runtime is not a
