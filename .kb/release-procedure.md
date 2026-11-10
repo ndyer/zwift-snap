@@ -18,13 +18,12 @@ IMPORTANT: Read the `.kb/agents.md` file.
   2. Figure out the next version in sequence.
   3. Tag wine-src.
   4. Tag main repository
-  5. Rebuild snap with `sudo snapcraft pack --destructive-mode`
   6. Move/re-tag main repository's v0.12 to point to the final commit
-  7. Run all validation and tests
-  8. Upload with snapcraft upload (will need credentials so this may be done by user)
 
 A tag is not the only way a revision reaches the Store: the daily edge build
 workflow publishes `main` to `latest/edge` on its own (see
 `.github/.kb/edge-build-workflow.md`). Its Wine source comes from the workshop's
 `setup-project` hook, which clones shallowly and therefore without tags, so step 3
 needs `ZWIFT_WINE_DEPTH=0` in a fresh workshop.
+
+The intention in the future is that a github workflow will be added to run full tests including smoke and promote tagged builds to beta.
