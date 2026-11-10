@@ -1,9 +1,9 @@
 # Yarf smoke test
 
 `workshop run smoke` starts a Mir compositor, runs the confined `zwift` Rust
-launcher and drives this suite with yarf. It is credential-free: it stops at the
-mandatory login gate, so authenticated game startup is tested manually (see the
-[pairing suite](../pairing/)).
+launcher with `--skip-login` and drives this suite with yarf. It is
+credential-free: the login gate is bypassed, so authenticated game startup is
+tested manually (see the [pairing suite](../pairing/)).
 
 ## Where to look
 
