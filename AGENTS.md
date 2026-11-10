@@ -11,6 +11,7 @@ IMPORTANT: Read the `.kb/agents.md` file.
 - [.kb/verification.md](.kb/verification.md) - Which checks to run before declaring a task done.
 - [.kb/conventions.md](.kb/conventions.md) - Coding, logging and YAML conventions.
 - [.kb/release-procedure.md](.kb/release-procedure.md) - Tagging and releasing a new snap version.
+- [.github/.kb/edge-build-workflow.md](.github/.kb/edge-build-workflow.md) - The daily edge build workflow: what it runs, skips and publishes.
 - [.workshop/.kb/workshop-usage.md](.workshop/.kb/workshop-usage.md) - Running workshop actions and where the definition lives.
 - [.workshop/.kb/pkgproxy-cache-recovery.md](.workshop/.kb/pkgproxy-cache-recovery.md) - Recovering snap objects from the pkgproxy cache.
 - [snap/.kb/snap-specifics.md](snap/.kb/snap-specifics.md) - Packaging details that are easy to break.

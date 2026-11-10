@@ -1,0 +1,214 @@
+# Daily edge build of the Zwift snap.
+#
+# Builds the snap and runs the fast test suites inside the Workshop, then publishes the
+# result to the Store's latest/edge channel. A run whose commit has already been built
+# successfully is skipped, so an idle day costs one cheap gate job.
+#
+# Needs the SNAPCRAFT_STORE_CREDENTIALS secret: the contents of a `snapcraft export-login`
+# file. snapcraft.yaml has `grade: devel`, which restricts releases to the edge and beta
+# channels, so this publishes to latest/edge.
+#
+# The slow, display- and hardware-dependent suites are deliberately left out. The smoke and
+# pairing tests want Zwift downloaded (several GB) and a real Mir compositor on the host
+# display, and a headless runner has no display to give them: Workshop skips
+# non-auto-connectable interfaces such as `desktop` silently, so the connection declared in
+# the workshop definition simply does not happen. Run those locally before a release.
+name: edge build
+
+on:
+  schedule:
+    # Daily, a little past the hour so it does not queue behind the jobs that start on it.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build and publish even if main has not moved
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  # Reading this workflow's own past runs is how the gate below decides whether to build.
+  actions: read
+
+# A run that is already building is never cancelled: a cancelled run can leave a partly
+# uploaded revision behind, and a late edge build hurts nobody. A run that is still queued
+# is replaced, so the daily runs cannot pile up.
+concurrency:
+  group: edge-build
+  cancel-in-progress: false
+
+jobs:
+  changed:
+    name: has main moved?
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.gate.outputs.build }}
+    steps:
+      - name: Compare main with the last successful edge build
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ${FORCE} == "true" ]]; then
+            echo "Forced by the workflow_dispatch input."
+            echo "build=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          # The commit the last successful run of this workflow built, if there is one. It
+          # is empty on the first run and whenever every previous run failed, and both of
+          # those mean "build".
+          last="$(gh run list --workflow edge-build.yml --branch main --status success \
+            --limit 1 --json headSha --jq '.[0].headSha // ""')"
+          if [[ -n ${last} && ${last} == "${SHA}" ]]; then
+            echo "main is still at ${SHA}; nothing to do."
+            echo "build=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "main moved from ${last:-nothing} to ${SHA}; building."
+            echo "build=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+  edge:
+    name: build, test and publish
+    needs: changed
+    if: needs.changed.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    # A cold run installs a whole workshop, clones Wine and builds it. Three hours is a
+    # generous ceiling that still fails a hung run instead of burning six.
+    timeout-minutes: 180
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.0
+        with:
+          # The version-generator part derives the snap version from `git describe --tags`,
+          # which needs the tags a shallow checkout does not fetch.
+          fetch-depth: 0
+
+      - name: Free up disk space
+        # Wine, the LXD container, the snaps it installs and the build tree need more room
+        # together than a stock runner has. Nothing removed here is used below.
+        run: |
+          set -x
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+          df -h /
+
+      - name: Launch the workshop
+        uses: canonical/launch-workshop@v1
+        # Installs and initialises LXD and the workshop snap, then launches the workshop
+        # defined by .workshop/zwift-snap.yaml. The launch runs the SDK hooks, so when it
+        # returns setup-base has installed the build and test dependencies and setup-project
+        # has fetched the agent skills and cloned the Wine source the snap builds from.
+
+      - name: Show how the workshop is wired up
+        # Diagnostics: a connection that Workshop skipped (see the header) shows up here.
+        run: |
+          workshop info
+          workshop warnings || true
+
+      - name: Let root run git in the checked-out project
+        # version-generator runs `git describe` under sudo, and git refuses to read a
+        # repository owned by another user ("dubious ownership"), which would silently
+        # version the snap "unknown".
+        run: workshop exec -- sudo git config --global --add safe.directory /project
+
+      - name: Lint
+        run: workshop run lint
+
+      - name: Unit tests
+        run: workshop run test
+
+      - name: GTK preview tests
+        # Renders into its own virtual Mir output, so it needs no host display.
+        run: workshop run gtk-preview
+
+      - name: Build the snap
+        run: workshop run build
+
+      - name: Check the snap got a real version
+        # version-generator falls back to "unknown" when `git describe` fails, which would
+        # publish a revision nobody can identify. Catch it here rather than in the Store.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          snaps=(zwift_*_amd64.snap)
+          if (( ${#snaps[@]} == 0 )); then
+            echo "The build produced no snap." >&2
+            exit 1
+          fi
+          for snap in "${snaps[@]}"; do
+            case "${snap}" in
+              zwift_unknown_*)
+                echo "${snap} has no version: git describe failed (see the safe.directory step)." >&2
+                exit 1
+                ;;
+            esac
+          done
+          printf 'Built %s\n' "${snaps[@]}"
+
+      - name: Install the snap
+        run: workshop run install
+
+      - name: Connect the bluez interface
+        # snapd does not auto-connect bluez, and an unconnected plug makes the Bluetooth
+        # test fail with a confinement error instead of a useful message.
+        run: workshop exec -- sudo snap connect zwift:bluez
+
+      - name: Bluetooth plumbing test
+        run: workshop run bluetooth
+
+      - name: Upload the snap
+        uses: actions/upload-artifact@v7
+        with:
+          name: zwift-snap
+          path: zwift_*_amd64.snap
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Collect artifacts from a failed run
+        if: failure()
+        # The tests and snapcraft write inside the workshop, which the runner cannot see,
+        # so copy what they left into the workspace for the upload below to pick up. The
+        # chmod is what makes root-owned files readable by the runner user.
+        run: |
+          set -x
+          workshop exec -- sudo sh -c '
+            mkdir -p /project/ci-artifacts
+            cp -a /root/.local/state/snapcraft/log /project/ci-artifacts/ 2>/dev/null || true
+            cp -a /home/*/zwift-bt-out /project/ci-artifacts/ 2>/dev/null || true
+            cp -a /home/*/zwift-gtk-preview.* /project/ci-artifacts/ 2>/dev/null || true
+            chmod -R a+rX /project/ci-artifacts
+          ' || true
+          ls -lR ci-artifacts || true
+
+      - name: Upload artifacts from a failed run
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-run-artifacts
+          path: ci-artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Publish to the Store
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          snaps=(zwift_*_amd64.snap)
+          if (( ${#snaps[@]} == 0 )); then
+            echo "No snap in the workspace; the build step should have made one." >&2
+            exit 1
+          fi
+          for snap in "${snaps[@]}"; do
+            echo "Uploading ${snap} to latest/edge"
+            snapcraft upload --verbosity=brief "${snap}" --release latest/edge
+          done

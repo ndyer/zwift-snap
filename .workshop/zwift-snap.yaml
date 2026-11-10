@@ -52,11 +52,13 @@ actions:
       tests/bluetooth.sh tests/pairing.sh tests/dl-cache.sh tests/tools/yarf/yarf.sh \
       tests/tools/bluetooth/*.sh tests/tools/dl-cache/*.sh \
       tests/unit/*.bats tests/unit/test_helper.bash \
-      .workshop/zwift-snap-sdk/hooks/* .workshop/zwift-snap-sdk/fetch-skills.sh
+      .workshop/zwift-snap-sdk/hooks/* .workshop/zwift-snap-sdk/fetch-skills.sh \
+      .workshop/zwift-snap-sdk/fetch-wine.sh
     python3 -m py_compile tests/zwift-stub.py tests/tools/yarf/*.py tests/tools/bluetooth/*.py \
       .workshop/zwift-snap-sdk/workshop
     yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' \
-      snap/snapcraft.yaml .workshop/zwift-snap.yaml .workshop/zwift-snap-sdk/sdk.yaml
+      snap/snapcraft.yaml .workshop/zwift-snap.yaml .workshop/zwift-snap-sdk/sdk.yaml \
+      .github/workflows/edge-build.yml
     cargo fmt --manifest-path zwsnap-gui/Cargo.toml --check
     cargo clippy --manifest-path zwsnap-gui/Cargo.toml --features gtk-ui --all-targets -- -D warnings
     # The Windows helpers only compile for their real target; checking them for

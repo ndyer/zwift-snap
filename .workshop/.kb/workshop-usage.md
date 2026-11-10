@@ -20,6 +20,18 @@ There is no `setup` action: snapcraft, shellcheck, yamllint, bats, bluez, bluezo
 the pkgproxy cache are installed by the `setup-base` hook of the `zwift-snap-sdk` SDK
 at launch and refresh (see `.workshop/zwift-snap-sdk/hooks/setup-base`).
 
+The `setup-project` hook (same directory) does the project-side setup at every launch
+and applied refresh: it installs the runner, fetches the agent skills, and runs
+`.workshop/zwift-snap-sdk/fetch-wine.sh` to clone the Wine source the snap builds from
+into `/project/wine-src`. That clone is deliberately fatal on failure, unlike the
+skills fetch which only warns: without the Wine source nothing can be built or tested,
+so failing the change beats leaving a workshop that looks ready and is not. It is a
+no-op whenever `wine-src` already exists, so a local tree is never overwritten; delete
+the directory to force a fresh clone. `ZWIFT_WINE_REPO`, `ZWIFT_WINE_REF`,
+`ZWIFT_WINE_DEPTH` and `ZWIFT_WINE_SRC` override the repository, the ref, the clone
+depth (0 for the full single-branch history, which the release procedure's wine
+tagging needs) and the target.
+
 ## The Use Workshop skill
 
 The canonical agent documentation for operating Workshop is the `use-workshop` skill

@@ -14,6 +14,10 @@ Before declaring a task done run `lint` and `test`. Run `smoke` when the change
 affects anything the launcher does at runtime (plugs, command-chain, wine
 environment, dialogs).
 
+CI runs `lint`, `test`, `gtk-preview`, `build`, `install` and `bluetooth` on every
+change to `main`, so a green run there covers those; `smoke` and `pairing` stay local
+because they need a host display (see `.github/.kb/edge-build-workflow.md`).
+
 ## Stale snap data
 
 **Stale snap data**: reinstalling the snap (`snap install --dangerous --amend`)

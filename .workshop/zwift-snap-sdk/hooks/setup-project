@@ -1,8 +1,8 @@
 #!/bin/bash
 # setup-project hook of the zwift-snap-sdk SDK. Runs at every launch and after every
 # applied workshop refresh, after the project is mounted and auto-connect has finished.
-# It installs the workshop runner symlink and fetches the upstream agent skills (both
-# need /project mounted).
+# It installs the workshop runner symlink, fetches the upstream agent skills and clones the
+# Wine source the snap builds from (all three need /project mounted).
 set -euo pipefail
 
 # Install the workshop runner.
@@ -12,3 +12,10 @@ sudo ln -sfn /project/.workshop/zwift-snap-sdk/workshop /usr/local/bin/workshop
 # sees them (pinned upstream ref; see fetch-skills.sh). Never fatal: a failure warns and
 # leaves any previous fetch in place, so the launch and refresh still succeed.
 /project/.workshop/zwift-snap-sdk/fetch-skills.sh
+
+# Clone the patched Wine source the snap's wine part builds from (see fetch-wine.sh). Fatal
+# on purpose, unlike the skills above: without it `workshop run build` and every test that
+# needs the built snap cannot work, so failing the launch is better than leaving a workshop
+# that looks ready and is not. An existing wine-src is never touched, so this clones once
+# per fresh checkout (or fresh workshop) and is a no-op on every launch after that.
+/project/.workshop/zwift-snap-sdk/fetch-wine.sh

@@ -74,7 +74,12 @@ stage-packages into a part tree without registering them with the host's dpkg, s
 The `wine` part builds the local checkout `/project/wine-src`
 (`source: /project/wine-src`, `source-type: local`), a clone of
 [ndyer/wine](https://github.com/ndyer/wine) (fork of wine-mirror/wine) on its
-`zwift-radios-rebased` branch. Commit and push there first: the snap builds whatever
+`zwift-radios-rebased` branch. The clone is made for you: the `setup-project` hook of
+the workshop SDK runs `fetch-wine.sh` at every launch and applied refresh (see
+`.workshop/.kb/workshop-usage.md`), shallow and single-branch, which is enough because
+`source-type: local` needs no git history to build. A hook-made clone has no tags, so
+use `ZWIFT_WINE_DEPTH=0` in a fresh workshop when the release procedure has to tag
+`wine-src`. Commit and push there first: the snap builds whatever
 that working tree holds, dirty or not. Local sources are copied into
 `parts/wine/build` (`config.status` has `srcdir = .`) while `parts/wine/src`
 hardlinks `/project/wine-src`, so editing `wine-src/` does *not* change the copies

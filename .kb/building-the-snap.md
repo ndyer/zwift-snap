@@ -11,7 +11,11 @@ IMPORTANT: Read the `.kb/agents.md` file.
 
 ## Build actions
 
-Use the `build` action to build and the `install` action to install the result.
+Use the `build` action to build and the `install` action to install the result. The
+Wine source the build needs is cloned for you by the workshop's `setup-project` hook
+at launch, so `build` works on a fresh checkout; deleting `wine-src` makes the next
+launch re-clone it and the next build a full Wine rebuild (see
+`.workshop/.kb/workshop-usage.md`).
 
 When running the `build` action (or any long-running action) from an agent,
 pipe the output through `tee` instead of swallowing it with `tail`: a
