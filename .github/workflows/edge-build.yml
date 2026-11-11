@@ -4,9 +4,10 @@
 # result to the Store's latest/edge channel. A run whose commit has already been built
 # successfully is skipped, so an idle day costs one cheap gate job.
 #
-# Needs the SNAPCRAFT_STORE_CREDENTIALS secret: the contents of a `snapcraft export-login`
-# file. snapcraft.yaml has `grade: devel`, which restricts releases to the edge and beta
-# channels, so this publishes to latest/edge.
+# Publishing needs the SNAPCRAFT_STORE_CREDENTIALS secret: the contents of a
+# `snapcraft export-login` file. When it is absent the build and tests still run, but
+# Store publishing is skipped. snapcraft.yaml has `grade: devel`, which restricts
+# releases to the edge and beta channels, so this publishes to latest/edge.
 #
 # The slow, display- and hardware-dependent suites are deliberately left out. The smoke and
 # pairing tests want Zwift downloaded (several GB) and a real Mir compositor on the host
@@ -170,6 +171,18 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Check Store publishing credentials
+        id: store-credentials
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          if [[ -n ${SNAPCRAFT_STORE_CREDENTIALS} ]]; then
+            echo "publish=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::notice::SNAPCRAFT_STORE_CREDENTIALS is not configured; skipping Store publishing."
+            echo "publish=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Collect artifacts from a failed run
         if: failure()
         # The tests and snapcraft write inside the workshop, which the runner cannot see,
@@ -196,9 +209,11 @@ jobs:
           retention-days: 7
 
       - name: Install snapcraft
+        if: steps.store-credentials.outputs.publish == 'true'
         run: sudo snap install snapcraft --classic
 
       - name: Publish to the Store
+        if: steps.store-credentials.outputs.publish == 'true'
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         run: |

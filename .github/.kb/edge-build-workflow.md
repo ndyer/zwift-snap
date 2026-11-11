@@ -17,9 +17,9 @@ runner it launches the Workshop, builds the snap, runs the fast test suites insi
 it and publishes the result to the Store's `latest/edge` channel. `grade: devel`
 in `snap/snapcraft.yaml` is what makes `latest/edge` the only sensible target.
 
-It needs one repository secret, `SNAPCRAFT_STORE_CREDENTIALS`: the contents of a
-`snapcraft export-login` file. Without it the build and the tests still run; only
-the publish step fails.
+Publishing uses the repository secret `SNAPCRAFT_STORE_CREDENTIALS`: the contents
+of a `snapcraft export-login` file. Without it the build and the tests still run,
+and Store publishing is skipped with a notice.
 
 ## The change gate
 
