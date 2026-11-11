@@ -79,6 +79,11 @@ jobs:
     if: needs.changed.outputs.build == 'true'
     environment: latest/edge
     runs-on: ubuntu-24.04
+    # The ccache save step needs actions:write; checkout only needs contents:read. The
+    # changed job keeps the workflow-level actions:read, all it does is list run history.
+    permissions:
+      contents: read
+      actions: write
     # A cold run installs a whole workshop, clones Wine and builds it. Three hours is a
     # generous ceiling that still fails a hung run instead of burning six.
     timeout-minutes: 180
@@ -89,6 +94,19 @@ jobs:
           # The version-generator part derives the snap version from `git describe --tags`,
           # which needs the tags a shallow checkout does not fetch.
           fetch-depth: 0
+
+      - name: Restore the ccache cache
+        id: ccache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          # A key carrying the run id means the exact key never matches a previous run,
+          # so the save step always writes a fresh entry and the restore-keys prefix
+          # pulls back the newest one. GitHub evicts the oldest entries once the
+          # repository's cache quota is reached.
+          key: ccache-ubuntu-26.04-${{ github.run_id }}
+          restore-keys: |
+            ccache-ubuntu-26.04-
 
       - name: Free up disk space
         # Wine, the LXD container, the snaps it installs and the build tree need more room
@@ -131,6 +149,23 @@ jobs:
 
       - name: Build the snap
         run: workshop run -- build
+
+      - name: Make the ccache readable and report its stats
+        if: always()
+        # The workshop builds as root, which writes ccache files only root can read; the
+        # save step below runs as the runner user and needs them readable. The mkdir keeps
+        # that save from failing when the build died before ever creating the directory,
+        # and a failed build still produced cacheable objects worth keeping.
+        run: |
+          workshop exec -- sudo sh -c 'mkdir -p /project/.ccache && chmod -R a+rX /project/.ccache' || true
+          workshop exec -- sudo env CCACHE_DIR=/project/.ccache ccache -s || true
+
+      - name: Save the ccache cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ccache-ubuntu-26.04-${{ github.run_id }}
 
       - name: Check the snap got a real version
         # version-generator falls back to "unknown" when `git describe` fails, which would

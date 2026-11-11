@@ -17,3 +17,5 @@ __pycache__/
 zwsnap-gui/target/
 /build.log
 zwsnap-helpers/target/
+# ccache directory written by the wine part's build (see snap/snapcraft.yaml)
+.ccache/

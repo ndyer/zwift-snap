@@ -143,7 +143,21 @@ parts:
       - --disable-debug
       - --disable-tests
       - --disable-build-id
+    build-environment:
+      # ccache, ahead of the real binaries on PATH, wraps every compiler this part
+      # invokes — the host gcc for wine's Unix libraries and the mingw cross
+      # compilers for the PE files — through the symlinks the workshop setup-base
+      # hook installs in /usr/local/lib/ccache. The cache lives in /project/.ccache,
+      # the mounted workspace the CI runner restores and saves, so it outlives the
+      # per-run part rebuild instead of vanishing with the workshop.
+      - PATH: /usr/local/lib/ccache:$PATH
+      - CCACHE_DIR: /project/.ccache
+      - CCACHE_COMPRESS: "true"
+      - CCACHE_MAXSIZE: 4G
     build-packages:
+      # ccache is also listed here so a manual `snapcraft pack` outside the workshop
+      # still has it, not only the workshop's setup-base hook.
+      - ccache
       # flex, bison, gettext, pkg-config: build requirements of wine itself
       - flex
       - bison

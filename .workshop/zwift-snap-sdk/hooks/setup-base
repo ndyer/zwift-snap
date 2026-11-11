@@ -27,11 +27,27 @@ snap install mesa-2604 yarf gnome-46-2404 mir-test-tools
 # build-packages only reach the host once the snap is built, which is too late for them.
 # They are the packages that part lists, so the workshop matches the build environment.
 # gcc-mingw-w64-x86-64 is the cross compiler the zwsnap-helpers clippy in lint links with.
-apt-get update && apt-get install -y shellcheck yamllint \
+apt-get update && apt-get install -y ccache shellcheck yamllint \
     bats bats-support bats-assert bats-file \
     git bluez python3-venv python3-yaml pkg-config \
     libgtk-4-dev libwebkitgtk-6.0-dev libjavascriptcoregtk-6.0-dev libsoup-3.0-dev \
     gcc-mingw-w64-x86-64
+
+# ccache wraps every compiler the wine part invokes — the host gcc for wine's Unix
+# libraries and the mingw cross compilers for the PE files — through symlinks that sit
+# ahead of the real binaries on PATH. The wine part's build-environment prepends
+# /usr/local/lib/ccache and points CCACHE_DIR at /project/.ccache, the mounted
+# workspace the CI runner restores and saves, so the cache survives the per-run build.
+# The i686 compiler is not installed here (it comes from the wine part's build-packages
+# at snapcraft time), but its symlink is harmless: ccache resolves the real compiler
+# only when it is actually invoked.
+ccache_bin=$(command -v ccache)
+mkdir -p /usr/local/lib/ccache
+for compiler in gcc g++ cc c++ \
+    i686-w64-mingw32-gcc i686-w64-mingw32-g++ \
+    x86_64-w64-mingw32-gcc x86_64-w64-mingw32-g++; do
+    ln -sf "${ccache_bin}" "/usr/local/lib/ccache/${compiler}"
+done
 
 # The helpers clippy in the lint action cross-checks against x86_64-pc-windows-gnu, and the
 # rust SDK installs rustup with the host toolchain only. rust is listed above this SDK in

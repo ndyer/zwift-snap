@@ -52,3 +52,14 @@ Notes:
   use `--purge`, because it deletes the wine prefix and login state in
   `~/snap/zwift/common`.
 - Do not `snap try` a directory that is not a prime tree (for example, the project root).
+
+## ccache
+
+The wine part compiles through ccache (`build-environment` in `snap/snapcraft.yaml`):
+`PATH` is prepended with `/usr/local/lib/ccache`, where the workshop `setup-base` hook
+symlinks ccache under every compiler name — host `gcc`/`g++` and the mingw cross
+compilers — and `CCACHE_DIR` points at `/project/.ccache` so the cache is the mounted
+workspace's (restored and saved by the edge workflow). Adding these properties re-pulls
+the part and prunes its build objects once, so the first cache-enabled build is a full
+Wine rebuild; later builds are incremental with cache hits. The cache is compressed and
+capped at 4 GiB.

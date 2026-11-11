@@ -56,3 +56,12 @@ slot references elsewhere (e.g. `connections:`) use the bare name (`zwift-snap-s
 because the `project-` prefix only selects the source and is not part of the name.
 The workshop desktop and gpu interfaces are NOT auto-connected, the `connections:`
 entries are required.
+
+## ccache
+
+`setup-base` installs ccache and, in `/usr/local/lib/ccache`, symlinks named after
+every compiler the wine part uses: the host `gcc`/`g++`/`cc`/`c++` and the mingw
+cross compilers. The wine part's `build-environment` prepends that directory to
+`PATH` and sets `CCACHE_DIR=/project/.ccache`, so ccache wraps every compiler and the
+cache lands in the mounted workspace, restored and saved by the edge workflow (see
+`.github/.kb/edge-build-workflow.md`).

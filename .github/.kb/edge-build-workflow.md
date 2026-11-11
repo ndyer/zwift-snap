@@ -67,6 +67,18 @@ The Wine clone and the agent skills are NOT fetched by the workflow itself. They
 come from the `setup-project` hook of the workshop SDK, which runs during the
 workshop launch (see `.workshop/.kb/workshop-usage.md`).
 
+## The ccache cache
+
+The `edge` job restores `.ccache` before building and saves it afterwards, via
+`actions/cache/restore` and `actions/cache/save` (the producer side is the wine
+part's `build-environment`; see `.kb/building-the-snap.md`). The key embeds
+`github.run_id` so every run writes a fresh entry, while the `restore-keys` prefix
+`ccache-ubuntu-26.04-` pulls back the newest; GitHub evicts the oldest entry once the
+10 GiB repo quota is hit. Both the "make it readable" and the save step run under
+`if: always()` so a failed build still banks the objects it compiled, and the save
+needs `actions: write` (granted on the `edge` job); the chmod step first makes the
+root-owned cache readable by the runner user.
+
 ## Validating a change to the workflow
 
 `yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}'
