@@ -164,6 +164,17 @@ zwift:bluetooth-control`) and grants `CAP_NET_ADMIN`, which the launcher's `bt_t
 module uses to re-tighten the LE connection interval of a freshly connected heart-rate belt
 (see `zwsnap-gui/.kb/bluetooth-connection-interval.md`).
 
+## Screen inhibit
+
+The `zwift` app declares `screen-inhibit-control` (auto-connected) so that the wine
+and GTK inhibit calls (`org.freedesktop.ScreenSaver.Inhibit` /
+`org.gnome.SessionManager.Inhibit`) reach the session bus; under strict confinement
+they are otherwise denied by AppArmor, and the denial is silent. Without it a ride
+produces no keyboard/mouse input, the compositor's idle timer is never reset and the
+screensaver blanks over the game. As with `bluetooth-control`, it is on the `zwift`
+app's own `plugs`, not the shared `&plugs` anchor, because the launcher (run under
+this profile) is what starts the game.
+
 ## pkgproxy
 
 pkgproxy caches apt and snap downloads in the workshop; the base snap,
