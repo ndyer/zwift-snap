@@ -1,6 +1,7 @@
 //! Zwift snap launcher: GTK frontend, Wine lifecycle, and Rust-owned logging.
 
 pub mod application;
+pub mod bt_tuning;
 pub mod cancel;
 pub mod cdn;
 pub mod display;

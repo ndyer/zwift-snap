@@ -24,6 +24,7 @@ IMPORTANT: Read the `.kb/agents.md` file.
 - [tests/.kb/real-auth-token-helper.md](tests/.kb/real-auth-token-helper.md) - The manual real-authentication token helper.
 - [zwsnap-gui/.kb/launcher-architecture.md](zwsnap-gui/.kb/launcher-architecture.md) - The launcher's runtime architecture.
 - [zwsnap-gui/.kb/launcher-development.md](zwsnap-gui/.kb/launcher-development.md) - Developing and testing the launcher.
+- [zwsnap-gui/.kb/bluetooth-connection-interval.md](zwsnap-gui/.kb/bluetooth-connection-interval.md) - The opt-in BLE connection-interval override gated on `bluetooth-control`.
 - [zwsnap-gui/.kb/login-and-remember-me.md](zwsnap-gui/.kb/login-and-remember-me.md) - Login flow and the remember-me cookie.
 - [zwsnap-gui/.kb/graphics-profile.md](zwsnap-gui/.kb/graphics-profile.md) - The GPU profile override and GPU benchmark.
 - [zwsnap-helpers/.kb/windows-helpers.md](zwsnap-helpers/.kb/windows-helpers.md) - The Windows binaries the snap ships.

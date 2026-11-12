@@ -146,6 +146,13 @@ advertisement watcher (`adv_watcher_Start` in
 of winebth. Upstream wine 11.21 stubs the watcher with `E_NOTIMPL`, so check this
 when moving the part to another branch or tag.
 
+The `zwift` app additionally declares the `bluetooth-control` plug (a snapd built-in with
+`deny-auto-connection: true`) on its own `plugs` list, *not* the shared `&plugs` anchor, so
+`wine` and `winecfg` do not get it. It is strictly opt-in (`sudo snap connect
+zwift:bluetooth-control`) and grants `CAP_NET_ADMIN`, which the launcher's `bt_tuning`
+module uses to re-tighten the LE connection interval of a freshly connected heart-rate belt
+(see `zwsnap-gui/.kb/bluetooth-connection-interval.md`).
+
 ## pkgproxy
 
 pkgproxy caches apt and snap downloads in the workshop; the base snap,

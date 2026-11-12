@@ -33,6 +33,15 @@ sudo snap connect zwift:bluez
 zwift                             # installs or updates Zwift when needed, then starts it
 ```
 
+To get faster heart-rate data from a Bluetooth LE heart-rate belt (e.g. a Wahoo TICKR),
+optionally connect the privileged Bluetooth control interface. This is strictly opt-in: it
+tightens the belt's connection interval from its battery-saving default (~1 s) to ~15 ms,
+which uses more power, so it is never connected automatically:
+
+```shell
+sudo snap connect zwift:bluetooth-control
+```
+
 The progress dialog stays open until Zwift shows its first window (including splash
 screens), rather than closing as soon as the process starts. If no window appears
 within two minutes, the launcher logs a warning and leaves Zwift running.
@@ -57,6 +66,9 @@ debug audio run `WINEDEBUG=+pulse,+mmdevapi zwift`.
 - `WINE_DISABLE_EGL`
 - `ZWIFT_NO_GUI` (set to `1` for no dialogs, only terminal output)
 - `ZWIFT_BLUETOOTH_DEBUG` (set to `1` to enable Wine Bluetooth traces for hardware testing)
+- `ZWIFT_BT_INTERVAL` (the BLE connection interval to request in 1.25 ms units, default `12` = 15 ms; only applies with `bluetooth-control` connected)
+- `ZWIFT_BT_TIMEOUT` (the BLE supervision timeout in 10 ms units, default `200` = 2 s)
+- `ZWIFT_BT_RESEND_MS` (how long the interval override waits before re-applying, in ms, default `4000`)
 - `VERBOSITY`
 
 Display preferences are added when missing, including on a fresh install. If an

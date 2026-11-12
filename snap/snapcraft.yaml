@@ -78,9 +78,14 @@ apps:
     command-chain: &chain
       - bin/gpu-2604-wrapper
       - bin/wine-env.sh
-    plugs: &plugs
+    # The zwift app hosts the opt-in BLE connection-interval helper, so it alone
+    # requests bluetooth-control. That interface is deny-auto-connection: it is
+    # never connected unless the user runs `snap connect zwift:bluetooth-control`,
+    # keeping the privileged socket access strictly opt-in.
+    plugs:
       - audio-playback
       - bluez
+      - bluetooth-control
       - desktop
       - desktop-legacy
       - network
@@ -92,7 +97,17 @@ apps:
   wine:
     command: opt/wine-devel/bin/wine
     command-chain: *chain
-    plugs: *plugs
+    plugs: &plugs
+      - audio-playback
+      - bluez
+      - desktop
+      - desktop-legacy
+      - network
+      - network-bind
+      - network-status
+      - opengl
+      - wayland
+      - x11
   winecfg:
     command: opt/wine-devel/bin/wine winecfg
     command-chain: *chain

@@ -51,6 +51,11 @@ neither a host display nor the network.
 
 `bluetooth` needs the snap installed and `zwift:bluez` connected, which the
 workflow does explicitly first, because snapd does not auto-connect that plug.
+`zwift:bluetooth-control` is deliberately left unconnected on the runner (it is
+`deny-auto-connection` and grants `CAP_NET_ADMIN`), so the launcher's interval-override
+watcher exercises only its "not connected → no-op" path in CI; the live override needs real
+BLE hardware and cannot be covered here (see
+`zwsnap-gui/.kb/bluetooth-connection-interval.md`).
 
 ## What the workflow has to do by hand
 

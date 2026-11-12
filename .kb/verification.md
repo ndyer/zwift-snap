@@ -18,6 +18,13 @@ CI runs `lint`, `test`, `gtk-preview`, `build`, `install` and `bluetooth` on eve
 change to `main`, so a green run there covers those; `smoke` and `pairing` stay local
 because they need a host display (see `.github/.kb/edge-build-workflow.md`).
 
+The BLE connection-interval override (`bt_tuning`) has no runnable end-to-end check:
+bluezoo mocks only the BlueZ D-Bus interface, not the raw kernel management socket that
+`bluetooth-control` unlocks, and the workshop's own `hci0` is rfkill-blocked. Verify it with
+the unit tests in `bt_tuning.rs` (`cargo test`), plus — on real BLE hardware — a
+`sudo snap connect zwift:bluetooth-control` and a `btmon` capture showing the override land
+after BlueZ's 0x2a04 update.
+
 ## Stale snap data
 
 **Stale snap data**: reinstalling the snap (`snap install --dangerous --amend`)

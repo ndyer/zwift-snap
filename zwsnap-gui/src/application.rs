@@ -287,6 +287,10 @@ pub fn launch(config: Config, args: Vec<String>) -> io::Result<()> {
         cancellation.clone(),
     ));
     logger.init()?;
+    // Opt-in BLE connection-interval re-tuning: a no-op unless the
+    // bluetooth-control plug is connected. Runs on its own thread for the whole
+    // launcher lifetime and stops via `cancellation`.
+    crate::bt_tuning::spawn(logger.clone(), cancellation.clone());
     let mut signals = signal_hook::iterator::Signals::new([
         signal_hook::consts::SIGINT,
         signal_hook::consts::SIGTERM,
