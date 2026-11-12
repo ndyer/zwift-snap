@@ -4,7 +4,9 @@ use crate::cancel::Cancellation;
 use crate::cdn;
 use crate::display::DisplayMode;
 use crate::graphics::Setting as GraphicsSetting;
-use crate::install::{InstallConfig, InstallProgress, EXPECTED_DRIVE_C_BYTES};
+use crate::install::{
+    d3dcompiler_expect, InstallConfig, InstallProgress, D3DCOMPILER_BASE, EXPECTED_DRIVE_C_BYTES,
+};
 use crate::launch::LaunchConfig;
 use crate::logging::Logger;
 use crate::orchestration::{self, Failure, LauncherUi};
@@ -217,7 +219,6 @@ pub fn run(
     let install_dir = config.prefix.join("drive_c/Program Files (x86)/Zwift");
     let tools = Tools::default();
     let wineboot = PathBuf::from("wineboot");
-    let winetricks = PathBuf::from("winetricks");
     let launcher_shim = config.snap.join("bin/ZwiftLauncher.exe");
     // In-flight transfers live on the same filesystem as the game, so a verified
     // file can be renamed into place instead of copied.
@@ -235,7 +236,8 @@ pub fn run(
             staging_dir: &staging,
             launcher_shim: &launcher_shim,
             wineboot: &wineboot,
-            winetricks: &winetricks,
+            prerequisites_base: D3DCOMPILER_BASE,
+            prerequisites_expect: d3dcompiler_expect(),
             tools: &tools,
             cdn_base: &config.cdn_base,
             jobs: config.jobs,
@@ -255,7 +257,6 @@ pub fn run(
             game_poll_interval: config.poll_interval,
         },
         logger,
-        cache: &config.cache,
         display_mode: config.display.clone(),
         graphics: config.graphics,
         wait_for_window: graphical,

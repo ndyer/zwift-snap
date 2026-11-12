@@ -7,11 +7,13 @@
 
 use std::path::PathBuf;
 
-/// The Wine tools the launcher invokes.
+/// The Wine tools the launcher invokes, and the extractor it unpacks a Wine
+/// prerequisite's cabinet with.
 pub struct Tools {
     pub wine: PathBuf,
     pub winepath: PathBuf,
     pub wineserver: PathBuf,
+    pub cabextract: PathBuf,
 }
 
 impl Default for Tools {
@@ -20,6 +22,7 @@ impl Default for Tools {
             wine: "wine".into(),
             winepath: "winepath".into(),
             wineserver: "wineserver".into(),
+            cabextract: "cabextract".into(),
         }
     }
 }

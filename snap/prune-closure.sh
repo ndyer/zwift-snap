@@ -29,7 +29,7 @@ prime="${1:?usage: prune-closure.sh <prime-dir>}"
 gst_deny_re='lib(flite|onnxruntime|tensorflow-lite|freeaptx|zvbi|ltc|sndfile)\.so'
 
 # Binaries of packages that nothing in the snap runs at runtime. The launcher
-# only needs wine, wineboot, winepath, wineserver, winetricks, cabextract,
+# only needs wine, wineboot, winepath, wineserver, cabextract,
 # wget and ntlm_auth. samba ships a full tool
 # chest of which ntlm_auth is the only needed program, and gnupg/debconf/ucf/
 # perl/fontconfig-utils/gtk-update-icon-cache are build or packaging helpers.

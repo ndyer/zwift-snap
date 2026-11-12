@@ -6,7 +6,7 @@ as a CONNECT. Only the two hosts Zwift's login and game API live on are intercep
 (secure.zwift.com, us-or-rly101.zwift.com): for those the proxy terminates TLS itself with a
 throwaway CA (created in --dir, the CA certificate is ca.pem) and answers the requests locally.
 Every other host is tunnelled straight through with a plain TCP relay, so the launcher's update
-check, winetricks downloads and the Zwift patcher keep working; sentry (crash reporting) is
+check, the Wine prerequisites and the Zwift patcher keep working; sentry (crash reporting) is
 refused outright so the tests send nothing out.
 
 Every intercepted request is logged to --log. Bodies are never logged, only their size and, for

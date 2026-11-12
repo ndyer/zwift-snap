@@ -12,12 +12,6 @@ use std::sync::{Arc, Mutex};
 use crate::cancel::Cancellation;
 use crate::process::{run_logged_cancellable, run_output_cancellable, OutputCapture};
 
-/// Called with every chunk of a child's output, from the reader threads.
-///
-/// `'static` because the reader threads outlive the call that started them, and
-/// `Sync` because stdout and stderr are read concurrently.
-pub type OutputObserver = Arc<dyn Fn(&[u8]) + Send + Sync>;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Info,
@@ -220,29 +214,6 @@ impl Logger {
         self.capture.run(
             command,
             Arc::new(move |bytes| raw.write(bytes)),
-            &self.cancellation,
-        )
-    }
-
-    /// Like `run_inherited_output`, but also hands every chunk of output to `observer`.
-    ///
-    /// The observer runs on the output reader threads, which outlive this call, so it
-    /// must be `Send + Sync + 'static`. It sees both stdout and stderr; the two are
-    /// read concurrently, so chunks of different streams can arrive in any order
-    /// relative to each other.
-    pub fn run_inherited_output_observed(
-        &self,
-        command: &mut Command,
-        observer: OutputObserver,
-    ) -> std::io::Result<ExitStatus> {
-        let raw = self.raw.clone();
-        self.capture.run(
-            command,
-            Arc::new(move |bytes| {
-                let written = raw.write(bytes);
-                observer(bytes);
-                written
-            }),
             &self.cancellation,
         )
     }

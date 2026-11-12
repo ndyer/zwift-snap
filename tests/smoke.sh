@@ -12,10 +12,10 @@
 # The first run downloads Zwift into the wine prefix and can take half an hour;
 # later runs reuse the prefix and are quick.
 #
-# The downloads (the Zwift game tree and winetricks' prerequisites) are also kept
-# in a cache under $HOME/zwift-cache, which the run restores before starting and
-# updates after passing: see tests/tools/dl-cache/dl-cache.sh. Set SMOKE_CACHE=0 or
-# pass --fresh to ignore it and wipe what it staged, for a real cold install.
+# The downloads (the Zwift game tree) are also kept in a cache under
+# $HOME/zwift-cache, which the run restores before starting and updates after
+# passing: see tests/tools/dl-cache/dl-cache.sh. Set SMOKE_CACHE=0 or pass --fresh
+# to ignore it and wipe what it staged, for a real cold install.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -104,14 +104,14 @@ clear_prefs() {
     echo "smoke: cleared cached prefs from previous run"
 }
 
-# prepare_install FRESH: put the cached game tree and winetricks downloads into
-# the wine prefix so the installer only has to fetch what changed, or wipe them
-# for a cold install when FRESH is non-empty.
+# prepare_install FRESH: put the cached game tree into the wine prefix so the
+# installer only has to fetch what changed, or wipe it for a cold install when
+# FRESH is non-empty.
 prepare_install() {
     local install_dir="${DL_CACHE_PREFIX}/${DL_CACHE_GAME_SUBDIR}"
     if [[ -n ${1} ]]; then
-        echo "smoke: --fresh, removing ${install_dir} and the staged winetricks downloads"
-        rm -rf "${install_dir}" "${DL_CACHE_WINETRICKS_LIVE}"
+        echo "smoke: --fresh, removing ${install_dir}"
+        rm -rf "${install_dir}"
         return 0
     fi
     if ! dl_cache_present; then
@@ -202,11 +202,6 @@ main() {
     if [[ ${SMOKE_CACHE:-1} == 0 ]]; then
         fresh=1
     fi
-
-    # winetricks must keep its downloads where the launcher's cleanup (which
-    # deletes the default cache) cannot remove them, so they can be captured
-    # afterwards. The snap sees $SNAP_USER_COMMON at this same absolute path.
-    export W_CACHE="${DL_CACHE_WINETRICKS_LIVE}"
 
     ensure_snaps
     clear_stale_socket

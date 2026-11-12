@@ -19,3 +19,10 @@ zwsnap-gui/target/
 zwsnap-helpers/target/
 # ccache directory written by the wine part's build (see snap/snapcraft.yaml)
 .ccache/
+# Throwaway debug logs captured while driving the game by hand (see
+# tests/.kb/driving-the-game-by-hand.md and tests/.kb/bluetooth-test.md). The
+# launcher's live log is ~/snap/zwift/common/zwift.log; these are copies left in
+# the tree after a manual session.
+/zwift.log
+/bluemon.log
+/ridelog-*/

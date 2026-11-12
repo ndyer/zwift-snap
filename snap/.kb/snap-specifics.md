@@ -1,9 +1,9 @@
 # Preface
 
 The snap packaging details that are easy to break: pruning and its guards, build
-ordering, stage-package auditing, the local Wine source, winetricks invocation, and
-the confinement/layout decisions. Read the relevant subsection before editing
-`snap/snapcraft.yaml` or `snap/prune-closure.sh`.
+ordering, stage-package auditing, the local Wine source, Wine prerequisite
+installation, and the confinement/layout decisions. Read the relevant subsection
+before editing `snap/snapcraft.yaml` or `snap/prune-closure.sh`.
 
 IMPORTANT: Read the `.kb/agents.md` file.
 
@@ -79,8 +79,8 @@ the launcher's WebKit panel open in the user's browser. It needs the `desktop` p
 `$SNAP/usr/bin`, which precedes `/usr/bin` on `PATH` and therefore shadows the proxy:
 the stock script tries to resolve the URL inside the snap, and — the real trap — it
 exits 0 even when that fails, so a broken link looks like a success and nothing is
-logged. Wine's `winebrowser` and winetricks' `xdg-open` fallbacks look the command up
-on `PATH` too, so they also benefit from the proxy being the only copy. To test the
+logged. Wine's `winebrowser` and the launcher's `xdg-open` lookups go through the
+same proxy, so they also benefit from it being the only copy. To test the
 path, put a logging `xdg-open` on the *host* and run
 `snap run --shell zwift -c 'snapctl user-open https://example.com'`; snapd's own
 `tests/main/xdg-open` does the same thing with a `mount --bind`.
@@ -118,25 +118,36 @@ tens; only the first build after a `clean` pays the cold cost.
 ## Wine runtime
 
 New-style WoW64 has no `wine64` binary or i386 Unix packages;
-32-bit Windows programs use `lib/wine/i386-windows`. Check the winetricks steps
+32-bit Windows programs use `lib/wine/i386-windows`, which this build does not
+ship (see the `--enable-archs=x86_64` note). Check the Wine prerequisite steps
 (`d3dcompiler_47`, `renderer=vulkan`) on a desktop. The runtime is not a
 separate content snap: existing core24 Wine runtime libraries do not match this
 build, and splitting it adds a snap without reducing the total download.
 
-## winetricks invocation
+## Wine prerequisite installation
 
-The launcher installs both prerequisites with one
-`winetricks -q d3dcompiler_47 renderer=vulkan` call, not one
-call per verb: winetricks runs every command-line verb in a single process, in
-order, and exits non-zero on the first failure, so this is faster and still
-stops the install before Zwift is downloaded. The per-verb dialog titles are
-read from the `Executing w_do_call <verb>` lines winetricks prints to stderr
-(`WINETRICKS_VERB_MARKER` in `zwsnap-gui/src/install.rs`), so the pinned
-winetricks and the launcher must change together if that output changes.
-`.NET Framework 4.8` (`dotnet48`) and `WebView2` (`webview2`) are not installed:
-they existed for Zwift's own `ZwiftLauncher.exe` (a .NET launcher hosting a
-WebView2 UI), which the launcher shim replaces and nothing runs any more. The
-game is a native 64-bit binary and needs neither.
+The launcher installs both prerequisites itself now; the snap no longer ships
+`winetricks`. `install_prerequisites` (`zwsnap-gui/src/install.rs`) fetches the
+Microsoft `d3dcompiler_47` cab, verifies its length and CRC32, extracts
+`d3dcompiler_47.dll` with `cabextract` and renames it into `system32`, then
+writes the two registry keys (`DllOverrides` and the Direct3D `renderer=vulkan`)
+with `wine regedit`. `cabextract` is a stage-package for exactly this; there is
+no `unzip`.
+
+The step is skipped only when the launcher's own marker
+(`system32/d3dcompiler_47.dll.native`, `D3DCOMPILER_PROOF`) is present — *not*
+when the DLL is. `wineboot` seeds `system32` with Wine's builtin
+`d3dcompiler_47.dll` before the launcher runs, so the DLL's mere presence says
+nothing about whether the native compiler and its `native` override were ever
+installed. Probing the DLL alone silently skips the whole step (no download, no
+extract, no override) and leaves the game on Wine's builtin shader compiler,
+which renders slowly. The marker is written last, once both the DLL and the
+override are in place.
+
+`.NET Framework 4.8` (`dotnet48`) and `WebView2` (`webview2`) are not
+installed: they existed for Zwift's own `ZwiftLauncher.exe` (a .NET launcher
+hosting a WebView2 UI), which the launcher shim replaces and nothing runs any
+more. The game is a native 64-bit binary and needs neither.
 
 ## Bluetooth
 

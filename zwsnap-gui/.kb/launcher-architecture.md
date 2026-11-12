@@ -95,5 +95,5 @@ The two Windows helpers this crate runs come from the sibling
 [`../zwsnap-helpers/`](../zwsnap-helpers/) crate: `ZwiftLauncher.exe` is the
 parent process `ZwiftApp.exe` demands and `wait-for-window.exe` reports when the
 game window is up. Both use Win32 rather than GTK: GDK can enumerate its own
-windows, not another process's Wayland windows. Winetricks remains an external
-tool.
+windows, not another process's Wayland windows. The Wine prerequisites the game
+needs are installed by the launcher itself rather than by an external tool.

@@ -126,8 +126,8 @@ actions:
   dl-cache: |
     cd /project
     # Inspect and manage the Zwift download cache the smoke test uses
-    # (~/zwift-cache: the game tree and winetricks' downloads), so a smoke run does
-    # not have to download several GB again. Subcommands:
+    # (~/zwift-cache: the game tree), so a smoke run does not have to download
+    # several GB again. Subcommands:
     #   status            what is cached and for which Zwift version
     #   capture [--force] record the installed prefix's downloads
     #   stage [--force]   copy the cached downloads into the installed prefix

@@ -16,7 +16,6 @@ pub struct Runtime<'a> {
     pub install: InstallConfig<'a>,
     pub launch: LaunchConfig<'a>,
     pub logger: &'a Logger,
-    pub cache: &'a std::path::Path,
     pub display_mode: DisplayMode,
     pub graphics: GraphicsSetting,
     pub wait_for_window: bool,
@@ -72,7 +71,7 @@ impl LauncherBackend for Runtime<'_> {
         // run the game, so reinstall rather than trust the executables.
         if let Some(proof) = install::missing_wine_prerequisite(self.install.wine_prefix) {
             self.logger.warning(&format!(
-                "The wine prefix is missing a winetricks prerequisite ({proof}), reinstalling Zwift"
+                "The wine prefix is missing a wine prerequisite ({proof}), reinstalling Zwift"
             ));
             return Ok(false);
         }
@@ -202,7 +201,6 @@ impl LauncherBackend for Runtime<'_> {
             self.install.wine_prefix,
             self.install.user_common,
             self.install.staging_dir,
-            self.cache,
         ) {
             errors.push(format!("Installer artifact cleanup: {error}"));
         }
@@ -233,9 +231,10 @@ mod tests {
     }
 
     /// Fabricate what the Wine prerequisites leave behind, so `installed()` is true.
-    /// Kept in step with `install::WINETRICKS_PREREQUISITES`.
+    /// Kept in step with `install::WINE_PREREQUISITES`; the proof is the launcher's
+    /// own marker, not the DLL (which wineboot also creates).
     fn write_wine_prerequisites(prefix: &Path) {
-        let path = prefix.join("drive_c/windows/system32/d3dcompiler_47.dll");
+        let path = prefix.join(install::D3DCOMPILER_PROOF);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, "").unwrap();
     }
@@ -298,6 +297,7 @@ mod tests {
             wine: dir.join("wine"),
             winepath: dir.join("winepath"),
             wineserver: dir.join("wineserver"),
+            cabextract: dir.join("cabextract"),
         };
         script(&tools.winepath, "printf 'C:\\\\Zwift\\n'");
         script(
@@ -347,9 +347,9 @@ mod tests {
         };
         let window = dir.join("window.exe");
         let wineboot = dir.join("wineboot");
-        let winetricks = dir.join("winetricks");
         let staging = common.join("download");
         let cdn_base = format!("file://{}", cdn.display());
+        let prerequisites_base = format!("file://{}", dir.join("prerequisites").display());
         let install = InstallConfig {
             wine_prefix: &prefix,
             user_common: &common,
@@ -357,7 +357,8 @@ mod tests {
             staging_dir: &staging,
             launcher_shim: &shim,
             wineboot: &wineboot,
-            winetricks: &winetricks,
+            prerequisites_base: &prerequisites_base,
+            prerequisites_expect: install::d3dcompiler_expect(),
             tools: &tools,
             cdn_base: &cdn_base,
             jobs: 2,
@@ -380,7 +381,6 @@ mod tests {
             install,
             launch,
             logger: &logger,
-            cache: &common,
             display_mode: DisplayMode::Windowed {
                 width: 1280,
                 height: 720,

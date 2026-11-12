@@ -67,7 +67,7 @@ layout:
     bind: $SNAP/usr/lib/x86_64-linux-gnu/webkitgtk-6.0
 
 environment:
-  # winetricks and wine look for helper programs (cabextract, ntlm_auth) in PATH
+  # wine and the launcher look for helper programs (cabextract, ntlm_auth) in PATH
   PATH: $SNAP/bin:$SNAP/usr/bin:$SNAP/usr/sbin:$PATH
   # keyboard layout data for wine's wayland driver (libxkbcommon)
   XKB_CONFIG_ROOT: $SNAP/usr/share/X11/xkb
@@ -147,12 +147,12 @@ parts:
     source: /project/wine-src
     source-type: local
     # wine ships a configure script, so the plugin goes straight to
-    # configure/make/make install. New style WoW64: 64-bit unix libraries plus
-    # i386 and x86_64 PE files in one tree, like the WineHQ package.
+    # configure/make/make install. 64-bit only: the game and the shipped
+    # Windows helpers are all x86_64, so no i386 PE tree is built.
     autotools-configure-parameters:
       # the launcher scripts and the snap apps expect this exact prefix
       - --prefix=/opt/wine-devel
-      - --enable-archs=i386,x86_64
+      - --enable-archs=x86_64
       # nothing in the snap runs wine's test suite
       - --disable-maintainer-mode
       - --disable-debug
@@ -279,9 +279,7 @@ parts:
       - libxrandr2
       - libxrender1
       - ocl-icd-libopencl1
-      # needed by winetricks. No unzip: only w_try_unzip verbs use it, and the
-      # remaining verbs (d3dcompiler_47, renderer=vulkan) extract .cabs with
-      # cabextract or write registry keys.
+      # extracts the d3dcompiler_47 prerequisite the launcher downloads
       - cabextract
       - ca-certificates
       - wget
@@ -299,7 +297,7 @@ parts:
       # host's handler through the desktop plug (snapctl user-open). The stock
       # script instead tries to open the URL inside the snap and exits 0 even
       # when that fails, so a broken link looks like a success. Everything that
-      # wants xdg-open (the launcher, wine's winebrowser, winetricks) looks it up
+      # wants xdg-open (the launcher, wine's winebrowser) looks it up
       # on PATH and finds the base's proxy.
       # keyboard layouts, without them wine's wayland driver gets no keyboard input
       - xkb-data
@@ -319,8 +317,7 @@ parts:
       # wine ships the complete build toolchain and static import libraries
       # for cross-compiling Windows programs. Nothing here is used at runtime and
       # the 776 *.a import libraries alone are ~100 MB. The PE files in the same
-      # directories ARE needed (new style WoW64 builtin DLLs) and stay.
-      - -opt/wine-devel/lib/wine/i386-windows/*.a
+      # directories ARE needed (builtin DLLs) and stay.
       - -opt/wine-devel/lib/wine/x86_64-windows/*.a
       - -opt/wine-devel/lib/wine/x86_64-unix/*.a
       - -opt/wine-devel/share/man
@@ -335,21 +332,21 @@ parts:
       - -opt/wine-devel/bin/winedump
       - -opt/wine-devel/bin/msidb
       - -opt/wine-devel/bin/function_grep.pl
-      # games, not needed by the launcher or winetricks
+      # games, not needed by the launcher
       - -opt/wine-devel/bin/winemine
 
   runtime-prune:
     # Pruning needs every runtime part primed, not rebuilt. Keep this dependency
     # downstream of Wine so launcher changes never invalidate Wine's build.
     plugin: nil
-    after: [wine, zwsnap-gui, zwsnap-runtime, winetricks, zwsnap-helpers]
+    after: [wine, zwsnap-gui, zwsnap-runtime, zwsnap-helpers]
     override-prime: |
       craftctl default
       # Deletes tools, import libraries and unreachable libraries; see
       # snap/prune-closure.sh for the closure walk. Bump this comment after
       # editing that script or Wine's prime filters, craft-parts only
       # re-runs the prime step when the script text tracked in the part state
-      # changes: v12
+      # changes: v15
       # The gschemas.compiled that Debian creates in a trigger is not part of the staged
       # packages. Without it GTK programs abort with "No GSettings schemas are installed".
       glib-compile-schemas "${CRAFT_PRIME}/usr/share/glib-2.0/schemas"
@@ -380,8 +377,8 @@ parts:
       # closure, for example the onnxruntime/tensorflow stack that only the
       # gstreamer neural network plugins use.
       "${CRAFT_PROJECT_DIR}/snap/prune-closure.sh" "${CRAFT_PRIME}"
-      # Guard against over-pruning: fail the build when anything the launcher, winetricks
-      # or wine itself needs at runtime went missing, for example after a change to the
+      # Guard against over-pruning: fail the build when anything the launcher or wine
+      # itself needs at runtime went missing, for example after a change to the
       # stage-packages list or the prime filter above.
       for f in \
           bin/zwsnap-gui \
@@ -414,8 +411,8 @@ parts:
               exit 1
           fi
       done
-      # the WoW64 PE trees must both exist and still contain the builtin DLLs
-      for d in i386-windows x86_64-windows; do
+      # the PE tree must exist and still contain the builtin DLLs
+      for d in x86_64-windows; do
           if [[ ! -d "${CRAFT_PRIME}/opt/wine-devel/lib/wine/${d}" ]] \
               || [[ -z "$(ls -A "${CRAFT_PRIME}/opt/wine-devel/lib/wine/${d}")" ]]; then
               echo "prune guard: lib/wine/${d} is empty or missing" >&2
@@ -445,14 +442,6 @@ parts:
               exit 1
           fi
       done
-
-  winetricks:
-    plugin: nil
-    source: https://raw.githubusercontent.com/Winetricks/winetricks/f3890f670867b5ffbc3938726db45c0f7d16c8ba/src/winetricks
-    source-type: file
-    source-checksum: sha256/672a1ff4442e8691a3ffc0e6860137e201a1d1227e9b3044245f1731e9e9837e
-    override-build: |
-      install -Dm755 "${CRAFT_PART_SRC}/winetricks" "${CRAFT_PART_INSTALL}/bin/winetricks"
 
   zwsnap-helpers:
     # The Windows side helpers that run inside the wine prefix:

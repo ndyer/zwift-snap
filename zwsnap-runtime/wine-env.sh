@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Command wrapper for the snap: sets up the environment for wine and runs the given command.
-# Used as the command-chain of every app so wine, winetricks and the libraries are found.
+# Used as the command-chain of every app so wine and the libraries are found.
 set -uo pipefail
 
 export WINE_ROOT="${SNAP}/opt/wine-devel"
 export PATH="${SNAP}/bin:${WINE_ROOT}/bin:${SNAP}/usr/bin:${SNAP}/usr/games:${PATH}"
 
-# wine is a new style WoW64 build: only 64-bit unix libraries are needed, 32-bit Windows
-# programs run through the PE files in lib/wine/i386-windows
+# wine is built 64-bit only (--enable-archs=x86_64): both the unix libraries and the
+# Windows PE builtins in lib/wine/x86_64-windows are x86_64
 #
 # Some Ubuntu libraries find their private helper libraries through an absolute RUNPATH such as
 # /usr/lib/x86_64-linux-gnu/pulseaudio, which does not exist inside the snap:

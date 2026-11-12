@@ -16,7 +16,7 @@ IMPORTANT: Read the `.kb/agents.md` file.
 - [.workshop/.kb/pkgproxy-cache-recovery.md](.workshop/.kb/pkgproxy-cache-recovery.md) - Recovering snap objects from the pkgproxy cache.
 - [snap/.kb/snap-specifics.md](snap/.kb/snap-specifics.md) - Packaging details that are easy to break.
 - [tests/.kb/smoke-test.md](tests/.kb/smoke-test.md) - The yarf-driven visual smoke test and its diagnostics.
-- [tests/.kb/dl-cache.md](tests/.kb/dl-cache.md) - The smoke test's Zwift and winetricks download cache.
+- [tests/.kb/dl-cache.md](tests/.kb/dl-cache.md) - The smoke test's Zwift download cache.
 - [tests/.kb/yarf-tooling.md](tests/.kb/yarf-tooling.md) - Screenshots and input for the running game.
 - [tests/.kb/driving-the-game-by-hand.md](tests/.kb/driving-the-game-by-hand.md) - Starting the game without the launcher script.
 - [tests/.kb/bluetooth-test.md](tests/.kb/bluetooth-test.md) - The bluezoo-backed Bluetooth plumbing test.

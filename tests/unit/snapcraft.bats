@@ -19,7 +19,7 @@ def dependencies(name):
     return result
 
 assert "zwsnap-gui" not in dependencies("wine")
-assert {"wine", "zwsnap-gui", "zwsnap-runtime", "winetricks", "zwsnap-helpers"} <= dependencies("runtime-prune")
+assert {"wine", "zwsnap-gui", "zwsnap-runtime", "zwsnap-helpers"} <= dependencies("runtime-prune")
 assert "runtime-prune" in dependencies("gpu-2604")
 assert "prune-closure.sh" not in parts["wine"].get("override-prime", "")
 assert "prune-closure.sh" in parts["runtime-prune"]["override-prime"]

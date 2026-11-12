@@ -308,6 +308,7 @@ mod tests {
                 wine: dir.join("wine"),
                 winepath: dir.join("winepath"),
                 wineserver: dir.join("wineserver"),
+                cabextract: dir.join("cabextract"),
             };
             write_executable(&tools.winepath, "#!/bin/sh\nprintf 'C:\\\\Zwift\\n'\n");
             write_executable(

@@ -108,10 +108,11 @@ esac"#,
 
     /// Fabricate what the Wine prerequisites leave behind, so the launcher sees the
     /// prefix as installed. Kept in step with the sentinels in
-    /// `zwsnap-gui/src/install.rs` (`WINETRICKS_PREREQUISITES`).
+    /// `zwsnap-gui/src/install.rs` (`WINE_PREREQUISITES`): the proof is the
+    /// launcher's own marker, not the DLL (which wineboot also creates).
     fn write_wine_prerequisites(&self) {
         let prefix = self.root.join("common/.wine");
-        let path = prefix.join("drive_c/windows/system32/d3dcompiler_47.dll");
+        let path = prefix.join(zwsnap_gui::install::D3DCOMPILER_PROOF);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, "").unwrap();
     }

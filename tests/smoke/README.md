@@ -9,5 +9,5 @@ tested manually (see the [pairing suite](../pairing/)).
 
 - [../.kb/smoke-test.md](../.kb/smoke-test.md) — how the suite works, the
   first-run cost, and how to read its diagnostics.
-- [../.kb/dl-cache.md](../.kb/dl-cache.md) — the `~/zwift-cache` game and
-  winetricks download cache, the `dl-cache status`/`clear` actions, and `--fresh`.
+- [../.kb/dl-cache.md](../.kb/dl-cache.md) — the `~/zwift-cache` game download
+  cache, the `dl-cache status`/`clear` actions, and `--fresh`.

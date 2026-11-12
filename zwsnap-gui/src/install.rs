@@ -1,8 +1,8 @@
 //! Fresh Wine prefix and Zwift installation.
 
-use crate::cdn::Remote;
+use crate::cdn::{Expect, Remote};
 use crate::launch;
-use crate::logging::{Logger, OutputObserver};
+use crate::logging::Logger;
 use crate::sync::{self, SyncConfig};
 use crate::wine_tools::Tools;
 use std::collections::HashSet;
@@ -11,64 +11,91 @@ use std::io::{self, ErrorKind};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::mpsc;
 use std::time::Duration;
 
 pub const EXPECTED_DRIVE_C_BYTES: u64 = 8_537_613_774;
 
-/// One Wine prerequisite installed by the single winetricks invocation.
-struct Prerequisite {
-    /// Terminal-mode progress percentage of this verb; the GUI replaces it with the
-    /// percentage of the sampled prefix size.
-    percent: u8,
-    /// Progress message shown while the verb runs.
-    message: &'static str,
-    /// The winetricks verb to run.
-    verb: &'static str,
-    /// A path relative to the Wine prefix that exists only once the verb succeeded,
-    /// used by `missing_wine_prerequisite`. `None` for verbs that only change the
-    /// registry (`renderer=vulkan`), which cannot be probed without running Wine.
-    proof: Option<&'static str>,
+/// Where the Direct3D shader compiler's redistributable is downloaded from.
+///
+/// This replaces winetricks' `d3dcompiler_47` verb: the launcher installs the
+/// prerequisite itself, so the snap no longer ships winetricks or any of the Wine
+/// internals its verbs assumed. The directory is the standalone SDK installer
+/// Microsoft still serves; tests point `InstallConfig::prerequisites_base` at a
+/// `file://` fixture instead.
+pub const D3DCOMPILER_BASE: &str =
+    "https://download.microsoft.com/download/B/0/C/B0C80BA3-8AD6-4958-810B-6882485230B5/standalonesdk/Installers";
+
+/// The 64-bit `d3dcompiler_47` cabinet inside [`D3DCOMPILER_BASE`].
+const D3DCOMPILER_CAB: &str = "61d57a7a82309cd161a854a6f4619e52.cab";
+
+/// Length and CRC-32 of the cabinet. They pin the download the same way a manifest
+/// entry pins a game file, so a truncated or substituted transfer never becomes a
+/// prefix that cannot run the game. Taken from the file Microsoft serves.
+const D3DCOMPILER_CAB_LENGTH: u64 = 1_776_364;
+const D3DCOMPILER_CAB_CRC32: u32 = 0x63cd_3009;
+
+/// What the shipped cabinet must look like, for [`InstallConfig::prerequisites_expect`].
+pub fn d3dcompiler_expect() -> Expect {
+    Expect {
+        length: D3DCOMPILER_CAB_LENGTH,
+        checksum: Some(D3DCOMPILER_CAB_CRC32),
+    }
 }
 
-/// The Wine prerequisites, installed by a single winetricks invocation.
+/// The DLL inside the cabinet. `cabextract` lists it (and a second payload) by this
+/// name and stores it without an extension, so it is renamed on install.
+const D3DCOMPILER_CAB_DLL: &str = "fil3585cb2ea5db13cc0838f8d06b5c9679";
+
+/// Where the extracted compiler is installed, relative to the Wine prefix. Wine
+/// resolves `d3dcompiler_47` from `system32`, so the native DLL replaces the
+/// builtin in place.
+pub const D3DCOMPILER_DLL: &str = "drive_c/windows/system32/d3dcompiler_47.dll";
+
+/// Proof that the native compiler and its `native` override are installed, as a
+/// path relative to the Wine prefix.
 ///
-/// winetricks runs every command-line verb in one process, in order, and exits
-/// non-zero on the first failing verb. One call therefore installs all of them and
-/// still stops the install before Zwift is downloaded, while separate calls would
-/// start the script, probe Wine and initialise the prefix once per verb.
+/// The DLL itself cannot be the proof: `wineboot` seeds `system32` with Wine's own
+/// builtin `d3dcompiler_47.dll`, so a prefix that has never run this step already
+/// has a file at [`D3DCOMPILER_DLL`]. This sibling marker is written by the
+/// launcher only once the native DLL is in place and the override imported, so it
+/// is the reliable proof [`missing_wine_prerequisite`] needs.
+pub const D3DCOMPILER_PROOF: &str = "drive_c/windows/system32/d3dcompiler_47.dll.native";
+
+/// A Wine prerequisite that can be detected from the filesystem.
+struct Prerequisite {
+    /// Progress message shown while it is installed.
+    message: &'static str,
+    /// A path relative to the Wine prefix that the launcher itself writes once the
+    /// prerequisite is in place, used by `missing_wine_prerequisite`.
+    proof: &'static str,
+}
+
+/// The Wine prerequisites that leave a file behind.
 ///
 /// `.NET Framework 4.8` and `WebView2` are deliberately absent: both existed for
 /// Zwift's own `ZwiftLauncher.exe`, a .NET launcher hosting a WebView2 UI. The
 /// launcher shim replaces that program and nothing runs it any more, so neither is
-/// downloaded. The game itself is a native 64-bit binary and needs neither.
+/// installed. The game itself is a native 64-bit binary and needs neither.
 ///
-/// The proof paths are checked against the pinned winetricks upstream, so they and
-/// the launcher must change together: the same reason the verb markers above are
-/// pinned.
-const WINETRICKS_PREREQUISITES: [Prerequisite; 2] = [
-    Prerequisite {
-        percent: 10,
-        message: "Installing the Direct3D shader compiler",
-        verb: "d3dcompiler_47",
-        proof: Some("drive_c/windows/system32/d3dcompiler_47.dll"),
-    },
-    Prerequisite {
-        percent: 20,
-        message: "Enabling the Vulkan renderer for video routes",
-        verb: "renderer=vulkan",
-        proof: None,
-    },
-];
+/// The Vulkan renderer (winetricks' `renderer=vulkan`) is installed too but is not
+/// listed here: it is a registry value that cannot be probed without running Wine.
+const WINE_PREREQUISITES: [Prerequisite; 1] = [Prerequisite {
+    message: "Installing the Direct3D shader compiler",
+    proof: D3DCOMPILER_PROOF,
+}];
 
-/// Title shown until winetricks announces its first verb, and kept as a fallback
-/// when its output cannot be read.
-const WINETRICKS_PREREQUISITES_MESSAGE: &str =
-    "Installing the wine prerequisites (the Direct3D shader compiler and the Vulkan renderer)";
+/// Progress message for the registry-only Vulkan prerequisite.
+const VULKAN_MESSAGE: &str = "Enabling the Vulkan renderer for video routes";
 
-/// The line winetricks prints (to stderr) before running each verb.
-const WINETRICKS_VERB_MARKER: &str = "Executing w_do_call ";
+/// `d3dcompiler_47` is loaded by the game instead of Wine's builtin, so the DLL is
+/// overridden to `native`. The leading `*` matches the form winetricks wrote.
+const DLLOVERRIDE_REG: &str =
+    "[HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides]\r\n\"*d3dcompiler_47\"=\"native\"\r\n";
+
+/// The registry value winetricks' `winetricks_set_wined3d_var renderer vulkan` wrote.
+const VULKAN_REG: &str =
+    "[HKEY_CURRENT_USER\\Software\\Wine\\Direct3D]\r\n\"renderer\"=\"vulkan\"\r\n";
 
 /// Phase messages are independent of sampled percentages during a fresh install.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,7 +114,12 @@ pub struct InstallConfig<'a> {
     /// The launcher shim that replaces the game's own `ZwiftLauncher.exe`.
     pub launcher_shim: &'a Path,
     pub wineboot: &'a Path,
-    pub winetricks: &'a Path,
+    /// Where the Wine prerequisites' redistributable is downloaded from, or a
+    /// `file://` directory in tests.
+    pub prerequisites_base: &'a str,
+    /// What the cabinet at `prerequisites_base` must look like. Production uses
+    /// [`d3dcompiler_expect`]; tests serve a small fixture.
+    pub prerequisites_expect: Expect,
     pub tools: &'a Tools,
     /// The CDN root the game is fetched from, or a `file://` directory in tests.
     pub cdn_base: &'a str,
@@ -100,19 +132,6 @@ pub struct InstallConfig<'a> {
 
 fn run(command: &mut Command, logger: &Logger, label: &str) -> io::Result<()> {
     finish(logger.run_inherited_output(command)?, label)
-}
-
-/// Like `run`, but observes the child's output while it runs.
-fn run_observed(
-    command: &mut Command,
-    logger: &Logger,
-    label: &str,
-    observer: OutputObserver,
-) -> io::Result<()> {
-    finish(
-        logger.run_inherited_output_observed(command, observer)?,
-        label,
-    )
 }
 
 fn finish(status: ExitStatus, label: &str) -> io::Result<()> {
@@ -132,20 +151,17 @@ fn missing_ok_remove_file(path: &Path) -> io::Result<()> {
 }
 
 /// Remove only launcher-owned scratch; never follow a directory symlink.
-pub fn cleanup_artifacts(
-    prefix: &Path,
-    common: &Path,
-    staging: &Path,
-    cache: &Path,
-) -> io::Result<()> {
+pub fn cleanup_artifacts(prefix: &Path, common: &Path, staging: &Path) -> io::Result<()> {
     // A finished run leaves the staging directory empty; an interrupted one can hold
     // partial transfers, which the next run refetches from scratch anyway.
     remove_artifact(staging)?;
+    // The prerequisite download and extraction scratch, if a run was interrupted
+    // between fetching the cabinet and installing the DLL.
+    remove_artifact(&common.join("prerequisites"))?;
     // A prefix installed by an older launcher still holds the downloaded installer,
     // which nothing runs any more. It is a hundred megabytes, so reclaim it.
     missing_ok_remove_file(&common.join("ZwiftSetup.exe"))?;
     missing_ok_remove_file(&common.join("ZwiftSetup.log"))?;
-    remove_artifact(&cache.join("winetricks"))?;
     if let Some(user) = resolve_wine_user(prefix)? {
         let temp = user.join("AppData/Local/Temp");
         let relative = temp.strip_prefix(prefix).map_err(io::Error::other)?;
@@ -193,11 +209,11 @@ fn remove_artifact(path: &Path) -> io::Result<()> {
 
 /// The proof path of the first Wine prerequisite that is not installed, if any.
 ///
-/// Prerequisites without a proof path (registry-only verbs) are skipped: they cannot
-/// be observed from the filesystem.
+/// The registry-only Vulkan prerequisite has no proof path and is not probed: it
+/// cannot be observed from the filesystem, so a fresh install always rewrites it.
 pub fn missing_wine_prerequisite(prefix: &Path) -> Option<&'static str> {
-    WINETRICKS_PREREQUISITES.iter().find_map(|prerequisite| {
-        let proof = prerequisite.proof?;
+    WINE_PREREQUISITES.iter().find_map(|prerequisite| {
+        let proof = prerequisite.proof;
         (!prefix.join(proof).exists()).then_some(proof)
     })
 }
@@ -274,8 +290,7 @@ fn sample_percent(bytes: u64, expected: u64, previous: u8) -> u8 {
 /// Install Wine prerequisites, the Zwift launcher, and the game.
 ///
 /// The progress callback must be thread-safe: size samples arrive from a worker
-/// thread and winetricks phase updates from an output reader thread, while the
-/// remaining phase updates arrive from the calling thread.
+/// thread, while the remaining phase updates arrive from the calling thread.
 pub fn install(
     config: &InstallConfig<'_>,
     logger: &Logger,
@@ -364,138 +379,108 @@ pub fn install(
     })
 }
 
-/// Derives per-verb progress messages from winetricks' own output.
-///
-/// winetricks offers no other progress signal for the prerequisites, so the
-/// install dialog's per-verb titles are read from the `Executing w_do_call <verb>`
-/// lines it prints while it works. Every one of those lines comes from its single
-/// stderr stream, so their order is preserved even though the two output reader
-/// threads race with each other.
-struct WinetricksProgress {
-    pending: Vec<u8>,
-    next: usize,
-}
-
-impl WinetricksProgress {
-    fn new() -> Self {
-        Self {
-            pending: Vec::new(),
-            next: 0,
-        }
-    }
-
-    /// Consumes a chunk of output and returns the phases it completed.
-    ///
-    /// Output arrives in arbitrary chunks, so a trailing partial line is kept until
-    /// the rest of it has been read.
-    fn feed(&mut self, bytes: &[u8]) -> Vec<(u8, &'static str)> {
-        self.pending.extend_from_slice(bytes);
-        let mut phases = Vec::new();
-        while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
-            let mut line = self.pending.drain(..=end).collect::<Vec<u8>>();
-            line.pop();
-            let line = String::from_utf8_lossy(&line);
-            if let Some(verb) = line
-                .trim_end_matches('\r')
-                .strip_prefix(WINETRICKS_VERB_MARKER)
-            {
-                self.report(verb, &mut phases);
-            }
-        }
-        phases
-    }
-
-    /// Reports each configured verb once, in the configured order.
-    ///
-    /// winetricks also announces verbs it runs for its own setup, and verbs we do
-    /// not configure, so only the configured verbs count.
-    /// Anything already reported, out of order or unknown is ignored; a verb that
-    /// was missed entirely is skipped rather than reported late.
-    fn report(&mut self, verb: &str, phases: &mut Vec<(u8, &'static str)>) {
-        for (index, prerequisite) in WINETRICKS_PREREQUISITES.iter().enumerate().skip(self.next) {
-            if verb == prerequisite.verb {
-                self.next = index + 1;
-                phases.push((prerequisite.percent, prerequisite.message));
-                return;
-            }
-        }
-    }
-}
-
-/// Install the Wine prerequisites with a single winetricks invocation.
+/// Install the Wine prerequisites a fresh prefix needs.
 fn install_prerequisites(
     config: &InstallConfig<'_>,
     logger: &Logger,
     progress: &(impl Fn(InstallProgress) + Sync),
 ) -> io::Result<()> {
     progress(InstallProgress::Phase {
-        percent: WINETRICKS_PREREQUISITES[0].percent,
-        message: WINETRICKS_PREREQUISITES_MESSAGE.to_string(),
+        percent: 10,
+        message: WINE_PREREQUISITES[0].message.to_string(),
     });
+    install_d3dcompiler(config, logger)?;
+    progress(InstallProgress::Phase {
+        percent: 20,
+        message: VULKAN_MESSAGE.to_string(),
+    });
+    configure_vulkan_renderer(config, logger)
+}
 
-    let verbs: Vec<&str> = WINETRICKS_PREREQUISITES
-        .iter()
-        .map(|prerequisite| prerequisite.verb)
-        .collect();
-    let label = format!("winetricks {}", verbs.join(" "));
-    let mut command = Command::new(config.winetricks);
-    command
-        .env("WINEPREFIX", config.wine_prefix)
-        // -q only selects unattended installs. It does not silence the verb markers
-        // the titles below are read from; that is WINETRICKS_SUPER_QUIET.
-        .arg("-q")
-        .args(&verbs);
+/// Download the Direct3D shader compiler, install it, and override it to `native`.
+///
+/// The DLL is fetched from Microsoft into a scratch directory under the snap data,
+/// extracted with `cabextract`, renamed into `system32`, and then selected through
+/// the same `HKCU\Software\Wine\DllOverrides` value winetricks wrote. The step is
+/// skipped only when its own [`D3DCOMPILER_PROOF`] marker is present: the DLL on
+/// its own says nothing, since `wineboot` leaves Wine's builtin there.
+fn install_d3dcompiler(config: &InstallConfig<'_>, logger: &Logger) -> io::Result<()> {
+    let proof = config.wine_prefix.join(WINE_PREREQUISITES[0].proof);
+    if proof.is_file() {
+        return Ok(());
+    }
+    let dll = config.wine_prefix.join(D3DCOMPILER_DLL);
+    let scratch = config.user_common.join("prerequisites");
+    remove_artifact(&scratch)?;
+    fs::create_dir(&scratch)?;
+    let result = (|| {
+        let cab = scratch.join(D3DCOMPILER_CAB);
+        let base = config.prerequisites_base.trim_end_matches('/');
+        Remote::new(config.prerequisites_base)
+            .fetch_file(
+                &format!("{base}/{D3DCOMPILER_CAB}"),
+                &cab,
+                config.prerequisites_expect,
+            )
+            .map_err(io::Error::other)?;
+        run(
+            Command::new(&config.tools.cabextract)
+                .arg("-q")
+                .arg("-L")
+                .arg("-F")
+                .arg(D3DCOMPILER_CAB_DLL)
+                .arg("-d")
+                .arg(&scratch)
+                .arg(&cab),
+            logger,
+            &format!("cabextract {D3DCOMPILER_CAB}"),
+        )?;
+        fs::rename(scratch.join(D3DCOMPILER_CAB_DLL), &dll)?;
+        write_registry(
+            config,
+            logger,
+            "d3dcompiler_47-override.reg",
+            DLLOVERRIDE_REG,
+        )?;
+        // Written last, so the marker only appears once both the native DLL and its
+        // override are in place; it records what it vouches for.
+        fs::write(&proof, D3DCOMPILER_DLL)
+    })();
+    // The scratch holds the cabinet and any partially extracted payload; neither is
+    // needed once the DLL is in place.
+    remove_artifact(&scratch)?;
+    result
+}
 
-    let (sender, receiver) = mpsc::channel();
-    let sender = Mutex::new(sender);
-    let parser = Mutex::new(WinetricksProgress::new());
-    let done = Arc::new(AtomicBool::new(false));
-    let observer = {
-        let done = Arc::clone(&done);
-        Arc::new(move |bytes: &[u8]| {
-            if done.load(Ordering::Acquire) {
-                return;
-            }
-            let phases = parser
-                .lock()
-                .expect("winetricks progress lock poisoned")
-                .feed(bytes);
-            let sender = sender.lock().expect("winetricks sender lock poisoned");
-            for phase in phases {
-                let _ = sender.send(phase);
-            }
-        })
-    };
+/// Select the Vulkan renderer for Wine's Direct3D, as winetricks' `renderer=vulkan` did.
+fn configure_vulkan_renderer(config: &InstallConfig<'_>, logger: &Logger) -> io::Result<()> {
+    write_registry(config, logger, "vulkan-renderer.reg", VULKAN_REG)
+}
 
-    std::thread::scope(|scope| {
-        let reporter_done = Arc::clone(&done);
-        let reporter = scope.spawn(move || {
-            loop {
-                match receiver.recv_timeout(Duration::from_millis(50)) {
-                    Ok((percent, message)) => progress(InstallProgress::Phase {
-                        percent,
-                        message: message.to_string(),
-                    }),
-                    // Drain everything winetricks sent before stopping: the markers
-                    // arrive just before it exits.
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if reporter_done.load(Ordering::Acquire) {
-                            break;
-                        }
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                }
-            }
-        });
-        let result = run_observed(&mut command, logger, &label, observer);
-        // Stop the reporter before returning: it holds the only borrow of the
-        // progress callback, and the caller emits the next phase right after.
-        done.store(true, Ordering::Release);
-        reporter
-            .join()
-            .expect("winetricks progress reporter panicked");
-        result
-    })
+/// Write a `REGEDIT4` file into the prefix and import it with `wine regedit`.
+///
+/// The file lives at the drive's root so the Windows path is a plain `C:\<name>`,
+/// and is removed afterwards whether or not the import succeeded.
+fn write_registry(
+    config: &InstallConfig<'_>,
+    logger: &Logger,
+    name: &str,
+    body: &str,
+) -> io::Result<()> {
+    let path = config.wine_prefix.join("drive_c").join(name);
+    fs::write(&path, format!("REGEDIT4\r\n\r\n{body}"))?;
+    let result = run(
+        Command::new(&config.tools.wine)
+            .env("WINEPREFIX", config.wine_prefix)
+            .env("WINEDLLOVERRIDES", "winemenubuilder.exe=d")
+            .arg("C:\\windows\\regedit.exe")
+            .arg("/S")
+            .arg(format!("C:\\{name}")),
+        logger,
+        &format!("wine regedit {name}"),
+    );
+    missing_ok_remove_file(&path)?;
+    result
 }
 
 fn install_steps(
@@ -563,6 +548,8 @@ mod tests {
     struct Fixture {
         dir: std::path::PathBuf,
         tools: Tools,
+        /// A `file://` directory serving the prereq cabinet the launcher fetches.
+        prerequisites_base: String,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
 
@@ -587,6 +574,7 @@ mod tests {
                 wine: dir.join("wine"),
                 winepath: dir.join("winepath"),
                 wineserver: dir.join("wineserver"),
+                cabextract: dir.join("cabextract"),
             };
             fs::create_dir_all(dir.join("prefix/drive_c/users/tester")).unwrap();
             fs::create_dir(dir.join("common")).unwrap();
@@ -597,35 +585,59 @@ mod tests {
                 dir.join("prefix/drive_c/users/tester/Documents"),
             )
             .unwrap();
+            // A stand-in for the prereq cabinet, served over `file://`. The launcher
+            // verifies it against the expectation below, so its bytes are arbitrary.
+            let cabinet = b"cabinet";
+            fs::create_dir(dir.join("prerequisites")).unwrap();
+            fs::write(dir.join("prerequisites").join(D3DCOMPILER_CAB), cabinet).unwrap();
             let script = |path: &Path, body: &str| {
                 fs::write(path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
                 fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
             };
+            // Like the real thing, wineboot creates the prefix and seeds `system32`
+            // with Wine's own builtin `d3dcompiler_47.dll`. The launcher must still
+            // install the native one, so this stub is what makes the fixture catch a
+            // regression to probing the DLL's presence.
             script(&dir.join("wineboot"), &format!(
-                "test \"$WINEDLLOVERRIDES\" = 'mscoree,mshtml=;winemenubuilder.exe=d'\ntest \"$WINEPREFIX\" = '{0}/prefix'\necho wineboot >> '{0}/calls'",
+                "test \"$WINEDLLOVERRIDES\" = 'mscoree,mshtml=;winemenubuilder.exe=d'\ntest \"$WINEPREFIX\" = '{0}/prefix'\necho wineboot >> '{0}/calls'\n\
+                 mkdir -p '{0}/prefix/drive_c/windows/system32'\n\
+                 printf builtin > '{0}/prefix/drive_c/windows/system32/d3dcompiler_47.dll'",
                 dir.display()
             ));
+            // cabextract is invoked as `-q -L -F <dll> -d <dir> <cab>`; the arguments
+            // are parsed rather than positional so the stub survives an order change.
             script(
-                &dir.join("winetricks"),
+                &dir.join("cabextract"),
                 &format!(
-                    "test \"$1\" = -q\nshift\necho \"winetricks $*\" >> '{0}/calls'\n\
-                     for verb in \"$@\"; do echo \"Executing w_do_call $verb\" >&2; done\n\
-                     test ! -f '{0}/fail-winetricks'\n\
+                    "inner=''\nout=''\nwhile [ \"$#\" -gt 0 ]; do\n\
+                     \tcase \"$1\" in\n\t\t-F) inner=\"$2\"; shift 2;;\n\t\t-d) out=\"$2\"; shift 2;;\n\t\t*) shift;;\n\tesac\ndone\n\
+                     mkdir -p \"$out\"\nprintf dll > \"$out/$inner\"\n\
+                     echo \"cabextract $inner\" >> '{0}/calls'\n\
+                     test ! -f '{0}/fail-cabextract'\n\
                      if [ -f '{0}/grow-prefix' ]; then dd if=/dev/zero of='{0}/prefix/drive_c/growth' bs=4096 count=16 2>/dev/null; sleep 0.2; fi",
                     dir.display()
                 ),
             );
-            // Nothing in a fresh install may run wine or wineserver any more: the game is
-            // downloaded by the launcher itself, so a call here is a regression.
-            for tool in [&tools.wine, &tools.wineserver] {
-                script(
-                    tool,
-                    &format!("echo \"$0\" >> '{}/calls'\nexit 1", dir.display()),
-                );
-            }
+            // Wine itself only runs `regedit` for the prerequisites; the game is
+            // downloaded by the launcher, so it needs no other wine process.
+            script(
+                &dir.join("wine"),
+                &format!(
+                    "test \"$1\" = 'C:\\windows\\regedit.exe'\necho \"wine regedit\" >> '{0}/calls'",
+                    dir.display()
+                ),
+            );
+            // Nothing in a fresh install may run wineserver any more: a call here is a
+            // regression.
+            script(
+                &tools.wineserver,
+                &format!("echo wineserver >> '{}/calls'\nexit 1", dir.display()),
+            );
+            let prerequisites_base = format!("file://{}", dir.join("prerequisites").display());
             Self {
                 dir,
                 tools,
+                prerequisites_base,
                 _lock: lock,
             }
         }
@@ -645,7 +657,7 @@ mod tests {
             let staging = common.join("download");
             let shim = self.dir.join("snap/ZwiftLauncher.exe");
             let wineboot = self.dir.join("wineboot");
-            let winetricks = self.dir.join("winetricks");
+            let cabinet = fs::read(self.dir.join("prerequisites").join(D3DCOMPILER_CAB)).unwrap();
             let logger = Logger::new(self.dir.join("zwift.log"), 0, false);
             logger.init().unwrap();
             let cdn_base = match cdn_base {
@@ -659,7 +671,11 @@ mod tests {
                 staging_dir: &staging,
                 launcher_shim: &shim,
                 wineboot: &wineboot,
-                winetricks: &winetricks,
+                prerequisites_base: &self.prerequisites_base,
+                prerequisites_expect: Expect {
+                    length: cabinet.len() as u64,
+                    checksum: Some(crc32fast::hash(&cabinet)),
+                },
                 tools: &self.tools,
                 cdn_base: &cdn_base,
                 jobs: 2,
@@ -697,12 +713,28 @@ mod tests {
         let fixture = Fixture::new("success");
         let (result, events) = fixture.run(Duration::from_secs(30));
         result.unwrap();
-        // The game is fetched over the CDN, so no wine process runs after winetricks.
+        // wineboot, then the prerequisite cabinet is extracted and its two registry
+        // files imported. The game is fetched over the CDN, so no further wine process
+        // runs.
         let calls = fixture.calls();
         assert_eq!(
             calls.lines().collect::<Vec<_>>(),
-            ["wineboot", "winetricks d3dcompiler_47 renderer=vulkan"]
+            [
+                "wineboot",
+                &format!("cabextract {D3DCOMPILER_CAB_DLL}"),
+                "wine regedit",
+                "wine regedit",
+            ]
         );
+        // Wine's builtin must have been overwritten by the native compiler (the
+        // fixture's `cabextract` writes the bytes `dll`), and the launcher's marker
+        // left behind as the proof of the override.
+        let system32 = fixture.dir.join("prefix/drive_c/windows/system32");
+        assert_eq!(
+            fs::read_to_string(system32.join("d3dcompiler_47.dll")).unwrap(),
+            "dll"
+        );
+        assert!(fixture.dir.join("prefix").join(D3DCOMPILER_PROOF).is_file());
         let messages: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
@@ -711,10 +743,9 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            &messages[..5],
+            &messages[..4],
             [
                 "Setting up wine",
-                WINETRICKS_PREREQUISITES_MESSAGE,
                 "Installing the Direct3D shader compiler",
                 "Enabling the Vulkan renderer for video routes",
                 "Downloading Zwift",
@@ -794,7 +825,7 @@ mod tests {
         );
         // The prerequisites still ran, and the shim was still installed.
         assert!(
-            fixture.calls().contains("winetricks"),
+            fixture.calls().contains("cabextract"),
             "{}",
             fixture.calls()
         );
@@ -806,13 +837,13 @@ mod tests {
 
     #[test]
     fn failure_stops_before_downloading_and_sampler_terminates() {
-        let fixture = Fixture::new("winetricks");
-        fs::write(fixture.dir.join("fail-winetricks"), "").unwrap();
+        let fixture = Fixture::new("cabextract");
+        fs::write(fixture.dir.join("fail-cabextract"), "").unwrap();
         let (result, _) = fixture.run(Duration::from_secs(30));
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("winetricks d3dcompiler_47"));
+            .contains(&format!("cabextract {D3DCOMPILER_CAB}")));
         assert!(!fixture.game("ZwiftApp.exe").exists());
     }
 
@@ -838,33 +869,6 @@ mod tests {
     }
 
     #[test]
-    fn winetricks_progress_follows_verb_markers_across_chunks() {
-        let mut progress = WinetricksProgress::new();
-        // a marker split over two reads is held back until the line is complete
-        assert!(progress.feed(b"Executing w_do_call d3dcomp").is_empty());
-        assert_eq!(
-            progress.feed(b"iler_47\nExecuting w_do_call remove_mono\r\n"),
-            [(10, "Installing the Direct3D shader compiler")]
-        );
-        // verbs winetricks runs for its own setup, and unknown verbs, are not listed
-        assert!(progress
-            .feed(b"Executing w_do_call remove_mono\nExecuting w_do_call bogus\n")
-            .is_empty());
-        // an already reported verb is not repeated
-        assert!(progress
-            .feed(b"Executing w_do_call d3dcompiler_47\n")
-            .is_empty());
-        assert_eq!(
-            progress.feed(b"Executing w_do_call renderer=vulkan\n"),
-            [(20, "Enabling the Vulkan renderer for video routes")]
-        );
-        // unrelated output and a trailing partial line are ignored
-        assert!(progress
-            .feed(b"Executing winetricks\nExecuting w_do_call rend")
-            .is_empty());
-    }
-
-    #[test]
     fn cleanup_removes_artifacts_without_following_symlinks() {
         let fixture = Fixture::new("cleanup");
         let prefix = fixture.dir.join("prefix");
@@ -872,23 +876,24 @@ mod tests {
         fs::create_dir_all(&temp).unwrap();
         fs::write(temp.join("discard"), "temporary").unwrap();
         std::os::unix::fs::symlink(fixture.dir.join("hostdocs"), temp.join("link")).unwrap();
-        let cache = fixture.dir.join("cache");
-        fs::create_dir_all(cache.join("winetricks")).unwrap();
-        fs::write(cache.join("winetricks/download"), "").unwrap();
+        let common = fixture.dir.join("common");
+        let prerequisites = common.join("prerequisites");
+        fs::create_dir_all(&prerequisites).unwrap();
+        fs::write(prerequisites.join("partial"), "").unwrap();
         let staging = fixture.dir.join("common/download");
         fs::create_dir_all(&staging).unwrap();
         fs::write(staging.join("partial"), "").unwrap();
         // A prefix installed by an older launcher still holds the downloaded installer.
         fs::write(fixture.dir.join("common/ZwiftSetup.exe"), "").unwrap();
-        cleanup_artifacts(&prefix, &fixture.dir.join("common"), &staging, &cache).unwrap();
+        cleanup_artifacts(&prefix, &common, &staging).unwrap();
         assert_eq!(fs::read_dir(&temp).unwrap().count(), 0);
-        assert!(!cache.join("winetricks").exists());
+        assert!(!prerequisites.exists());
         assert!(!staging.exists());
         assert!(!fixture.dir.join("common/ZwiftSetup.exe").exists());
         assert!(fixture.dir.join("hostdocs/keep").exists());
         fs::remove_dir(&temp).unwrap();
         std::os::unix::fs::symlink(fixture.dir.join("hostdocs"), &temp).unwrap();
-        assert!(cleanup_artifacts(&prefix, &fixture.dir.join("common"), &staging, &cache).is_err());
+        assert!(cleanup_artifacts(&prefix, &common, &staging).is_err());
         assert!(fixture.dir.join("hostdocs/keep").exists());
     }
 
@@ -994,29 +999,46 @@ mod tests {
         fs::create_dir(&dir).unwrap();
 
         // An empty prefix has no prerequisite at all, so the probed one is reported.
-        assert_eq!(
-            missing_wine_prerequisite(&dir),
-            Some("drive_c/windows/system32/d3dcompiler_47.dll")
-        );
+        assert_eq!(missing_wine_prerequisite(&dir), Some(D3DCOMPILER_PROOF));
         assert!(!wine_prerequisites_installed(&dir));
 
-        let proof = "drive_c/windows/system32/d3dcompiler_47.dll";
-        let path = dir.join(proof);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, "").unwrap();
+        // Wine's own builtin DLL is not the proof: wineboot puts one there before
+        // the launcher ever runs, so it must not hide the missing prerequisite.
+        let dll = dir.join(D3DCOMPILER_DLL);
+        fs::create_dir_all(dll.parent().unwrap()).unwrap();
+        fs::write(&dll, "wine builtin").unwrap();
+        assert_eq!(missing_wine_prerequisite(&dir), Some(D3DCOMPILER_PROOF));
+        assert!(!wine_prerequisites_installed(&dir));
+
+        // The launcher's marker is the proof.
+        let proof = dir.join(D3DCOMPILER_PROOF);
+        fs::write(&proof, D3DCOMPILER_DLL).unwrap();
         assert!(wine_prerequisites_installed(&dir));
 
-        // The proof is load-bearing: without it the prefix counts as incomplete.
-        fs::remove_file(&path).unwrap();
-        assert_eq!(missing_wine_prerequisite(&dir), Some(proof));
+        // It is load-bearing: without it the prefix counts as incomplete again.
+        fs::remove_file(&proof).unwrap();
+        assert_eq!(missing_wine_prerequisite(&dir), Some(D3DCOMPILER_PROOF));
         assert!(!wine_prerequisites_installed(&dir));
 
-        // The registry-only Vulkan prerequisite has no proof path and is never probed.
-        assert!(WINETRICKS_PREREQUISITES
-            .iter()
-            .filter(|prerequisite| prerequisite.proof.is_none())
-            .map(|prerequisite| prerequisite.verb)
-            .eq(["renderer=vulkan"]));
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_prefix_with_the_compiler_marker_skips_the_reinstall() {
+        // The marker is the proof: with it present the prerequisite is left alone.
+        // A marker written with a sentinel must survive unchanged, which shows the
+        // step did not run and rewrite it.
+        let fixture = Fixture::new("compiler-done");
+        let proof = fixture.dir.join("prefix").join(D3DCOMPILER_PROOF);
+        fs::create_dir_all(proof.parent().unwrap()).unwrap();
+        fs::write(&proof, "sentinel").unwrap();
+        let (result, _) = fixture.run(Duration::from_secs(30));
+        result.unwrap();
+        assert!(
+            !fixture.calls().contains("cabextract"),
+            "{}",
+            fixture.calls()
+        );
+        assert_eq!(fs::read_to_string(&proof).unwrap(), "sentinel");
     }
 }

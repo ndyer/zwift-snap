@@ -143,19 +143,6 @@ live_install_dir() {
     assert_output --partial "no installed Zwift to capture"
 }
 
-@test "stage and capture carry the winetricks downloads" {
-    write_install "$(live_install_dir)" "1.5.0"
-    mkdir -p "${DL_CACHE_WINETRICKS_LIVE}"
-    printf 'installer\n' > "${DL_CACHE_WINETRICKS_LIVE}/dotnet48.exe"
-    run dl_cache_capture
-    assert_success
-    assert [ -f "${DL_CACHE_WINETRICKS}/dotnet48.exe" ]
-    rm -rf "${DL_CACHE_WINETRICKS_LIVE}"
-    run dl_cache_stage
-    assert_success
-    assert [ -f "${DL_CACHE_WINETRICKS_LIVE}/dotnet48.exe" ]
-}
-
 @test "clear removes the cache" {
     write_install "$(live_install_dir)" "1.5.0"
     run dl_cache_capture

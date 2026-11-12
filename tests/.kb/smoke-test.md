@@ -28,8 +28,8 @@ compared), `zwift.out`, the per-mode `mir-<mode>.log`, and the tail of
 
 Two logfiles show live progress while the suite runs:
 
-- `~/snap/zwift/common/zwift.log` — the launcher log: winetricks steps
-  (`Executing` lines), the Zwift download, the launcher's own state.
+- `~/snap/zwift/common/zwift.log` — the launcher log: the Wine prerequisite steps,
+  the Zwift download, the launcher's own state.
 - `~/snap/zwift/common/.wine/drive_c/users/<user>/AppData/Local/Zwift/Logs/Log.txt`
   — Zwift's own log, which only exists once the game has started.
 
