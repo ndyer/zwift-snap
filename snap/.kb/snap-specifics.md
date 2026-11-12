@@ -109,7 +109,11 @@ Wine rebuild rather than an incremental one. Confirm with
 `find parts/wine/build -name '*.o' | wc -l` before starting a build you expect to be
 quick. A full rebuild costs tens of minutes, not hours: `make -j22` on this
 22-core machine compiles roughly 1000 objects per minute, so a from-scratch build
-is done well inside an hour. Do not put off a Wine fix over the build time.
+is done well inside half an hour. Do not put off a Wine fix over the build time. With a
+warm ccache it is far quicker — a full rebuild of all ~8600 objects (build
+directory wiped, so everything recompiled) took about 2½ minutes of `make -j22`,
+~3 minutes for the whole build step. So a warm-ccache rebuild is a few minutes, not
+tens; only the first build after a `clean` pays the cold cost.
 
 ## Wine runtime
 
@@ -150,6 +154,12 @@ the savings.
 
 ## Confinement and layouts
 
+- **absolute RUNPATH**: some staged libraries find a private helper directory
+  through an absolute RUNPATH (`pulseaudio`, `libproxy`); inside the snap that path
+  points at the base snap, so the directory must be on `LD_LIBRARY_PATH`, which
+  `wine-env.sh` sets (`zwsnap-runtime/.kb/wine-env-bootstrap.md`). A missing
+  `libpxbackend-1.0.so` is this and not a missing stage-package: `libproxy1v5`
+  ships it, in `usr/lib/x86_64-linux-gnu/libproxy`.
 - **No `home` plug**: wine user folders live inside the wine prefix
   (`~/snap/zwift/common/.wine/drive_c/users/<user>/`); the launcher replaces links
   to the real home with private directories at every start.

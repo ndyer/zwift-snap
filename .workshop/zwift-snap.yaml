@@ -27,6 +27,23 @@ actions:
     pkgproxy.pkgproxyctl stats
   build: |
     cd /project
+    # The rust plugin installs the toolchain its build step needs in the part's
+    # pull step, into $HOME/.rustup: under sudo that is /root/.rustup, which the
+    # workshop recreates at every launch, while the part's pull state under
+    # /project/parts does persist. Once pulled, the pull step is skipped on later
+    # builds, so root can end up with no default toolchain and the zwsnap-gui
+    # build fails with "rustup could not choose a version of cargo to run,
+    # because one wasn't specified explicitly, and no default is configured".
+    # Make sure root has a default toolchain before snapcraft starts. This uses
+    # the rust SDK's rustup, which exists from launch, not the rustup snap, which
+    # snapcraft only installs once the build is under way; the path is spelled
+    # out because sudo drops the SDK's bin directory from PATH. A toolchain is
+    # only installed on the first build after a launch.
+    rustup_bin=/var/lib/workshop/sdk/rust/bin/rustup
+    if ! sudo "${rustup_bin}" default >/dev/null 2>&1; then
+      echo "No default rust toolchain for root; installing stable."
+      sudo "${rustup_bin}" default stable
+    fi
     sudo snapcraft pack --destructive-mode "$@"
   clean: |
     cd /project

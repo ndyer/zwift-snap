@@ -13,12 +13,18 @@ export PATH="${SNAP}/bin:${WINE_ROOT}/bin:${SNAP}/usr/bin:${SNAP}/usr/games:${PA
 # /usr/lib/x86_64-linux-gnu/pulseaudio, which does not exist inside the snap:
 # - pulseaudio: libpulse needs libpulsecommon, without it wine has no audio
 # - samba: ntlm_auth (needed by zwift/wine) and its libraries
+# - libproxy: gio's proxy module needs libproxy.so.1, which needs libpxbackend-1.0.so
+#   from the same private directory. Both are staged, but the loader looks for the
+#   backend through that absolute RUNPATH, which resolves to the base snap, so it
+#   does not find it: GIO then logs "libpxbackend-1.0.so: cannot open shared object
+#   file" and "Failed to load module: .../gio/modules/libgiolibproxy.so" on every start.
 libs=(
     "${WINE_ROOT}/lib"
     "${SNAP}/usr/lib/x86_64-linux-gnu"
     "${SNAP}/lib/x86_64-linux-gnu"
     "${SNAP}/usr/lib/x86_64-linux-gnu/pulseaudio"
     "${SNAP}/usr/lib/x86_64-linux-gnu/samba"
+    "${SNAP}/usr/lib/x86_64-linux-gnu/libproxy"
 )
 ld_path="$(IFS=:; echo "${libs[*]}")"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}${ld_path}"

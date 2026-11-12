@@ -24,6 +24,23 @@ piped `tail` hides the build's live progress (and makes it look hung), while
 for example by appending `| tee build.log` to the appropriate command. Keep
 `pipefail` in mind when chaining commands afterwards.
 
+## Root's Rust toolchain
+
+`build` makes sure root has a default Rust toolchain before snapcraft runs. The rust
+plugin installs the toolchain its build step needs in the part's *pull* step, into
+`$HOME/.rustup` — under `sudo` that is `/root/.rustup`, which the workshop recreates at
+every launch, while the part's pull state under `/project/parts` does persist. Since
+craft-parts then skips the pull, root can be left without a toolchain and the
+`zwsnap-gui` build fails with `rustup could not choose a version of cargo to run,
+because one wasn't specified explicitly, and no default is configured`.
+
+The guard in the action uses the rust SDK's rustup (which exists from launch) rather
+than the rustup snap (which snapcraft only installs while the build is running), and
+installs a toolchain only on the first build after a launch. Any other snapcraft
+invocation — the `snapcraft prime` of the fast iteration loop below, or a manual
+`snapcraft pack` — needs that toolchain too and can hit the same error; run
+`sudo /var/lib/workshop/sdk/rust/bin/rustup default stable` first in that case.
+
 ## Fast iteration with snap try
 
 For launcher changes, avoid a full `build` on each edit. `snap try` mounts an
