@@ -42,6 +42,5 @@ Wine and shared environment, with fake login servers used by the pairing test.
 ## Command line
 
 Run the binary without arguments to launch, `-- GAME_ARGUMENTS...` to forward
-game arguments, `--preview` for the simulated UI, or `set-display-mode PREFS_FILE`
-to update an existing preferences file. Normal launch requires the snap's
+game arguments, or `--preview` for the simulated UI. Normal launch requires the snap's
 environment (`SNAP`, `SNAP_USER_COMMON` and `wine-env.sh`).

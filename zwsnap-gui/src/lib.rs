@@ -16,6 +16,7 @@ pub mod oauth;
 pub mod orchestration;
 pub mod process;
 pub mod runtime;
+pub mod settings;
 pub mod sync;
 pub mod update;
 pub mod version;

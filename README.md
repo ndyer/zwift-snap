@@ -16,7 +16,7 @@ The game starts only after login succeeds. The first run installs wine prerequis
 without installer prompts, which takes several minutes. Later runs check for a newer Zwift
 version and update it when needed. If the check or update fails you can still launch the
 installed version after logging in. The output of all steps is in `$SNAP_USER_COMMON/zwift.log`;
-the error dialogs have a `Show log` button.
+the window's `Settings` dialog has a `Show log` button that shows the same output in-app.
 
 Login uses OAuth with PKCE and validates the returned state. The token is saved with owner-only
 permissions in `~/snap/zwift/common/pairing-token.json` and passed to the game at launch time.
@@ -61,29 +61,46 @@ If the installation fails, the error dialog offers `Retry`.
 Sound goes through the `audio-playback` interface (PulseAudio or PipeWire on the host). To
 debug audio run `WINEDEBUG=+pulse,+mmdevapi zwift`.
 
-## Environment variables
+## Settings
 
-- `ZWIFT_DISPLAY_MODE` — shared launcher/game display mode, either `fullscreen` (default) or a resolution like `1920x1080`. A custom resolution implies windowed mode (fullscreen disabled).
-- `ZWIFT_GRAPHICS_PROFILE` — Zwift graphics profile to use: `auto` (default), `basic`, `medium`, `high`, `ultra` or `default`.
-- `WINE_DISABLE_EGL`
-- `ZWIFT_NO_GUI` (set to `1` for no dialogs, only terminal output)
-- `ZWIFT_BLUETOOTH_DEBUG` (set to `1` to enable Wine Bluetooth traces for hardware testing)
-- `ZWIFT_BT_INTERVAL` (the BLE connection interval to request in 1.25 ms units, default `12` = 15 ms; only applies with `bluetooth-control` connected)
-- `ZWIFT_BT_TIMEOUT` (the BLE supervision timeout in 10 ms units, default `200` = 2 s)
-- `ZWIFT_BT_RESEND_MS` (how long the interval override waits before re-applying, in ms, default `4000`)
-- `VERBOSITY`
+The launcher's user-facing options live in a settings file at
+`~/snap/zwift/common/settings.json`. On first run the launcher copies the
+read-only default from the snap (`$SNAP/etc/zwift/settings.json`) into place; edit
+the file directly or use the **Settings** button in the launcher window. The
+available keys are:
+
+- `display_mode` — shared launcher/game display mode, either `fullscreen` (default) or a resolution like `1920x1080`. A custom resolution implies windowed mode (fullscreen disabled).
+- `graphics_profile` — Zwift graphics profile to use: `auto` (default), `basic`, `medium`, `high`, `ultra` or `default`.
+- `disable_egl` — set to `true` to disable EGL in Wine.
+- `bluetooth_debug` — set to `true` to enable Wine Bluetooth traces for hardware testing.
+- `verbosity` — logging verbosity, `0` (quiet) to `3` (debug); default `1`.
+
+The Settings dialog also reports the status of the Zwift account token and the
+`bluez` plug connection, can run the graphics probe, and offers separate actions to
+reset the Wine prefix and to delete the downloaded game data.
 
 Display preferences are added when missing, including on a fresh install. If an
 existing preferences file cannot be updated, the launcher reports an error instead
 of starting with the wrong display mode.
 
+## Environment variables
+
+These remain available for debugging and for callers that cannot edit the settings
+file; prefer the settings file for normal use.
+
+- `ZWIFT_NO_GUI` (set to `1` for no dialogs, only terminal output)
+- `ZWIFT_BT_INTERVAL` (the BLE connection interval to request in 1.25 ms units, default `12` = 15 ms; only applies with `bluetooth-control` connected)
+- `ZWIFT_BT_TIMEOUT` (the BLE supervision timeout in 10 ms units, default `200` = 2 s)
+- `ZWIFT_BT_RESEND_MS` (how long the interval override waits before re-applying, in ms, default `4000`)
+
 ## Graphics profile
 
 Zwift picks its graphics profile from an internal GPU table that rates many cards below
-what they can render. The launcher can override that. With `ZWIFT_GRAPHICS_PROFILE=auto`
-(the default) it measures the GPU at launch and writes the matching profile; a fixed value
-(`basic`, `medium`, `high`, `ultra`) skips the measurement, and `default` leaves Zwift's own
-files alone so its GPU table decides again.
+what they can render. The launcher can override that. With `graphics_profile` set to
+`auto` (the default) it measures the GPU at launch and writes the matching profile; a
+fixed value (`basic`, `medium`, `high`, `ultra`) skips the measurement, and `default`
+leaves Zwift's own files alone so its GPU table decides again.
+
 
 The profiles are the game's own `data/configs/*.txt` files. Before overwriting them the
 launcher saves a copy of each next to the prefix in `~/snap/zwift/common/graphics/` and
@@ -93,7 +110,8 @@ refreshed. The choice is logged as `Graphics profile: ...` in `zwift.log`; if th
 cannot run (no GPU access, for example) the launcher logs a warning and leaves the files to
 the game.
 
-To test a real Bluetooth device, run `ZWIFT_BLUETOOTH_DEBUG=1 zwift`. This enables Wine's
+To test a real Bluetooth device, set `bluetooth_debug` to `true` in the settings
+file (or use the Settings dialog) and launch Zwift. This enables Wine's
 `+bluetooth` and `+winebth` channels and writes the runtime trace to
 `~/snap/zwift/common/zwift.log` (as well as the terminal). Bluetooth diagnostics are off by
 default; the log is rotated to `zwift.log.1` at the start of the next run.

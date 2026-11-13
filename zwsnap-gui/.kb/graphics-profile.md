@@ -12,8 +12,9 @@ IMPORTANT: Read the `.kb/agents.md` file.
 ## Graphics profile
 
 The launcher can override Zwift's GPU table, which rates many cards below what they can
-render. `ZWIFT_GRAPHICS_PROFILE` (parsed in `application.rs`, applied in
-`graphics.rs`) selects `auto` (default), `basic`, `medium`, `high`, `ultra` or `default`:
+render. The `graphics_profile` setting in `settings.json` (loaded in `application.rs`,
+applied in `graphics.rs`) selects `auto` (default), `basic`, `medium`, `high`, `ultra` or
+`default`:
 
 - `auto` measures the GPU at launch (`gpu_test.rs`, a port of the benchmark from
   [bpauli/zwift-bootstrap](https://github.com/bpauli/zwift-bootstrap), see the module doc for

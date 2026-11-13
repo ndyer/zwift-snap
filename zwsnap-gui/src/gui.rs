@@ -13,8 +13,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 mod login_panel;
+mod settings;
 
 use login_panel::LoginPanel;
+use settings::SettingsDialog;
+
+pub use settings::SettingsContext;
 
 /// Events are sent to the GTK main thread, never directly to GTK widgets.
 pub enum Event {
@@ -214,16 +218,24 @@ impl LauncherBackend for PreviewBackend {
 
 /// Preview the interface with simulated events. Does not launch Wine.
 pub fn preview(mode: DisplayMode) -> io::Result<()> {
-    run_application(mode, Cancellation::default(), true, None, |mut ui| {
-        let cancellation = ui.cancellation();
-        let mut backend = PreviewBackend {
-            ui: ui.clone(),
-            installed: false,
-            failed_once: false,
-        };
-        orchestration::run_cancellable(&mut backend, &mut ui, &cancellation)
-            .map_err(|error| error.to_string())
-    })
+    let settings = SettingsContext::preview();
+    run_application(
+        mode,
+        Cancellation::default(),
+        true,
+        None,
+        settings,
+        |mut ui| {
+            let cancellation = ui.cancellation();
+            let mut backend = PreviewBackend {
+                ui: ui.clone(),
+                installed: false,
+                failed_once: false,
+            };
+            orchestration::run_cancellable(&mut backend, &mut ui, &cancellation)
+                .map_err(|error| error.to_string())
+        },
+    )
 }
 
 /// Run the real backend on a worker while GTK owns the main thread.
@@ -231,9 +243,10 @@ pub fn launch(
     mode: DisplayMode,
     cancellation: Cancellation,
     logger: Arc<Logger>,
+    settings: SettingsContext,
     worker: impl FnOnce(WorkerUi) -> Result<(), String> + Send + 'static,
 ) -> io::Result<()> {
-    run_application(mode, cancellation, false, Some(logger), worker)
+    run_application(mode, cancellation, false, Some(logger), settings, worker)
 }
 
 type Completion = std::rc::Rc<std::cell::RefCell<Option<Result<(), String>>>>;
@@ -281,6 +294,7 @@ fn run_application(
     cancellation: Cancellation,
     preview: bool,
     logger: Option<Arc<Logger>>,
+    settings: SettingsContext,
     worker: impl FnOnce(WorkerUi) -> Result<(), String> + Send + 'static,
 ) -> io::Result<()> {
     gtk::init().map_err(|error| io::Error::other(format!("Unable to initialize GTK: {error}")))?;
@@ -307,10 +321,13 @@ fn run_application(
             app,
             &mode,
             receiver,
-            cancellation.clone(),
-            preview,
-            completion.clone(),
-            logger.clone(),
+            UiContext {
+                cancellation: cancellation.clone(),
+                preview,
+                completion: completion.clone(),
+                logger: logger.clone(),
+                settings: settings.clone(),
+            },
         );
         window.present();
 
@@ -332,15 +349,30 @@ fn run_application(
         .map_err(io::Error::other)
 }
 
-fn build_window(
-    app: &gtk::Application,
-    mode: &DisplayMode,
-    events: Receiver<Event>,
+/// Runtime collaborators handed to the launcher window: everything it needs
+/// beyond the application object and the display mode. Bundled into a struct to
+/// keep [`build_window`]'s signature manageable.
+struct UiContext {
     cancellation: Cancellation,
     preview: bool,
     completion: Completion,
     logger: Option<Arc<Logger>>,
+    settings: SettingsContext,
+}
+
+fn build_window(
+    app: &gtk::Application,
+    mode: &DisplayMode,
+    events: Receiver<Event>,
+    context: UiContext,
 ) -> gtk::ApplicationWindow {
+    let UiContext {
+        cancellation,
+        preview,
+        completion,
+        logger,
+        settings,
+    } = context;
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title(if preview {
@@ -360,6 +392,10 @@ fn build_window(
 
     let panel = std::rc::Rc::new(LoginPanel::new(cancellation.clone(), preview, logger));
 
+    // The Settings dialog is built eagerly, while hidden, so its log view exists
+    // before the Logger sinks register on the worker thread.
+    let dialog = SettingsDialog::new(&window, settings);
+
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.set_margin_top(24);
     content.set_margin_bottom(24);
@@ -373,41 +409,28 @@ fn build_window(
     let detail = gtk::Label::new(None);
     detail.set_wrap(true);
     detail.set_xalign(0.0);
-    let log_toggle = gtk::ToggleButton::with_label("Show log");
-    let log = gtk::TextView::new();
-    log.set_editable(false);
-    log.set_monospace(true);
-    log.set_wrap_mode(gtk::WrapMode::WordChar);
-    let scroll = gtk::ScrolledWindow::builder()
-        .min_content_height(180)
-        .child(&log)
-        .visible(false)
-        .build();
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let retry = gtk::Button::with_label("Retry");
     let quit = gtk::Button::with_label("Quit");
     buttons.append(&retry);
     buttons.append(&quit);
     buttons.set_visible(false);
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let open_settings = gtk::Button::with_label("Settings");
+    open_settings.set_halign(gtk::Align::End);
+    open_settings.set_hexpand(true);
+    actions.append(&open_settings);
     content.append(&title);
     content.append(&progress);
     content.append(&detail);
-    content.append(&log_toggle);
-    content.append(&scroll);
     content.append(&buttons);
+    content.append(&actions);
     content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     content.append(panel.widget());
     window.set_child(Some(&content));
 
-    let scroll_ref = scroll.clone();
-    log_toggle.connect_toggled(move |button| {
-        scroll_ref.set_visible(button.is_active());
-        button.set_label(if button.is_active() {
-            "Hide log"
-        } else {
-            "Show log"
-        });
-    });
+    let dialog_for_button = dialog.clone();
+    open_settings.connect_clicked(move |_| dialog_for_button.present());
     let pending = std::rc::Rc::new(std::cell::RefCell::new(None::<Sender<bool>>));
     for (button, decision) in [(&retry, true), (&quit, false)] {
         let pending = pending.clone();
@@ -464,13 +487,7 @@ fn build_window(
                     progress.set_fraction(f64::from(percent.min(99)) / 100.0);
                 }
                 Event::Log(text) => {
-                    let buffer = log.buffer();
-                    buffer.insert(&mut buffer.end_iter(), &text);
-                    if buffer.char_count() > 200_000 {
-                        let mut start = buffer.start_iter();
-                        let mut cutoff = buffer.iter_at_offset(buffer.char_count() - 200_000);
-                        buffer.delete(&mut start, &mut cutoff);
-                    }
+                    dialog.append_log(&text);
                 }
                 Event::Failure {
                     kind,

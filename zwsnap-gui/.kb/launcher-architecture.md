@@ -28,10 +28,14 @@ description.
 
 ## Window, display mode and login panel
 
-The GTK window and game share `ZWIFT_DISPLAY_MODE`: fullscreen by default, or
-`WIDTHxHEIGHT` windowed. The window hides after the first game window appears;
-the launcher stays alive until the game exits. Errors retain the in-app log view.
-Installation failures offer Retry; update failures offer Launch anyway.
+The GTK window and game share the `display_mode` setting (`settings.json`,
+default fullscreen, or `WIDTHxHEIGHT` windowed). The window hides after the
+first game window appears; the launcher stays alive until the game exits. Errors
+retain the in-app log view (the Settings dialog's **Show log** toggle).
+Installation failures offer Retry; update failures
+offer Launch anyway. A **Settings** button in the window opens a dialog that edits
+the settings file, shows token/`bluez`/GPU status and offers the maintenance
+actions (see `gui/settings.rs`).
 A WebKitGTK 6.0 panel is always shown in the bottom section of the window: it starts
 on Zwift's launcher embed page and, once installation/update finishes and the login
 gate opens, navigates automatically to the OAuth sign-in page (PKCE and state

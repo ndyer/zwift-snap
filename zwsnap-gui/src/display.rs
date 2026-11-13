@@ -1,8 +1,8 @@
 //! Shared launcher and game display mode.
 //!
-//! `ZWIFT_DISPLAY_MODE` is `fullscreen` (default) or `WIDTHxHEIGHT`. Zwift's own
-//! `prefs.xml` is the single source of truth for the window size, so only its
-//! `<CONFIG>` section is edited and everything else is preserved.
+//! The mode is `fullscreen` (default) or `WIDTHxHEIGHT`, read from the settings
+//! file. Zwift's own `prefs.xml` is the single source of truth for the window
+//! size, so only its `<CONFIG>` section is edited and everything else is preserved.
 
 use std::fmt;
 use std::fs;
@@ -54,14 +54,6 @@ impl DisplayMode {
                 })
             })
             .ok_or_else(|| DisplayError::InvalidMode(s.to_string()))
-    }
-
-    /// Mode from `ZWIFT_DISPLAY_MODE`, empty counts as unset.
-    pub fn from_env() -> Result<Self, DisplayError> {
-        match std::env::var("ZWIFT_DISPLAY_MODE") {
-            Ok(v) if !v.is_empty() => Self::parse(&v),
-            _ => Ok(DisplayMode::Fullscreen),
-        }
     }
 }
 

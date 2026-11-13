@@ -11,6 +11,7 @@ use crate::launch::LaunchConfig;
 use crate::logging::Logger;
 use crate::orchestration::{self, Failure, LauncherUi};
 use crate::runtime::Runtime;
+use crate::settings::Settings;
 use crate::wine_tools::Tools;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal};
@@ -29,6 +30,7 @@ pub struct Config {
     pub no_gui: bool,
     pub skip_login: bool,
     pub disable_egl: bool,
+    pub bluetooth_debug: bool,
     pub verbosity: u8,
     pub color: bool,
     pub poll_interval: Duration,
@@ -98,26 +100,9 @@ impl Config {
                 ));
             }
         }
-        let display = match value("ZWIFT_DISPLAY_MODE") {
-            None => DisplayMode::Fullscreen,
-            Some(mode) => DisplayMode::parse(mode.to_str().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "ZWIFT_DISPLAY_MODE is not UTF-8",
-                )
-            })?)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
-        };
-        let graphics = match value("ZWIFT_GRAPHICS_PROFILE") {
-            None => GraphicsSetting::Auto,
-            Some(profile) => GraphicsSetting::parse(profile.to_str().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "ZWIFT_GRAPHICS_PROFILE is not UTF-8",
-                )
-            })?)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
-        };
+        // User-facing settings live in `$SNAP_USER_COMMON/settings.json`, seeded
+        // from the shipped template on first run. This also creates `common`.
+        let settings = Settings::load(&crate::settings::ensure_initialized(&snap, &common)?);
         let sample_interval = Duration::from_secs(number("ZWIFT_PROGRESS_INTERVAL", 5)?);
         if sample_interval.is_zero() {
             return Err(io::Error::new(
@@ -131,13 +116,13 @@ impl Config {
             prefix,
             log,
             cache,
-            display,
-            graphics,
+            display: settings.display,
+            graphics: settings.graphics,
             no_gui: flag("ZWIFT_NO_GUI", 0)?,
             skip_login: false,
-            disable_egl: flag("WINE_DISABLE_EGL", 0)?,
-            verbosity: u8::try_from(number("VERBOSITY", 1)?)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
+            disable_egl: settings.disable_egl,
+            bluetooth_debug: settings.bluetooth_debug,
+            verbosity: settings.verbosity,
             color: flag("COLORED_OUTPUT", 0)?,
             poll_interval: Duration::from_secs(number("ZWIFT_POLL_INTERVAL", 5)?),
             cdn_base: match value("ZWIFT_CDN_BASE") {
@@ -163,7 +148,7 @@ impl Config {
         if std::env::var_os("XDG_CACHE_HOME").is_none_or(|value| value.is_empty()) {
             std::env::set_var("XDG_CACHE_HOME", self.common.join(".cache"));
         }
-        if std::env::var("ZWIFT_BLUETOOTH_DEBUG").as_deref() == Ok("1") {
+        if self.bluetooth_debug {
             let mut debug = std::env::var_os("WINEDEBUG").unwrap_or_default();
             if !debug.is_empty() {
                 debug.push(",");
@@ -320,10 +305,23 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
         match gtk::init() {
             Ok(()) => {
                 let panel_logger = logger.clone();
+                let settings = crate::gui::SettingsContext {
+                    path: config.common.join(crate::settings::FILE_NAME),
+                    prefix: config.prefix.clone(),
+                    token_file: config.common.join("pairing-token.json"),
+                    settings: Settings {
+                        display: config.display.clone(),
+                        graphics: config.graphics,
+                        disable_egl: config.disable_egl,
+                        bluetooth_debug: config.bluetooth_debug,
+                        verbosity: config.verbosity,
+                    },
+                };
                 return crate::gui::launch(
                     config.display.clone(),
                     logger.cancellation().clone(),
                     panel_logger,
+                    settings,
                     move |mut ui| {
                         let log_ui = ui.clone();
                         logger.add_sink(move |kind, message| {
@@ -377,6 +375,7 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graphics::Profile;
 
     fn config(values: &[(&str, &str)]) -> io::Result<Config> {
         Config::read(|name| {
@@ -387,12 +386,24 @@ mod tests {
         })
     }
 
+    fn tmp(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("zwsnap-gui-config-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[test]
     fn defaults_match_the_shell_launcher() {
         let config = config(&[("SNAP", "/snap/zwift/x1"), ("SNAP_USER_COMMON", "/data")]).unwrap();
         assert_eq!(config.prefix, PathBuf::from("/data/.wine"));
         assert_eq!(config.log, PathBuf::from("/data/zwift.log"));
         assert_eq!(config.display, DisplayMode::Fullscreen);
+        assert_eq!(config.graphics, GraphicsSetting::Auto);
+        assert!(!config.disable_egl);
+        assert!(!config.bluetooth_debug);
+        assert_eq!(config.verbosity, 1);
         assert!(!config.no_gui);
         assert_eq!(config.cdn_base, cdn::DEFAULT_BASE);
         assert_eq!(config.jobs, 8);
@@ -400,12 +411,19 @@ mod tests {
     }
 
     #[test]
-    fn overrides_are_validated_without_mutating_the_environment() {
+    fn settings_file_supplies_user_facing_values() {
+        let common = tmp("settings");
+        std::fs::write(
+            common.join("settings.json"),
+            r#"{"display_mode":"800x600","graphics_profile":"ultra",
+                "disable_egl":true,"bluetooth_debug":true,"verbosity":3}"#,
+        )
+        .unwrap();
+        let common = common.to_str().unwrap();
         let config = config(&[
             ("SNAP", "/snap/zwift/x1"),
-            ("SNAP_USER_COMMON", "/data"),
+            ("SNAP_USER_COMMON", common),
             ("WINEPREFIX", "/prefix"),
-            ("ZWIFT_DISPLAY_MODE", "800x600"),
             ("ZWIFT_NO_GUI", "1"),
             ("ZWIFT_POLL_INTERVAL", "0"),
             ("ZWIFT_CDN_BASE", "file:///cdn"),
@@ -420,19 +438,26 @@ mod tests {
                 height: 600
             }
         );
+        assert_eq!(config.graphics, GraphicsSetting::Fixed(Profile::Ultra));
+        assert!(config.disable_egl);
+        assert!(config.bluetooth_debug);
+        assert_eq!(config.verbosity, 3);
         assert!(config.no_gui);
         assert_eq!(config.poll_interval, Duration::ZERO);
         assert_eq!(config.cdn_base, "file:///cdn");
         assert_eq!(config.jobs, 3);
+    }
+
+    #[test]
+    fn invalid_environment_values_are_rejected() {
         for (name, value) in [
             ("WINEPREFIX", "relative"),
-            ("ZWIFT_DISPLAY_MODE", "invalid"),
             ("ZWIFT_PROGRESS_INTERVAL", "0"),
             ("ZWIFT_DOWNLOAD_JOBS", "-1"),
             ("ZWIFT_NO_GUI", "2"),
         ] {
             assert!(
-                super::tests::config(&[
+                config(&[
                     ("SNAP", "/snap/zwift/x1"),
                     ("SNAP_USER_COMMON", "/data"),
                     (name, value),
@@ -441,6 +466,6 @@ mod tests {
                 "{name}={value}"
             );
         }
-        assert!(super::tests::config(&[]).is_err());
+        assert!(config(&[]).is_err());
     }
 }

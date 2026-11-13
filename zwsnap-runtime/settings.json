@@ -1,0 +1,7 @@
+{
+  "display_mode": "fullscreen",
+  "graphics_profile": "auto",
+  "disable_egl": false,
+  "bluetooth_debug": false,
+  "verbosity": 1
+}

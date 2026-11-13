@@ -481,6 +481,7 @@ parts:
     organize:
       "*.sh": bin/
       pulse-client.conf: etc/zwift/pulse-client.conf
+      settings.json: etc/zwift/settings.json
 
   version-generator:
     plugin: nil

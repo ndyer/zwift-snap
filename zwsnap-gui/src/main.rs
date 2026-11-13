@@ -1,7 +1,9 @@
-use std::path::PathBuf;
 use std::process::ExitCode;
 
-use zwsnap_gui::display::{configure_file, DisplayMode};
+#[cfg(feature = "gtk-ui")]
+use std::path::PathBuf;
+#[cfg(feature = "gtk-ui")]
+use zwsnap_gui::settings::Settings;
 
 fn main() -> ExitCode {
     // The launcher's own switches come before the optional "--" separator, everything
@@ -14,52 +16,41 @@ fn main() -> ExitCode {
         .collect();
     match args.as_slice() {
         #[cfg(feature = "gtk-ui")]
-        [cmd] if cmd == "--preview" => {
-            let mode = match DisplayMode::from_env() {
-                Ok(mode) => mode,
-                Err(error) => {
-                    eprintln!("{error}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            match zwsnap_gui::gui::preview(mode) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => {
-                    eprintln!("{error}");
-                    ExitCode::FAILURE
-                }
+        [cmd] if cmd == "--preview" => match zwsnap_gui::gui::preview(preview_mode()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
             }
-        }
-        [cmd, prefs] if cmd == "set-display-mode" => {
-            let result = DisplayMode::from_env()
-                .map_err(|e| e.to_string())
-                .and_then(|mode| {
-                    configure_file(&PathBuf::from(prefs), &mode)
-                        .map(|_| mode)
-                        .map_err(|e| e.to_string())
-                });
-            match result {
-                Ok(mode) => {
-                    println!("Set Zwift display mode to {mode}");
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("{e}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
+        },
         [] => launch(Vec::new(), skip_login),
         [cmd, rest @ ..] if cmd == "--" => launch(rest.to_vec(), skip_login),
         _ => {
-            eprintln!(
-                "usage: zwsnap-gui set-display-mode PREFS_FILE (mode from ZWIFT_DISPLAY_MODE)"
-            );
+            eprintln!("usage: zwsnap-gui [--skip-login] [-- GAME_ARGUMENTS...]");
             #[cfg(feature = "gtk-ui")]
             eprintln!("       zwsnap-gui --preview");
-            eprintln!("       zwsnap-gui [--skip-login] [-- GAME_ARGUMENTS...]");
             ExitCode::from(2)
         }
+    }
+}
+
+/// The display mode for `--preview`, read from the settings file when it can be
+/// located, otherwise the default.
+#[cfg(feature = "gtk-ui")]
+fn preview_mode() -> zwsnap_gui::display::DisplayMode {
+    match (
+        std::env::var_os("SNAP"),
+        std::env::var_os("SNAP_USER_COMMON"),
+    ) {
+        (Some(snap), Some(common)) => {
+            let snap = PathBuf::from(snap);
+            let common = PathBuf::from(common);
+            match zwsnap_gui::settings::ensure_initialized(&snap, &common) {
+                Ok(path) => Settings::load(&path).display,
+                Err(_) => Settings::default().display,
+            }
+        }
+        _ => Settings::default().display,
     }
 }
 

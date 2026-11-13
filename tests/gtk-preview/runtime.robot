@@ -9,6 +9,8 @@ Library          yarf_frames.py
 Real Lifecycle Shows Output And Waits At The Login Gate
     Match Text    Log in to Zwift    45
     Match Text    Complete the login below    20
+    Click Target    Settings
+    Match Text    Show log    20
     Click Target    Show log
     Match Text    already installed    20
 

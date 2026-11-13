@@ -12,7 +12,7 @@ ${DIALOG_TIMEOUT}       60
 *** Test Cases ***
 Launcher shows its progress window
     [Documentation]    Require the GTK launcher, not merely a successful game start.
-    Match Text    Show log    ${DIALOG_TIMEOUT}
+    Match Text    Settings    ${DIALOG_TIMEOUT}
 
 Zwift install and start completes
     [Documentation]    Require Zwift's sign-up screen; do not enter credentials.

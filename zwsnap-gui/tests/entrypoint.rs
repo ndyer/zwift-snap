@@ -62,6 +62,9 @@ impl Fixture {
             .join("common/.wine/drive_c/users/tester/AppData/Local/Zwift");
         fs::create_dir_all(&data).unwrap();
         fs::write(data.join("prefs.xml"), "<ZWIFT><CONFIG/></ZWIFT>").unwrap();
+        // The user's settings file, seeded as the snap would on first run. Tests
+        // that need another display mode or graphics profile overwrite it.
+        fixture.settings(r#"{"display_mode":"800x600"}"#);
         fixture.script("winepath", "printf 'C:\\\\Zwift\\n'");
         fixture.script("wineserver", "echo \"$1\" >> \"$TEST_ROOT/cleanup\"");
         fixture.script(
@@ -123,6 +126,11 @@ esac"#,
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    /// Writes `$SNAP_USER_COMMON/settings.json`, replacing whatever is there.
+    fn settings(&self, json: &str) {
+        fs::write(self.root.join("common/settings.json"), json).unwrap();
+    }
+
     fn command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_zwsnap-gui"));
         command
@@ -135,7 +143,6 @@ esac"#,
             .env("SNAP_USER_COMMON", self.root.join("common"))
             .env("TEST_ROOT", &self.root)
             .env("ZWIFT_NO_GUI", "1")
-            .env("ZWIFT_DISPLAY_MODE", "800x600")
             .env("ZWIFT_POLL_INTERVAL", "0")
             .env(
                 "ZWIFT_CDN_BASE",
@@ -222,13 +229,23 @@ fn terminal_entrypoint_launches_logs_configures_and_cleans_up() {
 }
 
 #[test]
-fn invalid_configuration_never_starts_wine() {
+fn invalid_settings_are_warned_about_and_ignored() {
     let fixture = Fixture::new();
-    let result = output(fixture.command().env("ZWIFT_DISPLAY_MODE", "oops"));
-    assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("Invalid display mode"));
-    assert!(!fixture.root.join("commands").exists());
-    assert!(!fixture.root.join("cleanup").exists());
+    fixture.settings(r#"{"display_mode":"oops","graphics_profile":"fastest"}"#);
+    let result = output(&mut fixture.command());
+    // A bad settings file must never stop the launch: each value falls back to its
+    // default with a warning, and the launcher still runs.
+    assert!(result.status.success(), "{result:?}");
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("ignoring invalid display_mode"), "{stderr}");
+    assert!(
+        stderr.contains("ignoring invalid graphics_profile"),
+        "{stderr}"
+    );
+    // The fallback display mode is the fullscreen default.
+    assert!(fixture
+        .read("common/.wine/drive_c/users/tester/AppData/Local/Zwift/prefs.xml")
+        .contains("<FULLSCREEN>1</FULLSCREEN>"));
 }
 
 #[test]
@@ -295,7 +312,8 @@ fn unavailable_display_falls_back_to_terminal() {
 fn a_forced_graphics_profile_is_written_into_every_profile_file() {
     let fixture = Fixture::new();
     fixture.write_graphics_profiles();
-    let result = output(fixture.command().env("ZWIFT_GRAPHICS_PROFILE", "ultra"));
+    fixture.settings(r#"{"display_mode":"800x600","graphics_profile":"ultra"}"#);
+    let result = output(&mut fixture.command());
     assert!(result.status.success(), "{result:?}");
     // All four files hold the forced profile's content, so it does not matter
     // which one the game's GPU table picks.
@@ -310,19 +328,21 @@ fn a_forced_graphics_profile_is_written_into_every_profile_file() {
     assert_eq!(fixture.read("common/graphics/applied"), "ultra\n");
     assert!(fixture
         .read("common/zwift.log")
-        .contains("Graphics profile: ultra (set with ZWIFT_GRAPHICS_PROFILE)"));
+        .contains("Graphics profile: ultra (set in settings)"));
 }
 
 #[test]
 fn the_default_graphics_setting_restores_the_game_files() {
     let fixture = Fixture::new();
     fixture.write_graphics_profiles();
-    let result = output(fixture.command().env("ZWIFT_GRAPHICS_PROFILE", "high"));
+    fixture.settings(r#"{"display_mode":"800x600","graphics_profile":"high"}"#);
+    let result = output(&mut fixture.command());
     assert!(result.status.success(), "{result:?}");
     assert_eq!(fixture.graphics_contents(), ["high"; 4]);
     // The fake wine reports ZwiftApp.exe only once per fixture.
     fs::remove_file(fixture.root.join("seen")).unwrap();
-    let result = output(fixture.command().env("ZWIFT_GRAPHICS_PROFILE", "default"));
+    fixture.settings(r#"{"display_mode":"800x600","graphics_profile":"default"}"#);
+    let result = output(&mut fixture.command());
     assert!(result.status.success(), "{result:?}");
     assert_eq!(
         fixture.graphics_contents(),
@@ -332,14 +352,4 @@ fn the_default_graphics_setting_restores_the_game_files() {
     assert!(fixture
         .read("common/zwift.log")
         .contains("Graphics profile: game default (left to the game)"));
-}
-
-#[test]
-fn invalid_graphics_profile_never_starts_wine() {
-    let fixture = Fixture::new();
-    let result = output(fixture.command().env("ZWIFT_GRAPHICS_PROFILE", "fastest"));
-    assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("Unknown graphics profile"));
-    assert!(!fixture.root.join("commands").exists());
-    assert!(!fixture.root.join("cleanup").exists());
 }

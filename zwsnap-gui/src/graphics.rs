@@ -12,9 +12,9 @@
 //! launcher's own sync of a new game version - is recognised and that file's
 //! original is refreshed.
 //!
-//! `ZWIFT_GRAPHICS_PROFILE` selects the behaviour: `auto` (default) measures,
-//! `basic`/`medium`/`high`/`ultra` force a profile, and `default` restores the
-//! game's own files so the game's GPU table decides again.
+//! `graphics_profile` in the settings file selects the behaviour: `auto`
+//! (default) measures, `basic`/`medium`/`high`/`ultra` force a profile, and
+//! `default` restores the game's own files so the game's GPU table decides again.
 
 use crate::gpu_test::{self, GpuTest};
 use std::collections::BTreeMap;
@@ -87,7 +87,7 @@ impl fmt::Display for Profile {
     }
 }
 
-/// What `ZWIFT_GRAPHICS_PROFILE` asked for.
+/// What `graphics_profile` in the settings file asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Setting {
     /// Measure at every launch.
@@ -116,14 +116,6 @@ impl Setting {
             _ => Profile::parse(word)
                 .map(Setting::Fixed)
                 .ok_or_else(|| SettingError(format!("Unknown graphics profile: {word}. Use auto, basic, medium, high, ultra or default."))),
-        }
-    }
-
-    /// Setting from `ZWIFT_GRAPHICS_PROFILE`; empty counts as unset.
-    pub fn from_env() -> Result<Setting, SettingError> {
-        match std::env::var("ZWIFT_GRAPHICS_PROFILE") {
-            Ok(value) if !value.is_empty() => Setting::parse(&value),
-            _ => Ok(Setting::Auto),
         }
     }
 }
@@ -165,7 +157,7 @@ impl fmt::Display for Choice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Choice::Fixed(profile) => {
-                write!(f, "{profile} (set with ZWIFT_GRAPHICS_PROFILE)")
+                write!(f, "{profile} (set in settings)")
             }
             Choice::Measured { profile, test } => write!(
                 f,

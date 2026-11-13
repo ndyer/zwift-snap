@@ -51,8 +51,10 @@ ln -s "${runtime}/${socket}" "${runtime}/snap.yarf/${socket}"
 socket_linked=true
 
 echo "Testing cancellation of a pending decision"
-mkdir -p "${stage}/out/close"
-ZWIFT_DISPLAY_MODE=800x600 "${root}/zwsnap-gui/target/debug/zwsnap-gui" --preview \
+mkdir -p "${stage}/out/close" "${stage}/settings/close"
+printf '{"display_mode":"800x600"}' > "${stage}/settings/close/settings.json"
+SNAP="${stage}/settings/close" SNAP_USER_COMMON="${stage}/settings/close" \
+    "${root}/zwsnap-gui/target/debug/zwsnap-gui" --preview \
     > >(tee "${stage}/gui-close.log") 2>&1 &
 gui_pid=$!
 yarf --platform Mir "${stage}/close-suite" --outdir "${stage}/out/close" \
@@ -74,8 +76,10 @@ grep -q "Launcher cancelled" "${stage}/gui-close.log" \
     || { echo "GTK preview did not report cancellation" >&2; exit 1; }
 for mode in fullscreen 800x600; do
     echo "Testing GTK preview in ${mode} mode"
-    mkdir -p "${stage}/out/${mode}"
-    ZWIFT_DISPLAY_MODE="${mode}" "${root}/zwsnap-gui/target/debug/zwsnap-gui" --preview \
+    mkdir -p "${stage}/out/${mode}" "${stage}/settings/${mode}"
+    printf '{"display_mode":"%s"}' "${mode}" > "${stage}/settings/${mode}/settings.json"
+    SNAP="${stage}/settings/${mode}" SNAP_USER_COMMON="${stage}/settings/${mode}" \
+        "${root}/zwsnap-gui/target/debug/zwsnap-gui" --preview \
         > >(tee "${stage}/gui-${mode}.log") 2>&1 &
     gui_pid=$!
     yarf --platform Mir "${stage}/suite" --outdir "${stage}/out/${mode}" \
@@ -105,6 +109,8 @@ mkdir -p "${fixture}/cdn"
 printf '<Zwift version="1.0.0" sversion="1.0.0 x" manifest="manifest.xml"/>' \
     > "${fixture}/cdn/Zwift_ver_cur.xml"
 printf '<ZWIFT><CONFIG/></ZWIFT>' > "${data}/prefs.xml"
+# The launcher reads its display mode from settings.json, not the environment.
+printf '{"display_mode":"800x600"}' > "${fixture}/common/settings.json"
 # Fabricate what the Wine prerequisites leave behind: `installed()` also requires
 # them, otherwise the launcher takes the install path instead. Kept in step with the
 # sentinels in zwsnap-gui/src/install.rs: the proof is the launcher's own
@@ -145,7 +151,7 @@ STUB
 chmod +x "${fixture}/bin/"*
 PATH="${fixture}/bin:${PATH}" SNAP="${fixture}" SNAP_USER_COMMON="${fixture}/common" \
     WINEPREFIX="${fixture}/common/.wine" ZWIFT_LOG="${fixture}/common/zwift.log" \
-    TEST_ROOT="${fixture}" ZWIFT_NO_GUI=0 ZWIFT_DISPLAY_MODE=800x600 ZWIFT_POLL_INTERVAL=1 \
+    TEST_ROOT="${fixture}" ZWIFT_NO_GUI=0 ZWIFT_POLL_INTERVAL=1 \
     ZWIFT_CDN_BASE="file://${fixture}/cdn" \
     "${root}/zwsnap-gui/target/debug/zwsnap-gui" \
     > >(tee "${stage}/gui-runtime.log") 2>&1 &
