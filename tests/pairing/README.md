@@ -8,6 +8,12 @@ snap.
 workshop run zwift-snap pairing            # SMOKE_DISPLAY=auto|nested|headless, extra args go to yarf
 ```
 
+Nested rendering needs the workshop `desktop` and `gpu` interfaces connected to the
+host compositor. With them missing, `SMOKE_DISPLAY=nested` fails and prints the
+`workshop connect` commands instead of falling back to a virtual display; the default
+`auto` still falls back, and `SMOKE_DISPLAY=headless` asks for the virtual display on
+purpose.
+
 The zwift snap must be installed and Zwift already downloaded into the prefix, so run
 the [smoke test](../smoke/) once first.
 

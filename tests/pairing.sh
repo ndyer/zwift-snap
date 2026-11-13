@@ -11,6 +11,9 @@
 # device pairing.
 #
 # Usage: SMOKE_DISPLAY=auto|nested|headless tests/pairing.sh [--explore] [extra yarf arguments]
+# SMOKE_DISPLAY=nested requires the workshop desktop and gpu interfaces to be connected to the
+# host compositor and fails with the connect hint when they are not; only 'auto' falls back to
+# a headless virtual output. Use SMOKE_DISPLAY=headless to render on a virtual display on purpose.
 # With --explore, the game keeps running after reaching the pairing screen for manual
 # exploration. Use tests/tools/yarf/yarf.sh screenshot and input commands to interact with it.
 # The zwift snap must already be installed and Zwift downloaded into the prefix (run the smoke
@@ -52,6 +55,31 @@ cacert_appended=""
 
 die() {
     echo "pairing: ${*}" >&2
+    exit 1
+}
+
+# nested_host_display_available: true when the workshop desktop interface provides a host
+# display a nested compositor can render into. The socket behind WAYLAND_DISPLAY is checked,
+# not the variable alone: a bare wayland-0-style value with no socket behind it means there
+# is nothing to nest onto, and mir would then quietly pick a different platform.
+nested_host_display_available() {
+    local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    [[ -n ${WAYLAND_DISPLAY:-} && -S "${runtime_dir}/${WAYLAND_DISPLAY}" ]]
+}
+
+# die_nested_unavailable REASON: fail a run that explicitly asked for nested rendering but
+# cannot reach the host display. Nested rendering needs the workshop desktop and gpu
+# interfaces connected to the host compositor. The desktop plug never connects on its own,
+# so the connections: entry in .workshop/zwift-snap.yaml does not wire it, and mir then
+# aborts with "Failed to read Wayland events: Broken pipe".
+die_nested_unavailable() {
+    echo "pairing: ${1}" >&2
+    echo "pairing: nested rendering needs the workshop desktop and gpu interfaces connected to" >&2
+    echo "pairing: the host compositor. On the workshop host 'workshop connections' shows them," >&2
+    echo "pairing: and 'workshop connect <workshop>/<sdk>:desktop' (or ':gpu') connects a missing" >&2
+    echo "pairing: one -- the desktop plug never connects by itself, so the connections: entry in" >&2
+    echo "pairing: the definition does not wire it." >&2
+    echo "pairing: use SMOKE_DISPLAY=headless to render on a virtual display instead." >&2
     exit 1
 }
 
@@ -148,9 +176,14 @@ clear_stale_socket() {
     fi
 }
 
-# start_mir MODE: "nested" (render on the host display) or "headless" (virtual output)
+# start_mir MODE [REQUIRED]: MODE is "nested" (render on the host display) or "headless"
+# (virtual output). A non-empty REQUIRED marks nested as a hard requirement, as
+# 'SMOKE_DISPLAY=nested' does: when it cannot start, the script fails with the interface hint
+# instead of quietly rendering to a virtual display. 'SMOKE_DISPLAY=auto' leaves it empty so
+# a nested start that fails still falls back to headless.
 start_mir() {
     local mode="${1:?}"
+    local required="${2:-}"
     local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
     local mir_args=(--add-wayland-extensions "${MIR_EXTENSIONS}")
     if [[ ${mode} == "nested" && -n ${WAYLAND_DISPLAY:-} ]]; then
@@ -161,12 +194,17 @@ start_mir() {
         echo "pairing: starting a headless Mir compositor (${MIR_VIRTUAL_OUTPUT})"
     fi
     export WAYLAND_DISPLAY="${WAYLAND_SOCKET}"
-    mir-test-tools.demo-server "${mir_args[@]}" > "${OUT_DIR}/mir-${mode}.log" 2>&1 &
+    # snap run writes nothing when its stdout is a plain file, so mir's output goes through a
+    # pipe; that also keeps its abort message ("Failed to read Wayland events: Broken pipe")
+    # in the log instead of an empty file
+    mir-test-tools.demo-server "${mir_args[@]}" > >(tee "${OUT_DIR}/mir-${mode}.log") 2>&1 &
     mir_pid=$!
     local waited=0
     while [[ ! -S "${runtime_dir}/${WAYLAND_SOCKET}" ]]; do
         if ! kill -0 "${mir_pid}" 2> /dev/null; then
             if [[ ${mode} == "nested" ]]; then
+                [[ -z ${required} ]] || die_nested_unavailable \
+                    "the nested compositor did not start, see ${OUT_DIR}/mir-${mode}.log"
                 echo "pairing: the nested compositor did not start, falling back to headless"
                 start_mir headless
                 return
@@ -363,13 +401,21 @@ main() {
     clear_stale_socket
     case "${SMOKE_DISPLAY:-auto}" in
     auto)
-        if [[ -n ${WAYLAND_DISPLAY:-} && -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${WAYLAND_DISPLAY}" ]]; then
+        # nested needs a real host display: the desktop interface of the workshop sets
+        # WAYLAND_DISPLAY and provides its socket. A bare env var with no socket behind it
+        # means there is nothing to nest onto, so fall back to a virtual display.
+        if nested_host_display_available; then
             start_mir nested
         else
             start_mir headless
         fi
         ;;
-    nested | headless) start_mir "${SMOKE_DISPLAY}" ;;
+    nested)
+        nested_host_display_available \
+            || die_nested_unavailable "SMOKE_DISPLAY=nested but no host display is available"
+        start_mir nested required
+        ;;
+    headless) start_mir headless ;;
     *) die "SMOKE_DISPLAY must be auto, nested or headless, got '${SMOKE_DISPLAY}'" ;;
     esac
 

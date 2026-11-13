@@ -118,6 +118,11 @@ To reproduce with Bluetooth tracing on the nested desktop, run inside the worksh
 SMOKE_DISPLAY=nested WINEDEBUG=+bluetooth,+winebth tests/pairing.sh
 ```
 
+Nested rendering needs the workshop `desktop` and `gpu` interfaces connected to the host
+compositor. With either missing, `SMOKE_DISPLAY=nested` fails and prints the `workshop connect`
+commands instead of quietly falling back to a virtual display; only `SMOKE_DISPLAY=auto` falls
+back, and `SMOKE_DISPLAY=headless` asks for the virtual display on purpose.
+
 ## The Zwift custom GATT service (crash surface)
 
 The Zwift custom service (`00000001-19ca-4651-86e5-fa29dcdd09d1`) exposes async notifications

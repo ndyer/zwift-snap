@@ -13,8 +13,8 @@ IMPORTANT: Read the `.kb/agents.md` file.
 
 `tests/smoke.sh` starts a `mir-test-tools` Mir compositor, runs the real launcher
 against it and drives the Robot Framework suite in `tests/smoke/` with
-[yarf](https://documentation.ubuntu.com/yarf): test 1 looks for the GTK log button,
-test 2 requires the Zwift SIGN UP screen through OCR. The first run on a fresh wine prefix installs wine prerequisites
+[yarf](https://documentation.ubuntu.com/yarf): test 1 looks for the launcher's
+`Settings` button, test 2 requires the Zwift SIGN UP screen through OCR. The first run on a fresh wine prefix installs wine prerequisites
 and downloads Zwift (tens of minutes), later runs are quick. No login is performed.
 Extra arguments to the `smoke` action are passed to yarf (for example,
 `--variant light`). The harness installs `yarf` and `mir-test-tools` and connects
@@ -36,7 +36,8 @@ Two logfiles show live progress while the suite runs:
 Window decorations and themes differ between machines: when the suite reports a
 missing template, recapture it with the recipe in `tests/smoke/README.md` and commit
 it. `SMOKE_DISPLAY=nested|headless` overrides the auto detection; nested renders on
-the host display through the workshop desktop interface.
+the host display through the workshop desktop interface and, with interfaces missing,
+fails instead of rendering elsewhere (see the Mir gotcha below).
 
 ## Yarf gotchas (all verified live)
 
@@ -63,12 +64,15 @@ the host display through the workshop desktop interface.
   export, plus GPU device access from the workshop gpu interface — without either
   it hangs with an empty log and the harness falls back to headless.
 - Nested Mir can also abort on startup with `Failed to read Wayland events: Broken pipe`
-  when a required host/workshop interface is disconnected. Check the workshop desktop
-  and GPU connections before blaming stale processes or sockets; reconnecting the missing
-  plug fixed this during a pairing run. The harness falls back to headless even with
-  `SMOKE_DISPLAY=nested`, so check its startup output to confirm the requested mode.
-  To expose a blank compositor log, reproduce its command with output piped through
-  `tee` rather than redirected to a regular file.
+  when a required host/workshop interface is disconnected — the usual cause is a workshop
+  desktop or gpu plug that is not connected. On the workshop host `workshop connections`
+  lists them; connect the missing one with `workshop connect <workshop>/<sdk>:desktop` (or
+  `:gpu`), remembering that the desktop plug never connects on its own, so a `connections:`
+  entry does not wire it. `SMOKE_DISPLAY=nested` reports exactly that and fails; only
+  `SMOKE_DISPLAY=auto` still falls back to a headless compositor, so check the startup
+  output to confirm which mode ran. mir's output is written through `tee` so that message
+  survives: snap apps write nothing to a plain file, so a reproduction redirected to a
+  regular file shows an empty log.
 
 ## Frame dump and OCR replay
 
