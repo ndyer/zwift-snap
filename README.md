@@ -2,6 +2,8 @@
 
 Unofficial snap packaging of [Zwift](https://zwift.com) for Linux.
 
+[![snapcraft.io](https://snapcraft.io/zwift/badge.svg)](https://snapcraft.io/zwift)
+
 Zwift is proprietary and is **not** included in the snap. It is downloaded from Zwift's
 servers into a wine prefix under `$SNAP_USER_COMMON` the first time you run `zwift`.
 
