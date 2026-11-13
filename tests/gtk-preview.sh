@@ -107,10 +107,13 @@ printf '<Zwift version="1.0.0" sversion="1.0.0 x" manifest="manifest.xml"/>' \
 printf '<ZWIFT><CONFIG/></ZWIFT>' > "${data}/prefs.xml"
 # Fabricate what the Wine prerequisites leave behind: `installed()` also requires
 # them, otherwise the launcher takes the install path instead. Kept in step with the
-# sentinels in zwsnap-gui/src/install.rs.
+# sentinels in zwsnap-gui/src/install.rs: the proof is the launcher's own
+# `d3dcompiler_47.dll.native` marker, not the DLL (which wineboot seeds anyway), so
+# the marker is what keeps the fixture off the install path.
 prefix="${fixture}/common/.wine"
 mkdir -p "${prefix}/drive_c/windows/system32"
 touch "${prefix}/drive_c/windows/system32/d3dcompiler_47.dll"
+touch "${prefix}/drive_c/windows/system32/d3dcompiler_47.dll.native"
 cat > "${fixture}/bin/winepath" <<'STUB'
 #!/bin/sh
 printf 'C:\\Zwift\n'
