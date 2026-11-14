@@ -27,6 +27,14 @@ readonly BLUEZOO_PATTERN="bluezoo(-run\\.py)? --auto-enable"
 # the scan client stays connected this long; the caller's test must finish well within it
 BLUEZOO_KEEPALIVE_SECONDS="${BLUEZOO_KEEPALIVE_SECONDS:-120}"
 
+# The RSSI the mock reports for LE devices, passed to tests/tools/bluetooth/bluezoo-run.py.
+# jitter is the default the tests were written against; set these before sourcing to reproduce
+# a pairing-screen "low signal strength" (e.g. BLUEZOO_RSSI_MODE=stable BLUEZOO_RSSI_BASE=-75).
+BLUEZOO_RSSI_MODE="${BLUEZOO_RSSI_MODE:-jitter}"
+BLUEZOO_RSSI_BASE="${BLUEZOO_RSSI_BASE:--55}"
+BLUEZOO_RSSI_TARGET="${BLUEZOO_RSSI_TARGET:-${BLUEZOO_RSSI_BASE}}"
+BLUEZOO_RSSI_STEP="${BLUEZOO_RSSI_STEP:-1}"
+
 bluezoo_pid=""
 trainer_pid=""
 scan_pid=""
@@ -89,12 +97,17 @@ bluezoo_start() {
     bluezoo_stop_processes
     sleep 1
 
+    echo "bluezoo: LE RSSI mode=${BLUEZOO_RSSI_MODE} base=${BLUEZOO_RSSI_BASE} target=${BLUEZOO_RSSI_TARGET} step=${BLUEZOO_RSSI_STEP}"
+
     # bluezoo must run as root: the bluez D-Bus policy only lets root own org.bluez. setsid
     # detaches it from this script's process group so a cancelled caller does not take it down
     # with it. The log is written by the root shell inside the sudo command, because a redirect
     # on the outside would belong to the calling user's sudo wrapper.
-    # tests/tools/bluetooth/bluezoo-run.py is bluezoo with a live RSSI, see there.
-    sudo setsid sh -c "exec /opt/bluezoo/bin/python3 '${ROOT}/tests/tools/bluetooth/bluezoo-run.py' --auto-enable --scan-interval=1 \
+    # sudo resets the environment, so the RSSI settings are passed through env inside the command.
+    # tests/tools/bluetooth/bluezoo-run.py is bluezoo with a controllable RSSI, see there.
+    sudo setsid sh -c "exec env BLUEZOO_RSSI_MODE='${BLUEZOO_RSSI_MODE}' BLUEZOO_RSSI_BASE='${BLUEZOO_RSSI_BASE}' \
+        BLUEZOO_RSSI_TARGET='${BLUEZOO_RSSI_TARGET}' BLUEZOO_RSSI_STEP='${BLUEZOO_RSSI_STEP}' \
+        /opt/bluezoo/bin/python3 '${ROOT}/tests/tools/bluetooth/bluezoo-run.py' --auto-enable --scan-interval=1 \
         -a 00:00:00:11:11:11 -a ${BLUEZOO_TRAINER_ADDRESS} \
         > '${OUT_DIR}/bluezoo.log' 2>&1" < /dev/null &
     bluezoo_pid=$!
