@@ -78,6 +78,7 @@ pub struct SettingsDialog {
     graphics: gtk::DropDown,
     disable_egl: gtk::CheckButton,
     bluetooth_debug: gtk::CheckButton,
+    download_adapt: gtk::CheckButton,
     verbosity: gtk::SpinButton,
     message: gtk::Label,
     gpu: gtk::Label,
@@ -157,10 +158,18 @@ impl SettingsDialog {
         bluetooth_debug.set_active(settings.bluetooth_debug);
         grid.attach(&bluetooth_debug, 0, 3, 2, 1);
 
+        let download_adapt = gtk::CheckButton::with_label("Adaptive download concurrency");
+        download_adapt.set_active(settings.download_adapt);
+        download_adapt.set_tooltip_text(Some(
+            "Grow the number of parallel downloads until the connection saturates, instead \
+             of a fixed pool. Off uses ZWIFT_DOWNLOAD_JOBS as a fixed count.",
+        ));
+        grid.attach(&download_adapt, 0, 4, 2, 1);
+
         let verbosity = gtk::SpinButton::with_range(0.0, 3.0, 1.0);
         verbosity.set_value(f64::from(settings.verbosity));
-        grid.attach(&row_label("Log verbosity"), 0, 4, 1, 1);
-        grid.attach(&verbosity, 1, 4, 1, 1);
+        grid.attach(&row_label("Log verbosity"), 0, 5, 1, 1);
+        grid.attach(&verbosity, 1, 5, 1, 1);
 
         content.append(&grid);
 
@@ -256,6 +265,7 @@ impl SettingsDialog {
             graphics,
             disable_egl,
             bluetooth_debug,
+            download_adapt,
             verbosity,
             message,
             gpu,
@@ -427,6 +437,7 @@ impl SettingsDialog {
             graphics,
             disable_egl: self.disable_egl.is_active(),
             bluetooth_debug: self.bluetooth_debug.is_active(),
+            download_adapt: self.download_adapt.is_active(),
             verbosity: self.verbosity.value() as u8,
             // Not edited by the dialog; keep whatever the file already had.
             backdrop: self.context.settings.backdrop.clone(),

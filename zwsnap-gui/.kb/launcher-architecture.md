@@ -23,7 +23,9 @@ from Zwift's CDN, `manifest.rs` parses the served version and file manifests,
 before moving it into place, and `sync.rs` diffs the installed files against the
 served manifest so an update transfers only what changed. `ZWIFT_CDN_BASE` points
 the launcher at another CDN root (`file://` in the tests) and `ZWIFT_DOWNLOAD_JOBS`
-sets the number of parallel transfers. See `.kb/zwift-cdn-sync.md` for the full
+caps the number of parallel transfers (default 32); with `download_adapt` on (the
+default in `settings.json`) the pool grows toward that ceiling until the link
+saturates instead of running a fixed count. See `.kb/zwift-cdn-sync.md` for the full
 description.
 
 ## Window, display mode and login panel

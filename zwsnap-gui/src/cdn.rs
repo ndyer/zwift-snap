@@ -201,11 +201,27 @@ impl Remote {
     /// file on disk that later looks installed. A mismatch is retried: a proxy or a
     /// flaky link is far more likely than a wrong manifest.
     pub fn fetch_file(&self, url: &str, dest: &Path, expect: Expect) -> Result<(), String> {
+        self.fetch_file_with_progress(url, dest, expect, &|_| {})
+    }
+
+    /// Download one file to `dest`, verified against `expect`, reporting the bytes
+    /// of each chunk through `on_bytes` as they are written.
+    ///
+    /// `on_bytes` receives the number of bytes just written, so a caller can sum
+    /// them into a throughput estimate. An attempt that is retried reports its
+    /// bytes again, which is correct for that purpose: those bytes crossed the link.
+    pub fn fetch_file_with_progress(
+        &self,
+        url: &str,
+        dest: &Path,
+        expect: Expect,
+        on_bytes: &(dyn Fn(u64) + Sync),
+    ) -> Result<(), String> {
         let deadline = MIN_FILE_TIMEOUT.max(Duration::from_secs(expect.length / CHUNK_BYTES));
         let mut last = String::new();
         for attempt in 0..ATTEMPTS {
             match self.get_stream(url, deadline) {
-                Ok(reader) => match copy_verified(reader, dest, expect) {
+                Ok(reader) => match copy_verified(reader, dest, expect, on_bytes) {
                     Ok(()) => return Ok(()),
                     Err(error) => {
                         last = format!("{url}: {error}");
@@ -287,6 +303,21 @@ pub trait Fetcher: Sync {
 
     /// Download one file to `dest`, verified against `expect`.
     fn fetch_file(&self, url: &str, dest: &Path, expect: Expect) -> Result<(), String>;
+
+    /// Download one file to `dest`, verified against `expect`, reporting the bytes
+    /// of each chunk through `on_bytes` as they are written.
+    ///
+    /// The default forwards to [`Fetcher::fetch_file`] and reports nothing, which
+    /// is what every source that cannot stream (and every test double) needs.
+    fn fetch_file_with_progress(
+        &self,
+        url: &str,
+        dest: &Path,
+        expect: Expect,
+        _on_bytes: &(dyn Fn(u64) + Sync),
+    ) -> Result<(), String> {
+        self.fetch_file(url, dest, expect)
+    }
 }
 
 impl Fetcher for Remote {
@@ -308,6 +339,16 @@ impl Fetcher for Remote {
 
     fn fetch_file(&self, url: &str, dest: &Path, expect: Expect) -> Result<(), String> {
         Remote::fetch_file(self, url, dest, expect)
+    }
+
+    fn fetch_file_with_progress(
+        &self,
+        url: &str,
+        dest: &Path,
+        expect: Expect,
+        on_bytes: &(dyn Fn(u64) + Sync),
+    ) -> Result<(), String> {
+        Remote::fetch_file_with_progress(self, url, dest, expect, on_bytes)
     }
 }
 
@@ -358,7 +399,15 @@ fn percent_decode(text: &str) -> Option<String> {
 }
 
 /// Stream a body into `dest`, hashing as it goes, and verify it afterwards.
-fn copy_verified(mut reader: Box<dyn Read>, dest: &Path, expect: Expect) -> Result<(), String> {
+///
+/// Each chunk just written is reported through `on_bytes`, so a caller can measure
+/// throughput without re-reading the file.
+fn copy_verified(
+    mut reader: Box<dyn Read>,
+    dest: &Path,
+    expect: Expect,
+    on_bytes: &(dyn Fn(u64) + Sync),
+) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
@@ -381,6 +430,7 @@ fn copy_verified(mut reader: Box<dyn Read>, dest: &Path, expect: Expect) -> Resu
             .write_all(&buffer[..read])
             .map_err(|e| format!("{}: {e}", dest.display()))?;
         total += read as u64;
+        on_bytes(read as u64);
     }
     writer
         .flush()

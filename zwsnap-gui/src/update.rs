@@ -7,6 +7,7 @@
 //! removes the installer, the patcher and the polling loop that used to sit here.
 
 use crate::cdn::{Fetcher, Remote};
+use crate::download::Adaptive;
 use crate::logging::Logger;
 use crate::manifest::VerCur;
 use crate::sync::{self, Outcome, SyncConfig};
@@ -46,6 +47,9 @@ pub struct UpdateConfig<'a> {
     pub staging_dir: &'a Path,
     /// Parallel transfers.
     pub jobs: usize,
+    /// Grow the transfer count until the link saturates; `None` is a fixed pool of
+    /// `jobs`.
+    pub adaptive: Option<Adaptive>,
     /// The CDN root, or a `file://` directory in the tests.
     pub cdn_base: &'a str,
 }
@@ -71,6 +75,7 @@ pub fn update_if_needed(
         install_dir: config.install_dir,
         staging_dir: config.staging_dir,
         jobs: config.jobs,
+        adaptive: config.adaptive,
     };
     let reporting = |done: u64, total: u64| {
         progress(
@@ -156,6 +161,7 @@ mod tests {
                     install_dir: &self.install,
                     staging_dir: &self.staging,
                     jobs: 2,
+                    adaptive: None,
                     cdn_base: &self.cdn_base(),
                 },
                 &self.logger,

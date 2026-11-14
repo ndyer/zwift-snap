@@ -3,6 +3,7 @@
 use crate::cancel::Cancellation;
 use crate::cdn;
 use crate::display::DisplayMode;
+use crate::download::Adaptive;
 use crate::graphics::Setting as GraphicsSetting;
 use crate::install::{
     d3dcompiler_expect, InstallConfig, InstallProgress, D3DCOMPILER_BASE, EXPECTED_DRIVE_C_BYTES,
@@ -31,6 +32,9 @@ pub struct Config {
     pub skip_login: bool,
     pub disable_egl: bool,
     pub bluetooth_debug: bool,
+    /// Grow the CDN download's parallelism until the link saturates. From
+    /// `download_adapt` in `settings.json`.
+    pub download_adapt: bool,
     pub verbosity: u8,
     /// Optional image shown behind the account picker (`backdrop` in
     /// `settings.json`).
@@ -125,6 +129,7 @@ impl Config {
             skip_login: false,
             disable_egl: settings.disable_egl,
             bluetooth_debug: settings.bluetooth_debug,
+            download_adapt: settings.download_adapt,
             verbosity: settings.verbosity,
             backdrop: settings.backdrop.clone(),
             color: flag("COLORED_OUTPUT", 0)?,
@@ -138,7 +143,7 @@ impl Config {
                     })?
                     .to_string(),
             },
-            jobs: usize::try_from(number("ZWIFT_DOWNLOAD_JOBS", 8)?)
+            jobs: usize::try_from(number("ZWIFT_DOWNLOAD_JOBS", 32)?)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
             expected_bytes: number("ZWIFT_EXPECTED_DRIVE_C_BYTES", EXPECTED_DRIVE_C_BYTES)?,
             sample_interval,
@@ -230,6 +235,7 @@ pub fn run(
             tools: &tools,
             cdn_base: &config.cdn_base,
             jobs: config.jobs,
+            adaptive: config.download_adapt.then(Adaptive::default),
             expected_drive_c_bytes: if graphical { config.expected_bytes } else { 0 },
             sample_interval: config.sample_interval,
         },
@@ -319,6 +325,7 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
                         graphics: config.graphics,
                         disable_egl: config.disable_egl,
                         bluetooth_debug: config.bluetooth_debug,
+                        download_adapt: config.download_adapt,
                         verbosity: config.verbosity,
                         backdrop: config.backdrop.clone(),
                     },
@@ -409,10 +416,11 @@ mod tests {
         assert_eq!(config.graphics, GraphicsSetting::Auto);
         assert!(!config.disable_egl);
         assert!(!config.bluetooth_debug);
+        assert!(config.download_adapt);
         assert_eq!(config.verbosity, 1);
         assert!(!config.no_gui);
         assert_eq!(config.cdn_base, cdn::DEFAULT_BASE);
-        assert_eq!(config.jobs, 8);
+        assert_eq!(config.jobs, 32);
         assert_eq!(config.poll_interval, Duration::from_secs(5));
     }
 

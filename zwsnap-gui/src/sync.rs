@@ -17,7 +17,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 use crate::cdn::Fetcher;
-use crate::download::{download, DownloadConfig};
+use crate::download::{download, Adaptive, DownloadConfig};
 use crate::logging::Logger;
 use crate::manifest::{parse_manifest, parse_ver_cur, FileEntry, Manifest, RelPath, VerCur};
 use crate::version::{Version, VER_CUR_FILE};
@@ -34,6 +34,9 @@ pub struct SyncConfig<'a> {
     pub staging_dir: &'a Path,
     /// Parallel transfers.
     pub jobs: usize,
+    /// Grow the transfer count until the link saturates; `None` is a fixed pool of
+    /// `jobs`.
+    pub adaptive: Option<Adaptive>,
 }
 
 /// What the served version means for the local install.
@@ -221,6 +224,7 @@ pub fn sync_version(
             install_dir: config.install_dir,
             staging_dir: config.staging_dir,
             jobs: config.jobs,
+            adaptive: config.adaptive,
         },
         &plan.fetch,
         logger,
@@ -454,6 +458,7 @@ mod tests {
                 install_dir: &self.install,
                 staging_dir: &self.staging,
                 jobs: 4,
+                adaptive: None,
             }
         }
     }

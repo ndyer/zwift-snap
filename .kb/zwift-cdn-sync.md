@@ -36,7 +36,13 @@ the launcher records is the server's own `Zwift_ver_cur.xml`, written after ever
 
 Two environment variables, both parsed in `application.rs`, configure it:
 `ZWIFT_CDN_BASE` overrides the CDN root (a `file://` directory for tests and offline
-checks) and `ZWIFT_DOWNLOAD_JOBS` sets the number of parallel transfers.
+checks) and `ZWIFT_DOWNLOAD_JOBS` caps the number of parallel transfers (default 32).
+
+The transfer count is also adaptive by default: unless `download_adapt` is turned off in
+`settings.json`, `download.rs` starts below the `ZWIFT_DOWNLOAD_JOBS` ceiling and grows
+the pool by one for each sampling window whose throughput improves, halving it when
+throughput drops, so the count settles where the link saturates rather than being guessed
+up front.
 
 ## The launcher shim
 

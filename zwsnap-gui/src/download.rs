@@ -12,15 +12,22 @@
 //!   its length and checksum, so an interrupted run never leaves a truncated game file
 //!   that a later diff would consider present.
 //! * **Bounded extra disk.** Each worker moves its file out of staging as soon as it
-//!   verifies, so at most `jobs` files are staged at once, not the whole plan. A full
-//!   first install is several GiB and must not need twice that.
+//!   verifies, so at most the pool size (never more than `jobs`) files are staged at
+//!   once, not the whole plan. A full first install is several GiB and must not need
+//!   twice that.
+//!
+//! With [`Adaptive`] the pool also grows and shrinks while it runs: it starts lower
+//! than the ceiling and adds a worker for each window whose throughput improves,
+//! halving when throughput drops, so the transfer count settles where the link is
+//! saturated instead of being guessed up front.
 
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Mutex;
-use std::time::SystemTime;
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, SystemTime};
 
+use crate::cancel::Cancellation;
 use crate::cdn::{Expect, Fetcher};
 use crate::logging::Logger;
 use crate::manifest::{FileEntry, RelPath};
@@ -33,8 +40,39 @@ pub struct DownloadConfig<'a> {
     pub install_dir: &'a Path,
     /// A scratch directory, ideally on the same filesystem as `install_dir`.
     pub staging_dir: &'a Path,
-    /// Worker threads. One is always used, however small the value.
+    /// The ceiling on parallel transfers, and the fixed count when `adaptive` is
+    /// `None`. One is always used, however small the value.
     pub jobs: usize,
+    /// Grow the number of transfers until the link saturates, instead of running a
+    /// fixed pool of `jobs`. `None` is the fixed pool.
+    pub adaptive: Option<Adaptive>,
+}
+
+/// Parameters for the adaptive transfer count.
+///
+/// The count starts at `start`, grows by one whenever a window's throughput
+/// improves, and halves when it drops: the additive-increase, multiplicative-decrease
+/// response to a saturated link. It never exceeds the [`DownloadConfig::jobs`]
+/// ceiling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Adaptive {
+    /// Transfers to begin with. Clamped to `1..=jobs`.
+    pub start: usize,
+    /// How long each throughput sample covers.
+    pub window: Duration,
+}
+
+/// Transfers to start with: enough to hide one connection's latency without
+/// flooding a slow link before the first measurement.
+const DEFAULT_START: usize = 4;
+
+impl Default for Adaptive {
+    fn default() -> Self {
+        Adaptive {
+            start: DEFAULT_START,
+            window: Duration::from_secs(1),
+        }
+    }
 }
 
 /// Download every file in `files` into `config.install_dir`.
@@ -62,47 +100,80 @@ pub fn download(
     // A shared cursor into `files`, so workers pull work without a channel.
     let next = AtomicUsize::new(0);
     let done = AtomicU64::new(0);
+    // Network bytes consumed during the current sampling window, summed by the
+    // workers through `on_bytes` and drained by the controller each window.
+    let bytes = AtomicU64::new(0);
     let failure: Mutex<Option<String>> = Mutex::new(None);
-    let workers = config.jobs.max(1).min(files.len());
     let cancellation = logger.cancellation();
 
+    // The pool can never be larger than the plan. A fixed pool runs at the ceiling;
+    // an adaptive one starts lower and grows toward it.
+    let max = config.jobs.max(1).min(files.len());
+    let adapt = match &config.adaptive {
+        Some(adaptive) if max > 1 && !adaptive.window.is_zero() => Some(adaptive),
+        _ => None,
+    };
+    let start = adapt.map_or(max, |adaptive| adaptive.start.clamp(1, max));
+    let pool = Pool::new(start);
+    // The largest transfer count seen, for the closing log line.
+    let peak = AtomicUsize::new(start);
+
     std::thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| {
-                loop {
-                    // The launcher used to download with a child `wget`, which died
-                    // with the launcher; the transfer now runs in-process, so check
-                    // between files instead. A single file is the granularity: a
-                    // several-hundred-megabyte asset finishes before this is noticed.
-                    if let Err(error) = cancellation.check() {
-                        failure
-                            .lock()
-                            .expect("download failure lock poisoned")
-                            .get_or_insert_with(|| error.to_string());
-                        break;
-                    }
-                    if failure
-                        .lock()
-                        .expect("download failure lock poisoned")
-                        .is_some()
-                    {
-                        break;
-                    }
-                    let index = next.fetch_add(1, Ordering::Relaxed);
-                    let Some((path, entry)) = files.get(index) else {
-                        break;
-                    };
-                    if let Err(error) = fetch_one(fetcher, config, path, entry) {
-                        let mut failure = failure.lock().expect("download failure lock poisoned");
-                        // Another worker may have failed first; keep that error.
-                        failure.get_or_insert(error);
-                        break;
-                    }
-                    let completed = done.fetch_add(entry.length, Ordering::Relaxed) + entry.length;
-                    progress(completed, total);
-                }
+        for id in 0..max {
+            // Borrow rather than capture the shared state: a `&AtomicU64` and the
+            // likes are `Copy`, so the `move` closure only has to own its `id`.
+            let next = &next;
+            let done = &done;
+            let bytes = &bytes;
+            let failure = &failure;
+            let cancellation = &cancellation;
+            let pool = &pool;
+            scope.spawn(move || {
+                run_worker(
+                    id,
+                    fetcher,
+                    config,
+                    files,
+                    total,
+                    next,
+                    done,
+                    bytes,
+                    failure,
+                    cancellation,
+                    pool,
+                    progress,
+                )
             });
         }
+        // Drive the transfer count while the workers run. This runs on the calling
+        // thread rather than one of its own, so its exit and the scope's join are the
+        // same point and no worker can be left waiting for it.
+        if let Some(adaptive) = adapt {
+            let window = adaptive.window;
+            let mut desired = start;
+            let mut previous = 0;
+            loop {
+                // A cancelled launcher makes this return at once; stop sampling and
+                // let the workers notice the cancellation themselves.
+                if cancellation.wait(window).is_err() || pool.is_closing() {
+                    break;
+                }
+                let now = bytes.swap(0, Ordering::Relaxed);
+                let wanted = next_desired(previous, now, desired, max);
+                previous = now;
+                if wanted != desired {
+                    logger.debug(&format!(
+                        "Download concurrency {desired} -> {wanted} ({now} bytes per {window:?})"
+                    ));
+                    desired = wanted;
+                    peak.fetch_max(desired, Ordering::Relaxed);
+                    pool.set_desired(desired);
+                }
+            }
+        }
+        // Release any workers the controller parked, so the queue drains to the end
+        // even though growth has stopped. A no-op for a fixed pool.
+        pool.set_desired(max);
     });
 
     if let Some(error) = failure
@@ -112,12 +183,176 @@ pub fn download(
         return Err(error);
     }
     logger.info(&format!(
-        "Downloaded {} files ({} bytes) as {} parallel transfers",
+        "Downloaded {} files ({} bytes), up to {} parallel transfers",
         files.len(),
         total,
-        workers
+        peak.load(Ordering::Relaxed)
     ));
     Ok(files.len())
+}
+
+/// One pool worker: claim the next file and fetch it, until the plan is claimed or
+/// something fails.
+///
+/// A worker with an `id` at or above the pool's current size parks until the
+/// controller admits it again; the id is why the pool can shrink without aborting a
+/// transfer that is already in flight.
+#[allow(clippy::too_many_arguments)]
+fn run_worker(
+    id: usize,
+    fetcher: &dyn Fetcher,
+    config: &DownloadConfig<'_>,
+    files: &[(RelPath, FileEntry)],
+    total: u64,
+    next: &AtomicUsize,
+    done: &AtomicU64,
+    bytes: &AtomicU64,
+    failure: &Mutex<Option<String>>,
+    cancellation: &Cancellation,
+    pool: &Pool,
+    progress: &(dyn Fn(u64, u64) + Sync),
+) {
+    let on_bytes = |delta: u64| {
+        bytes.fetch_add(delta, Ordering::Relaxed);
+    };
+    loop {
+        if !pool.wait_turn(id) {
+            break;
+        }
+        // The launcher used to download with a child `wget`, which died with the
+        // launcher; the transfer now runs in-process, so check between files
+        // instead. A single file is the granularity: a several-hundred-megabyte
+        // asset finishes before this is noticed.
+        if let Err(error) = cancellation.check() {
+            failure
+                .lock()
+                .expect("download failure lock poisoned")
+                .get_or_insert_with(|| error.to_string());
+            pool.close();
+            break;
+        }
+        if failure
+            .lock()
+            .expect("download failure lock poisoned")
+            .is_some()
+        {
+            pool.close();
+            break;
+        }
+        let index = next.fetch_add(1, Ordering::Relaxed);
+        let Some((path, entry)) = files.get(index) else {
+            // Every index is claimed, so no worker will find work again: let any
+            // parked worker exit rather than wait for a turn that never comes.
+            pool.close();
+            break;
+        };
+        if let Err(error) = fetch_one(fetcher, config, path, entry, &on_bytes) {
+            // Another worker may have failed first; keep that error.
+            failure
+                .lock()
+                .expect("download failure lock poisoned")
+                .get_or_insert(error);
+            pool.close();
+            break;
+        }
+        let completed = done.fetch_add(entry.length, Ordering::Relaxed) + entry.length;
+        progress(completed, total);
+    }
+}
+
+/// How many transfers the pool is running now, and a way to wait for a turn.
+///
+/// Workers with an `id` below `desired` run; the rest wait. Lowering `desired`
+/// therefore retires the highest workers as they finish, without interrupting a
+/// transfer that is already in flight.
+struct Pool {
+    state: Mutex<PoolState>,
+    changed: Condvar,
+}
+
+struct PoolState {
+    desired: usize,
+    /// Set once no further files will be claimed (the plan is claimed, or a
+    /// failure), so waiting workers stop instead of parking.
+    closing: bool,
+}
+
+impl Pool {
+    fn new(desired: usize) -> Pool {
+        Pool {
+            state: Mutex::new(PoolState {
+                desired,
+                closing: false,
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    /// Block until worker `id` may run or the pool is closing. Returns `false` when
+    /// the pool is closing and the worker must stop.
+    fn wait_turn(&self, id: usize) -> bool {
+        let mut state = self.state.lock().expect("download pool lock poisoned");
+        while id >= state.desired && !state.closing {
+            state = self
+                .changed
+                .wait(state)
+                .expect("download pool lock poisoned");
+        }
+        !state.closing
+    }
+
+    fn set_desired(&self, desired: usize) {
+        self.state
+            .lock()
+            .expect("download pool lock poisoned")
+            .desired = desired;
+        self.changed.notify_all();
+    }
+
+    fn close(&self) {
+        self.state
+            .lock()
+            .expect("download pool lock poisoned")
+            .closing = true;
+        self.changed.notify_all();
+    }
+
+    fn is_closing(&self) -> bool {
+        self.state
+            .lock()
+            .expect("download pool lock poisoned")
+            .closing
+    }
+}
+
+/// The transfer count for the next window, from the last two windows' throughput:
+/// the additive-increase, multiplicative-decrease rule.
+///
+/// While `now` is at least [`GROWTH_PERCENT`] above `prev`, one transfer is added
+/// (up to `max`): each addition is still buying throughput. When `now` falls below
+/// [`DECAY_PERCENT`] of `prev`, the count is halved, never below one: adding transfers
+/// made things worse, so give most of them up. Flat throughput is treated as
+/// saturated and held.
+fn next_desired(prev: u64, now: u64, desired: usize, max: usize) -> usize {
+    /// Throughput must improve by this much to add a transfer.
+    const GROWTH_PERCENT: u64 = 5;
+    /// Throughput dropping below this fraction of the previous window halves the count.
+    const DECAY_PERCENT: u64 = 80;
+    if prev == 0 {
+        // Nothing to compare against yet: grow once bytes start moving, else hold.
+        return if now > 0 {
+            (desired + 1).min(max)
+        } else {
+            desired.clamp(1, max)
+        };
+    }
+    if now.saturating_mul(100) >= prev.saturating_mul(100 + GROWTH_PERCENT) {
+        (desired + 1).min(max)
+    } else if now.saturating_mul(100) < prev.saturating_mul(DECAY_PERCENT) {
+        (desired / 2).max(1)
+    } else {
+        desired.clamp(1, max)
+    }
 }
 
 /// Fetch one file into staging, stamp its modification time, and move it into place.
@@ -126,6 +361,7 @@ fn fetch_one(
     config: &DownloadConfig<'_>,
     path: &RelPath,
     entry: &FileEntry,
+    on_bytes: &(dyn Fn(u64) + Sync),
 ) -> Result<(), String> {
     let staged = config.staging_dir.join(path.as_str());
     let url = fetcher.file_url(config.folder, path);
@@ -133,7 +369,7 @@ fn fetch_one(
         length: entry.length,
         checksum: entry.checksum,
     };
-    fetcher.fetch_file(&url, &staged, expect)?;
+    fetcher.fetch_file_with_progress(&url, &staged, expect, on_bytes)?;
     // The manifest's timestamp is the game's own bookkeeping: set it before the file
     // is visible under its real name, so nothing ever observes the wrong mtime.
     if let Some(modified) = entry.modified {
@@ -254,6 +490,22 @@ mod tests {
             }
             Ok(())
         }
+
+        fn fetch_file_with_progress(
+            &self,
+            url: &str,
+            dest: &Path,
+            expect: Expect,
+            on_bytes: &(dyn Fn(u64) + Sync),
+        ) -> Result<(), String> {
+            // Report the bytes up front, so the adaptive controller has something to
+            // sample even though the fake is instantaneous.
+            let key = url.splitn(3, '/').nth(2).unwrap_or_default();
+            if let Some(bytes) = self.files.get(key) {
+                on_bytes(bytes.len() as u64);
+            }
+            self.fetch_file(url, dest, expect)
+        }
     }
 
     fn scratch(name: &str) -> (PathBuf, PathBuf) {
@@ -297,6 +549,7 @@ mod tests {
             install_dir: &install,
             staging_dir: &staging,
             jobs: 4,
+            adaptive: None,
         };
         let logger = &test_logger(&install);
         let progress = |_, _| {};
@@ -320,6 +573,7 @@ mod tests {
             install_dir: &install,
             staging_dir: &staging,
             jobs: 2,
+            adaptive: None,
         };
         let logger = &test_logger(&install);
         let progress = |_, _| {};
@@ -349,6 +603,7 @@ mod tests {
             install_dir: &install,
             staging_dir: &staging,
             jobs: 1,
+            adaptive: None,
         };
         let logger = &test_logger(&install);
         let progress = |_, _| {};
@@ -369,6 +624,7 @@ mod tests {
             install_dir: &install,
             staging_dir: &staging,
             jobs: 3,
+            adaptive: None,
         };
         let logger = &test_logger(&install);
         let progress = |_, _| {};
@@ -386,6 +642,7 @@ mod tests {
             install_dir: &install,
             staging_dir: &staging,
             jobs: 8,
+            adaptive: None,
         };
         let logger = &test_logger(&install);
         let progress = |_, _| {};
@@ -408,6 +665,7 @@ mod tests {
             install_dir: &install,
             staging_dir: &staging,
             jobs: 2,
+            adaptive: None,
         };
         let logger = &test_logger(&install);
         let seen = Mutex::new(Vec::new());
@@ -436,6 +694,7 @@ mod tests {
             staging_dir: &staging,
             // One worker, so the order of the two files is fixed.
             jobs: 1,
+            adaptive: None,
         };
         let logger = test_logger(&install);
         let fake =
@@ -449,5 +708,63 @@ mod tests {
         // The file that did arrive is verified, so it stays; the rest is refetched.
         assert_eq!(fs::read(install.join("a")).unwrap(), a);
         assert!(!install.join("b").exists());
+    }
+
+    #[test]
+    fn the_transfer_policy_grows_on_gain_and_halves_on_loss() {
+        // First window with traffic adds a transfer; an idle one holds.
+        assert_eq!(next_desired(0, 100, 2, 8), 3);
+        assert_eq!(next_desired(0, 0, 2, 8), 2);
+        // A meaningful gain adds one, up to the ceiling.
+        assert_eq!(next_desired(100, 110, 3, 8), 4);
+        assert_eq!(next_desired(100, 110, 8, 8), 8);
+        // A gain below the threshold is treated as flat and held.
+        assert_eq!(next_desired(100, 103, 4, 8), 4);
+        // A drop below the threshold halves, never below one.
+        assert_eq!(next_desired(100, 50, 6, 8), 3);
+        assert_eq!(next_desired(100, 50, 1, 8), 1);
+        // A small dip is flat and held.
+        assert_eq!(next_desired(100, 90, 6, 8), 6);
+    }
+
+    #[test]
+    fn an_adaptive_run_finishes_every_file() {
+        let (install, staging) = scratch("adaptive");
+        // Enough files that the pool has work across several sampling windows.
+        let payload: Vec<(String, Vec<u8>)> = (0..16)
+            .map(|i| (format!("F/f{i}"), format!("file number {i}").into_bytes()))
+            .collect();
+        let files: Vec<(&str, &[u8])> = payload
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+            .collect();
+        let fake = Fake::new(&files);
+        let plan: Vec<(RelPath, FileEntry)> = payload
+            .iter()
+            .map(|(path, bytes)| {
+                (
+                    RelPath::parse(path.trim_start_matches("F/")).unwrap(),
+                    entry(bytes),
+                )
+            })
+            .collect();
+        let config = DownloadConfig {
+            folder: "F",
+            install_dir: &install,
+            staging_dir: &staging,
+            jobs: 8,
+            adaptive: Some(Adaptive {
+                start: 2,
+                window: Duration::from_millis(1),
+            }),
+        };
+        let logger = &test_logger(&install);
+        let progress = |_, _| {};
+        let count = download(&fake, &config, &plan, logger, &progress).unwrap();
+        assert_eq!(count, 16);
+        for (path, bytes) in &payload {
+            let name = path.trim_start_matches("F/");
+            assert_eq!(fs::read(install.join(name)).unwrap(), *bytes);
+        }
     }
 }

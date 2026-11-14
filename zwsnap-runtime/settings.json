@@ -3,5 +3,6 @@
   "graphics_profile": "auto",
   "disable_egl": false,
   "bluetooth_debug": false,
+  "download_adapt": true,
   "verbosity": 1
 }

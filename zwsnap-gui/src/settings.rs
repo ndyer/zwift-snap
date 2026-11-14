@@ -26,6 +26,9 @@ pub struct Settings {
     pub graphics: GraphicsSetting,
     pub disable_egl: bool,
     pub bluetooth_debug: bool,
+    /// Grow the CDN download's parallelism until the link saturates, instead of a
+    /// fixed pool. On by default; see [`crate::download::Adaptive`].
+    pub download_adapt: bool,
     pub verbosity: u8,
     /// Optional image shown behind the account picker, as a filesystem path.
     pub backdrop: Option<String>,
@@ -38,6 +41,7 @@ impl Default for Settings {
             graphics: GraphicsSetting::Auto,
             disable_egl: false,
             bluetooth_debug: false,
+            download_adapt: true,
             verbosity: 1,
             backdrop: None,
         }
@@ -117,6 +121,15 @@ impl Settings {
                 ),
             }
         }
+        if let Some(download_adapt) = object.get("download_adapt") {
+            match download_adapt.as_bool() {
+                Some(value) => settings.download_adapt = value,
+                None => eprintln!(
+                    "warning: ignoring non-boolean download_adapt in {}",
+                    path.display()
+                ),
+            }
+        }
         if let Some(verbosity) = object.get("verbosity").and_then(serde_json::Value::as_u64) {
             if verbosity <= u64::from(u8::MAX) {
                 settings.verbosity = verbosity as u8;
@@ -148,6 +161,7 @@ impl Settings {
             "graphics_profile": self.graphics.to_string(),
             "disable_egl": self.disable_egl,
             "bluetooth_debug": self.bluetooth_debug,
+            "download_adapt": self.download_adapt,
             "verbosity": self.verbosity,
         });
         if let Some(backdrop) = &self.backdrop {

@@ -93,6 +93,7 @@ impl LauncherBackend for Runtime<'_> {
             install_dir: self.install.install_dir,
             staging_dir: self.install.staging_dir,
             jobs: self.install.jobs,
+            adaptive: self.install.adaptive,
             cdn_base: self.install.cdn_base,
         };
         update::update_if_needed(&config, self.logger, &|percent, message| {
@@ -375,6 +376,7 @@ mod tests {
             tools: &tools,
             cdn_base: &cdn_base,
             jobs: 2,
+            adaptive: None,
             expected_drive_c_bytes: 0,
             sample_interval: Duration::from_secs(1),
         };

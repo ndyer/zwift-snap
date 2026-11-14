@@ -1,6 +1,7 @@
 //! Fresh Wine prefix and Zwift installation.
 
 use crate::cdn::{Expect, Remote};
+use crate::download::Adaptive;
 use crate::launch;
 use crate::logging::Logger;
 use crate::sync::{self, SyncConfig};
@@ -125,6 +126,9 @@ pub struct InstallConfig<'a> {
     pub cdn_base: &'a str,
     /// Parallel transfers.
     pub jobs: usize,
+    /// Grow the transfer count until the link saturates; `None` is a fixed pool of
+    /// `jobs`.
+    pub adaptive: Option<Adaptive>,
     /// Set to zero to disable sampling, for example when running without a GUI.
     pub expected_drive_c_bytes: u64,
     pub sample_interval: Duration,
@@ -512,6 +516,7 @@ fn install_steps(
         install_dir: config.install_dir,
         staging_dir: config.staging_dir,
         jobs: config.jobs,
+        adaptive: config.adaptive,
     };
     // The sync reports bytes; map them onto the last stretch of the bar. The GUI
     // replaces these percentages with the sampled prefix size, so the span only
@@ -679,6 +684,7 @@ mod tests {
                 tools: &self.tools,
                 cdn_base: &cdn_base,
                 jobs: 2,
+                adaptive: None,
                 expected_drive_c_bytes: 102_400,
                 sample_interval,
             };
