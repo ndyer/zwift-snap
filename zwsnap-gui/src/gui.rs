@@ -669,11 +669,11 @@ fn build_window(
                             }
                             TaskState::Done => {
                                 bar.set_fraction(1.0);
-                                // The install is over for good once every tile that
-                                // was shown has finished, so the whole area goes.
-                                let all_done = install_tiles.iter().all(|(_, tile, bar)| {
-                                    !tile.is_visible() || bar.fraction() >= 1.0
-                                });
+                                // The install is over for good once every tile has
+                                // finished, so the whole area goes.
+                                let all_done = install_bars_complete(
+                                    install_tiles.iter().map(|(_, _, bar)| bar.fraction()),
+                                );
                                 if all_done {
                                     install_area.set_visible(false);
                                 }
@@ -812,6 +812,16 @@ fn build_window(
         glib::ControlFlow::Continue
     });
     window
+}
+
+/// Whether every install tile has finished, given each tile's bar fraction.
+///
+/// The install area is hidden only then. Every task emits `Running` and later
+/// `Done`, and the tracks run in sequence and in parallel, so at any moment some
+/// bars sit at 0.0 because their task has not started yet; those must keep the
+/// area visible rather than being mistaken for finished work.
+fn install_bars_complete(fractions: impl IntoIterator<Item = f64>) -> bool {
+    fractions.into_iter().all(|fraction| fraction >= 1.0)
 }
 
 /// Refresh the remembered accounts' cards from the Zwift API in the background.
@@ -960,6 +970,16 @@ fn image_extension(url: &str) -> &str {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn the_install_area_stays_until_every_bar_is_complete() {
+        // WineSetup finishes before the parallel track's bars have appeared, so the
+        // three not-yet-started tiles still read 0.0. Treating those as finished hid
+        // the whole area and the later download bar was never seen.
+        assert!(!install_bars_complete([1.0, 0.0, 0.0, 0.0]));
+        assert!(!install_bars_complete([1.0, 1.0, 0.5, 0.0]));
+        assert!(install_bars_complete([1.0, 1.0, 1.0, 1.0]));
+    }
 
     struct StubBackend {
         calls: Arc<Mutex<Vec<&'static str>>>,
