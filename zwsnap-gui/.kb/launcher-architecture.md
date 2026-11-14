@@ -83,6 +83,54 @@ and forwards output directly to the GUI. SIGINT, SIGTERM, SIGHUP and closing the
 window cancel subprocesses and polling. Wine server cleanup has independent
 10-second command timeouts.
 
+## Screensaver inhibition
+
+Zwift runs fullscreen and never asks the session to stay awake itself: it is a
+Windows program inside wine, and the launcher only writes its display
+preferences, so nothing on the session bus inhibits the idle timer and a rider
+who moves only on the trainer can watch the screen blank mid-session. `inhibit.rs`
+therefore takes an idle inhibitor for the duration of the game and releases it
+afterwards.
+
+The inhibitor is taken in `Runtime::start` and released at the top of
+`Runtime::cleanup`, which `run_cancellable` always runs, so an aborted or failed
+launch releases it too. It lives in the `Runtime` field `inhibitor` rather than in
+a local of `start` because it has to outlive that call; `Backend` also implements
+`Drop` as a last resort, and the desktop drops the inhibitor with the session bus
+connection anyway.
+
+Only a fullscreen session inhibits, because a windowed game leaves the desktop
+visible and blanking it is unhelpful: with any other `DisplayMode`,
+`ScreenInhibitor::acquire` returns the inactive backend and logs at debug why.
+
+Two backends are tried in order, both over the session bus:
+
+- `org.freedesktop.ScreenSaver` at `/org/freedesktop/ScreenSaver`, `Inhibit(s
+  application, s reason) -> u` and `UnInhibit(u)`. This is the one KDE, GNOME's
+  screensaver proxy and most compositors answer, including Mir.
+- `org.gnome.SessionManager` at `/org/gnome/SessionManager`, `Inhibit(s app_id, u
+  toplevel_xid, s reason, u flags) -> u` and `Uninhibit(u)`, with `flags` = `4 | 8`
+  (logout and idle/screensaver). The toplevel xid is `0`, because the game window
+  belongs to wine and not to this process.
+
+Both calls are best-effort. A launch never fails because of them: when neither
+service answers, the launcher logs at debug which reasons the two attempts gave
+and carries on. When one does answer it logs the service and the cookie it was
+handed, which is also what makes the behaviour observable in `zwift.log`.
+
+Two details are easy to get wrong and produce a silently ignored inhibitor, so
+`tests/inhibit.sh` checks them against fake services (see
+`tests/.kb/inhibit-test.md`):
+
+- The parameters of a D-Bus call must be a tuple, so one-argument `UnInhibit`
+  passes `(cookie,)` and not a bare `u`.
+- The reply is a tuple of the out arguments too, even for a single `u`, so the
+  cookie comes from `reply.get::<(u32,)>()`.
+
+The snap's `zwift` app already declares and connects the
+`screen-inhibit-control` plug, which is what allows these calls under
+confinement; no packaging change is needed.
+
 ## Shared runtime support
 
 One runtime support remains in `../zwsnap-runtime/`:

@@ -247,6 +247,7 @@ pub fn run(
         wait_for_window: graphical,
         disable_egl: config.disable_egl
             && std::env::var("XDG_SESSION_TYPE").as_deref() != Ok("wayland"),
+        inhibitor: None,
         progress,
     };
     orchestration::run_cancellable(&mut runtime, ui, logger.cancellation())

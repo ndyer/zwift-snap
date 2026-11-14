@@ -38,7 +38,7 @@ from Git and fails.
 ## Which suites run, and which do not
 
 Run: `lint`, `test` (bats unit tests and the launcher's cargo tests),
-`gtk-preview`, `build`, `install`, then `bluetooth`.
+`gtk-preview`, `inhibit`, `build`, `install`, then `bluetooth`.
 
 Skipped: `smoke` and `pairing`. Both want Zwift downloaded (several GB) and a real
 Mir compositor on the host display, and a headless runner has no display to give
@@ -47,7 +47,9 @@ them. The `desktop` interface cannot be auto-connected, and Workshop skips a
 declared in `.workshop/zwift-snap.yaml` simply does not happen on a runner, and the
 launch still succeeds. `gtk-preview` is different and does run: it renders into its
 own virtual Mir output and drives the GUI from a local CDN fixture, so it needs
-neither a host display nor the network.
+neither a host display nor the network. `inhibit` runs for the same reason on a
+different axis: it fakes the session's screen-saver services on a private D-Bus
+session and never starts the launcher at all (see `tests/.kb/inhibit-test.md`).
 
 `bluetooth` needs the snap installed and `zwift:bluez` connected, which the
 workflow does explicitly first, because snapd does not auto-connect that plug.

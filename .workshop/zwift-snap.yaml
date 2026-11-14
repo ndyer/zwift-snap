@@ -68,12 +68,13 @@ actions:
   lint: |
     cd /project
     shellcheck -x zwsnap-runtime/*.sh snap/prune-closure.sh tests/smoke.sh tests/gtk-preview.sh \
-      tests/bluetooth.sh tests/pairing.sh tests/dl-cache.sh tests/tools/yarf/yarf.sh \
+      tests/bluetooth.sh tests/pairing.sh tests/dl-cache.sh tests/inhibit.sh tests/tools/yarf/yarf.sh \
       tests/tools/bluetooth/*.sh tests/tools/dl-cache/*.sh \
       tests/unit/*.bats tests/unit/test_helper.bash \
       .workshop/zwift-snap-sdk/hooks/* .workshop/zwift-snap-sdk/fetch-skills.sh \
       .workshop/zwift-snap-sdk/fetch-wine.sh
     python3 -m py_compile tests/zwift-stub.py tests/tools/yarf/*.py tests/tools/bluetooth/*.py \
+      tests/tools/inhibit/*.py \
       .workshop/zwift-snap-sdk/workshop
     yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' \
       snap/snapcraft.yaml .workshop/zwift-snap.yaml .workshop/zwift-snap-sdk/sdk.yaml \
@@ -108,6 +109,13 @@ actions:
     # the mock adapters and its authentication agent, and learns about a
     # discovered peer device. Needs the snap to be installed beforehand.
     tests/bluetooth.sh "$@"
+  inhibit: |
+    cd /project
+    # Screensaver inhibitor test: starts a fake org.freedesktop.ScreenSaver and a
+    # fake org.gnome.SessionManager in turn on a private session bus and checks
+    # that the launcher's Rust code calls Inhibit and UnInhibit on both with the
+    # right arguments. Needs no display and no installed snap.
+    tests/inhibit.sh "$@"
   pairing: |
     cd /project
     # Reaches Zwift's device pairing screen without a Zwift account: fakes the

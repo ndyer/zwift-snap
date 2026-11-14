@@ -22,10 +22,13 @@ snap/prune-closure.sh   DT_NEEDED closure walk that prunes unreachable libraries
 tests/             unit tests (bats in tests/unit, stubs in tests/unit/stubs), the visual smoke
                    test (tests/smoke.sh + tests/smoke/), the bluetooth plumbing test
                    (tests/bluetooth.sh), the pairing-screen test (tests/pairing.sh +
-                   tests/pairing/ + tests/zwift-stub.py)
+                   tests/pairing/ + tests/zwift-stub.py) and the screensaver inhibitor
+                   test (tests/inhibit.sh + zwsnap-gui/tests/inhibit.rs)
   tools/bluetooth/   bluezoo mock tooling shared by both bluetooth tests: the helper bluezoo.sh,
                    the RSSI wrapper bluezoo-run.py, the scan client bluetooth-scan.py and the
                    BLE trainer mock bluetooth-trainer.py
+  tools/inhibit/     the fake org.freedesktop.ScreenSaver / org.gnome.SessionManager the
+                   inhibitor test talks to
   tools/yarf/        yarf tooling: the screenshot/input/OCR debugging tool yarf.sh (+ screenshot.py,
                    input.py, ocr_frame.py), the OCR thread cap yarf_ocr.py and the frame dump
                    yarf_frames.py used by the robot suites

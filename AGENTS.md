@@ -21,6 +21,7 @@ IMPORTANT: Read the `.kb/agents.md` file.
 - [tests/.kb/driving-the-game-by-hand.md](tests/.kb/driving-the-game-by-hand.md) - Starting the game without the launcher script.
 - [tests/.kb/bluetooth-test.md](tests/.kb/bluetooth-test.md) - The bluezoo-backed Bluetooth plumbing test.
 - [tests/.kb/pairing-test.md](tests/.kb/pairing-test.md) - The fake-login-server pairing-screen test.
+- [tests/.kb/inhibit-test.md](tests/.kb/inhibit-test.md) - The fake-session-service screensaver inhibitor test.
 - [tests/.kb/real-auth-token-helper.md](tests/.kb/real-auth-token-helper.md) - The manual real-authentication token helper.
 - [zwsnap-gui/.kb/launcher-architecture.md](zwsnap-gui/.kb/launcher-architecture.md) - The launcher's runtime architecture.
 - [zwsnap-gui/.kb/launcher-development.md](zwsnap-gui/.kb/launcher-development.md) - Developing and testing the launcher.

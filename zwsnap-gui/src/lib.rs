@@ -8,6 +8,7 @@ pub mod display;
 pub mod download;
 pub mod gpu_test;
 pub mod graphics;
+pub mod inhibit;
 pub mod install;
 pub mod launch;
 pub mod logging;

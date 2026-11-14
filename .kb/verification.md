@@ -14,9 +14,9 @@ Before declaring a task done run `lint` and `test`. Run `smoke` when the change
 affects anything the launcher does at runtime (plugs, command-chain, wine
 environment, dialogs).
 
-CI runs `lint`, `test`, `gtk-preview`, `build`, `install` and `bluetooth` on every
-change to `main`, so a green run there covers those; `smoke` and `pairing` stay local
-because they need a host display (see `.github/.kb/edge-build-workflow.md`).
+CI runs `lint`, `test`, `gtk-preview`, `inhibit`, `build`, `install` and `bluetooth`
+on every change to `main`, so a green run there covers those; `smoke` and `pairing` stay
+local because they need a host display (see `.github/.kb/edge-build-workflow.md`).
 
 The BLE connection-interval override (`bt_tuning`) has no runnable end-to-end check:
 bluezoo mocks only the BlueZ D-Bus interface, not the raw kernel management socket that
@@ -24,6 +24,13 @@ bluezoo mocks only the BlueZ D-Bus interface, not the raw kernel management sock
 the unit tests in `bt_tuning.rs` (`cargo test`), plus — on real BLE hardware — a
 `sudo snap connect zwift:bluetooth-control` and a `btmon` capture showing the override land
 after BlueZ's 0x2a04 update.
+
+## Screensaver inhibitor
+
+The inhibitor's D-Bus marshalling is checked by `workshop run -- inhibit`, which fakes
+the session's screen-saver services on a private bus (see `tests/.kb/inhibit-test.md`).
+The matching cargo test is opt-in, so a plain `cargo test` silently skips it: run the
+workshop action, not the test binary, when touching `inhibit.rs`.
 
 ## Stale snap data
 

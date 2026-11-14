@@ -2,6 +2,7 @@
 
 use crate::display::{configure_file, DisplayMode};
 use crate::graphics::{self, Setting as GraphicsSetting};
+use crate::inhibit::ScreenInhibitor;
 use crate::install::{self, InstallConfig, InstallProgress};
 use crate::launch::{self, LaunchConfig};
 use crate::logging::Logger;
@@ -21,6 +22,10 @@ pub struct Runtime<'a> {
     pub wait_for_window: bool,
     pub disable_egl: bool,
     pub progress: &'a (dyn Fn(InstallProgress) + Sync),
+    /// The screensaver inhibitor for a fullscreen session, taken when the game
+    /// starts and released in `cleanup`. It has to outlive `start`, which is why
+    /// it lives here rather than in a local.
+    pub(crate) inhibitor: Option<ScreenInhibitor>,
 }
 
 impl LauncherBackend for Runtime<'_> {
@@ -134,6 +139,9 @@ impl LauncherBackend for Runtime<'_> {
     }
 
     fn start(&mut self) -> io::Result<()> {
+        // Taken before the game starts and held until cleanup: the desktop must not
+        // blank while the user is riding, and Zwift itself never asks for this.
+        self.inhibitor = Some(ScreenInhibitor::acquire(&self.display_mode, self.logger));
         let progress = self.progress;
         launch::start(
             &self.launch,
@@ -154,6 +162,11 @@ impl LauncherBackend for Runtime<'_> {
     }
 
     fn cleanup(&mut self) -> io::Result<()> {
+        // Release before the wine server goes down so a failure below cannot leave
+        // the screen inhibited.
+        if let Some(mut inhibitor) = self.inhibitor.take() {
+            inhibitor.release(self.logger);
+        }
         self.logger.info("Stopping wine server");
         let mut errors = Vec::new();
         let output = run_output_timeout(
@@ -388,6 +401,7 @@ mod tests {
             graphics: GraphicsSetting::GameDefault,
             wait_for_window: false,
             disable_egl: false,
+            inhibitor: None,
             progress: &progress,
         };
         #[cfg(not(feature = "gtk-ui"))]

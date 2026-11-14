@@ -147,6 +147,11 @@ jobs:
         # Renders into its own virtual Mir output, so it needs no host display.
         run: workshop run -- gtk-preview
 
+      - name: Screensaver inhibitor test
+        # Fakes the session's screen-saver services on a private D-Bus session, so it
+        # needs no desktop either.
+        run: workshop run -- inhibit
+
       - name: Build the snap
         run: workshop run -- build
 
