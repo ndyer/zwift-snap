@@ -6,6 +6,7 @@
 //! effect on the *next* launch, which the dialog says so explicitly. The status
 //! section is read-only and reports what the launcher can observe right now.
 
+use crate::accounts::Store;
 use crate::display::DisplayMode;
 use crate::graphics::Setting as GraphicsSetting;
 use crate::settings::{self as store, GpuProbe, Settings};
@@ -281,14 +282,34 @@ impl SettingsDialog {
             Some(false) => "not connected (Bluetooth will not work)",
             None => "unknown (not running inside the snap)",
         };
+        let accounts = self.accounts_summary();
         status.set_text(&format!(
             "Zwift account token: {token}\n\
+             Saved accounts: {accounts}\n\
              Bluetooth (bluez) plug: {bluez}\n\
              Settings file: {}\n\
              Wine prefix: {}",
             self.context.path.display(),
             self.context.prefix.display(),
         ));
+    }
+
+    /// A one-line summary of the remembered accounts, for the status block.
+    fn accounts_summary(&self) -> String {
+        let Some(common) = self.context.path.parent() else {
+            return "unknown".to_owned();
+        };
+        let mut saved = Store::open(common);
+        saved.load();
+        if saved.is_empty() {
+            return "none (the launcher asks you to log in)".to_owned();
+        }
+        let count = saved.accounts.len();
+        let noun = if count == 1 { "account" } else { "accounts" };
+        match saved.last_used() {
+            Some(account) => format!("{count} {noun} (last used: {})", account.name),
+            None => format!("{count} {noun}"),
+        }
     }
 
     fn wire(
@@ -389,6 +410,8 @@ impl SettingsDialog {
             disable_egl: self.disable_egl.is_active(),
             bluetooth_debug: self.bluetooth_debug.is_active(),
             verbosity: self.verbosity.value() as u8,
+            // Not edited by the dialog; keep whatever the file already had.
+            backdrop: self.context.settings.backdrop.clone(),
         })
     }
 

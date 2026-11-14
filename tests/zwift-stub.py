@@ -15,9 +15,10 @@ form posts, the field names, because the login form carries the password the use
 Protobuf message structures and API endpoints derived from
 https://github.com/fatsbrown/zwift-offline.
 
-Usage: zwift-stub.py --dir DIR --log FILE [--port 8443] [--token] [--token-file FILE] [--ready-file FILE]
+Usage: zwift-stub.py --dir DIR --log FILE [--port 8443] [--token] [--token-file FILE] [--profile-out FILE] [--ready-file FILE]
   --token       answer the OAuth token endpoint with a fake token (without it login cannot succeed)
   --token-file  write fake OAuth token JSON for ZwiftApp.exe --token (tests only)
+  --profile-out write the /api/profiles/me bytes to this file at startup (tests only)
   --ready-file  write the listening port to this file once the socket is up (and a .pid next to it)
 
 Routes the game reads real content from are listed below; everything else gets an empty answer of
@@ -163,8 +164,12 @@ def profile() -> bytes:
         pb_varint(9, 70000),  # weight_in_grams
         pb_varint(10, 200),  # ftp
         pb_bytes(33, accepted_license),  # saved_game
+        pb_varint(35, 375600),  # total_distance_in_meters
+        pb_varint(36, 2444),  # elevation_gain_in_meters
+        pb_varint(37, 834),  # time_ridden_in_minutes
         pb_varint(42, 1750),  # height_in_millimeters
         pb_varint(48, 1),  # player_type NORMAL
+        pb_varint(49, 42),  # achievement_level
         pb_varint(50, 1),  # use_metric
         pb_varint(55, 30),  # age
         *(pb_bytes(113, pb_varint(1, zlib.crc32(name.encode())) + pb_bytes(5, value))
@@ -342,6 +347,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8443)
     parser.add_argument("--token", action="store_true")
     parser.add_argument("--token-file", type=Path)
+    parser.add_argument("--profile-out", type=Path,
+                        help="write the /api/profiles/me bytes here at startup (tests only)")
     parser.add_argument("--ready-file")
     parser.parse_args(namespace=settings)
 
@@ -356,6 +363,9 @@ def main() -> None:
             # The token travels as --token=<json> on a Windows command line; keep it
             # compact so quoting cannot split it.
             settings.token_file.write_text(json.dumps(fake_token(), separators=(",", ":")))
+        if settings.profile_out:
+            # The exact bytes the game API serves, so tests can check the decoder.
+            settings.profile_out.write_bytes(profile())
         if settings.ready_file:
             Path(settings.ready_file + ".pid").write_text(f"{os.getpid()}\n")
             Path(settings.ready_file).write_text(f"{port}\n")

@@ -19,10 +19,11 @@ cleanup() {
 trap cleanup EXIT
 
 cargo build --manifest-path "${root}/zwsnap-gui/Cargo.toml" --features gtk-ui
-mkdir -p "${stage}/suite" "${stage}/close-suite" "${stage}/runtime-suite" "${stage}/out" "${runtime}/snap.yarf"
+mkdir -p "${stage}/suite" "${stage}/close-suite" "${stage}/runtime-suite" "${stage}/accounts-suite" "${stage}/out" "${runtime}/snap.yarf"
 cp "${root}/tests/gtk-preview/preview.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/suite/"
 cp "${root}/tests/gtk-preview/close.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/close-suite/"
 cp "${root}/tests/gtk-preview/runtime.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/runtime-suite/"
+cp "${root}/tests/gtk-preview/accounts.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/accounts-suite/"
 cp "${root}/tests/tools/yarf/input.py" "${stage}/"
 
 # every frame the suites capture is kept here, so a failed wait can be replayed with
@@ -182,3 +183,111 @@ grep -q 'Launcher cancelled' "${fixture}/common/zwift.log"
 grep -q '<USER_RESOLUTION_PREF>800x600</USER_RESOLUTION_PREF>' "${data}/prefs.xml"
 [[ $(cat "${fixture}/cleanup") == $'-k\n-w' ]] \
     || { echo "Real GTK worker did not clean up Wine" >&2; exit 1; }
+
+echo "Testing the account picker"
+accounts="${stage}/accounts"
+mkdir -p "${stage}/out/accounts"
+# Reuse the stub Wine fixture above: the picker's Play button must reach the
+# same launch path the login gate does.
+cp -a "${fixture}" "${accounts}"
+rm -f "${accounts}/cleanup" "${accounts}/window-ready" "${accounts}/game-running" \
+    "${accounts}/release" "${accounts}/common/zwift.log"
+# Two remembered accounts. The first is the last used one and keeps imperial
+# units, so its card is unmistakable: 2444 m of climbing is 8018 ft and
+# 834 minutes is 013:54:00. The second is metric.
+mkdir -p "${accounts}/common/accounts/first" "${accounts}/common/accounts/second"
+printf '{"access_token":"first-token"}' > "${accounts}/common/accounts/first/token.json"
+printf '{"access_token":"second-token"}' > "${accounts}/common/accounts/second/token.json"
+cat > "${accounts}/common/accounts.json" <<'JSON'
+{
+  "version": 1,
+  "last_used": "first",
+  "accounts": [
+    {
+      "id": "first",
+      "name": "Offline Tester",
+      "first_name": "Offline",
+      "last_name": "Tester",
+      "use_metric": false,
+      "distance_meters": 233400,
+      "elevation_meters": 2444,
+      "time_minutes": 834,
+      "weight_grams": 70000,
+      "ftp": 200,
+      "level": 42
+    },
+    {
+      "id": "second",
+      "name": "Second Rider",
+      "first_name": "Second",
+      "last_name": "Rider",
+      "use_metric": true,
+      "distance_meters": 1000,
+      "elevation_meters": 10,
+      "time_minutes": 5
+    }
+  ]
+}
+JSON
+# A solid-colour backdrop, so the picker paints artwork behind the cards without
+# hurting the OCR pass (no ImageMagick needed).
+python3 - "${accounts}/backdrop.png" <<'PY'
+import struct
+import sys
+import zlib
+
+width = height = 8
+row = b"\x00" + b"\x20\x30\x40" * width
+raw = row * height
+
+
+def chunk(kind, data):
+    return (struct.pack(">I", len(data)) + kind + data
+            + struct.pack(">I", zlib.crc32(kind + data)))
+
+
+png = (b"\x89PNG\r\n\x1a\n"
+       + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+       + chunk(b"IDAT", zlib.compress(raw))
+       + chunk(b"IEND", b""))
+open(sys.argv[1], "wb").write(png)
+PY
+printf '{"display_mode":"800x600","backdrop":"%s"}' "${accounts}/backdrop.png" \
+    > "${accounts}/common/settings.json"
+
+PATH="${accounts}/bin:${PATH}" SNAP="${accounts}" SNAP_USER_COMMON="${accounts}/common" \
+    WINEPREFIX="${accounts}/common/.wine" ZWIFT_LOG="${accounts}/common/zwift.log" \
+    TEST_ROOT="${accounts}" ZWIFT_NO_GUI=0 ZWIFT_POLL_INTERVAL=1 \
+    ZWIFT_CDN_BASE="file://${accounts}/cdn" \
+    "${root}/zwsnap-gui/target/debug/zwsnap-gui" \
+    > >(tee "${stage}/gui-accounts.log") 2>&1 &
+gui_pid=$!
+yarf --platform Mir "${stage}/accounts-suite" --outdir "${stage}/out/accounts" \
+    2>&1 | tee "${stage}/yarf-accounts.log"
+# Play was pressed, so the chosen account's token became the launch token and
+# the game was started with it.
+started() { [[ -f ${accounts}/window-ready && -f ${accounts}/game-running ]]; }
+for ((i = 0; i < 200; i++)); do
+    started && break
+    sleep 0.1
+done
+started || { echo "Account picker did not launch the game" >&2; exit 1; }
+[[ -f ${accounts}/common/pairing-token.json ]] \
+    || { echo "Account picker did not write the launch token" >&2; exit 1; }
+# Exactly one account was removed, and the one still stored is the one launched.
+python3 - "${accounts}/common/accounts.json" "${accounts}/common/pairing-token.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    store = json.load(source)
+accounts = store["accounts"]
+assert len(accounts) == 1, f"expected one account left, got {len(accounts)}"
+with open(sys.argv[2], encoding="utf-8") as source:
+    token = json.load(source)
+assert token["access_token"] == f"{accounts[0]['id']}-token", token
+PY
+touch "${accounts}/release"
+kill "${gui_pid}" 2>/dev/null || true
+wait "${gui_pid}" 2>/dev/null || true
+gui_pid=""

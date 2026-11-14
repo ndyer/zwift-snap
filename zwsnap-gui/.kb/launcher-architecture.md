@@ -44,6 +44,14 @@ the launch continue; an unsuccessful exchange reloads the login page so it can b
 retried, and closing the launcher cancels the wait. Remember-me cookies persist in
 `$SNAP_USER_COMMON/webkit`.
 
+When at least one rider is remembered, the login gate is answered by the account
+picker instead: a grid of rider cards over Zwift artwork, with the WebView hidden
+and rebuilt only for "Add another account". With no accounts at all the gate
+behaves exactly as described above, so first runs are unchanged. The same gate
+also adopts a pre-picker install (a launch token but no account list) as the
+first account. See `.kb/accounts-picker.md` for the store, the cards, the
+`backdrop` setting and the GTK4 traps in that code.
+
 The very first run loads the `?registration=true` variant of the embed page instead:
 the panel writes a marker at `$SNAP_USER_COMMON/first-run` on its first construction
 and treats a later run as returning. The marker is independent of login state, and a

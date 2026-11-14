@@ -27,6 +27,8 @@ pub struct Settings {
     pub disable_egl: bool,
     pub bluetooth_debug: bool,
     pub verbosity: u8,
+    /// Optional image shown behind the account picker, as a filesystem path.
+    pub backdrop: Option<String>,
 }
 
 impl Default for Settings {
@@ -37,6 +39,7 @@ impl Default for Settings {
             disable_egl: false,
             bluetooth_debug: false,
             verbosity: 1,
+            backdrop: None,
         }
     }
 }
@@ -124,19 +127,32 @@ impl Settings {
                 );
             }
         }
+        if let Some(backdrop) = object.get("backdrop") {
+            match backdrop.as_str() {
+                Some(value) if !value.is_empty() => settings.backdrop = Some(value.to_owned()),
+                Some(_) => {}
+                None => eprintln!(
+                    "warning: ignoring non-string backdrop in {}",
+                    path.display()
+                ),
+            }
+        }
         settings
     }
 
     /// Writes the settings atomically (temp file + rename) as prettified JSON,
     /// owner-only (0600).
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        let value = serde_json::json!({
+        let mut value = serde_json::json!({
             "display_mode": self.display.to_string(),
             "graphics_profile": self.graphics.to_string(),
             "disable_egl": self.disable_egl,
             "bluetooth_debug": self.bluetooth_debug,
             "verbosity": self.verbosity,
         });
+        if let Some(backdrop) = &self.backdrop {
+            value["backdrop"] = serde_json::json!(backdrop);
+        }
         let text = serde_json::to_string_pretty(&value)
             .map_err(|error| io::Error::other(error.to_string()))?;
         write_atomic(path, text.as_bytes())

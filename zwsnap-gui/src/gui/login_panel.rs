@@ -181,101 +181,25 @@ struct LoginState {
 
 /// The bottom panel: a WebKit view plus the login bookkeeping around it.
 pub struct LoginPanel {
-    webview: webkit6::WebView,
+    webview: RefCell<webkit6::WebView>,
     container: gtk::ScrolledWindow,
     state: Rc<RefCell<LoginState>>,
+    cancellation: Cancellation,
+    logger: Option<Arc<Logger>>,
 }
 
 impl LoginPanel {
-    /// Build the panel and immediately load the Zwift launcher embed page.
-    /// `logger` is the launcher's own log, used to record link handling.
+    /// Build the panel on a persistent session and immediately load the Zwift
+    /// launcher embed page. `logger` is the launcher's own log, used to record
+    /// link handling.
     pub fn new(cancellation: Cancellation, preview: bool, logger: Option<Arc<Logger>>) -> Self {
-        use webkit6::PolicyDecisionType;
-
-        let webview = super::persistent_webview().unwrap_or_default();
+        let webview = super::webview_for(super::SessionMode::Persistent);
         let state = Rc::new(RefCell::new(LoginState {
             verifier: String::new(),
             state: String::new(),
             pending: None,
         }));
-
-        // Intercept the OAuth redirect and every link the page tries to follow;
-        // the closure outlives individual logins.
-        let weak_state = Rc::downgrade(&state);
-        let cancellation = cancellation.clone();
-        webview.connect_decide_policy(move |webview, decision, decision_type| {
-            let navigating = decision_type == PolicyDecisionType::NavigationAction;
-            // A link click arrives as a navigation action and a page asking for a
-            // new window as a new-window action. Everything else is WebKit's.
-            if !navigating && decision_type != PolicyDecisionType::NewWindowAction {
-                return false;
-            }
-            let Some(mut navigation) = decision
-                .downcast_ref::<webkit6::NavigationPolicyDecision>()
-                .and_then(|decision| decision.navigation_action())
-            else {
-                return false;
-            };
-            let Some(uri) = navigation.request().and_then(|request| request.uri()) else {
-                return false;
-            };
-            if let Some(logger) = &logger {
-                let kind = if navigating {
-                    "navigation"
-                } else {
-                    "new window"
-                };
-                logger.debug(&format!("WebKit requested a {kind} to {uri}"));
-            }
-
-            if navigating {
-                if let Some(state) = weak_state.upgrade() {
-                    let expected = state.borrow().state.clone();
-                    if let Some(outcome) = redirect_outcome(uri.as_str(), &expected) {
-                        // Never let WebKit load the redirect; we consume it here.
-                        decision.ignore();
-                        match outcome {
-                            Redirect::BadState => {
-                                eprintln!("Zwift login failed: invalid OAuth state");
-                            }
-                            Redirect::Failed(error) => {
-                                match error {
-                                    Some(error) => {
-                                        eprintln!("Zwift login was not completed ({error})")
-                                    }
-                                    None => eprintln!("Zwift login was not completed"),
-                                }
-                                // Return to the login page so the user can try again.
-                                load_login_page(webview, &state);
-                            }
-                            Redirect::Code(code) => {
-                                start_exchange(webview.clone(), state, code, cancellation.clone());
-                            }
-                        }
-                        return true;
-                    }
-                }
-                // The launcher loads the Keycloak page itself and the user
-                // completes it by submitting a form; only a deliberate link
-                // click should leave the panel.
-                if navigation.navigation_type() != webkit6::NavigationType::LinkClicked {
-                    return false;
-                }
-            }
-
-            // Follow the link in the system browser instead: the panel is far too
-            // small for a web page and offers no way back.
-            let Some(url) = external_url(uri.as_str()) else {
-                if let Some(logger) = &logger {
-                    logger.debug(&format!("Leaving {uri} to WebKit"));
-                }
-                return false;
-            };
-            decision.ignore();
-            open_externally(url, logger.as_ref());
-            true
-        });
-
+        wire_webview(&webview, &state, &cancellation, &logger);
         webview.load_uri(embed_url(is_first_run(preview)));
 
         let container = gtk::ScrolledWindow::builder()
@@ -286,9 +210,11 @@ impl LoginPanel {
             .build();
 
         Self {
-            webview,
+            webview: RefCell::new(webview),
             container,
             state,
+            cancellation,
+            logger,
         }
     }
 
@@ -302,13 +228,25 @@ impl LoginPanel {
         self.state.borrow().pending.is_some()
     }
 
+    /// Rebuild the WebView on `session`, discarding whatever the previous view
+    /// held. The persistent session is the launcher's own; an ephemeral one is
+    /// used to log in an additional account, which must not inherit the current
+    /// account's SSO cookie. Pending-decision state is left untouched, so the
+    /// caller follows this with [`LoginPanel::start_login`].
+    pub fn set_session(&self, session: super::SessionMode) {
+        let webview = super::webview_for(session);
+        wire_webview(&webview, &self.state, &self.cancellation, &self.logger);
+        self.container.set_child(Some(&webview));
+        *self.webview.borrow_mut() = webview;
+    }
+
     /// Start the OAuth login, storing `decision` to be answered when it completes.
     pub fn start_login(&self, decision: mpsc::Sender<bool>) {
         {
             let mut state = self.state.borrow_mut();
             state.pending = Some(decision);
         }
-        load_login_page(&self.webview, &self.state);
+        load_login_page(&self.webview.borrow(), &self.state);
     }
 
     /// Abort a pending login without completing it (window closed or cancelled).
@@ -317,6 +255,94 @@ impl LoginPanel {
             let _ = reply.send(false);
         }
     }
+}
+
+/// Intercept the OAuth redirect and every link the page tries to follow on
+/// `webview`. The wiring outlives individual logins and is re-applied whenever a
+/// fresh WebView replaces the panel's previous one.
+fn wire_webview(
+    webview: &webkit6::WebView,
+    state: &Rc<RefCell<LoginState>>,
+    cancellation: &Cancellation,
+    logger: &Option<Arc<Logger>>,
+) {
+    use webkit6::PolicyDecisionType;
+
+    let weak_state = Rc::downgrade(state);
+    let cancellation = cancellation.clone();
+    let logger = logger.clone();
+    webview.connect_decide_policy(move |webview, decision, decision_type| {
+        let navigating = decision_type == PolicyDecisionType::NavigationAction;
+        // A link click arrives as a navigation action and a page asking for a
+        // new window as a new-window action. Everything else is WebKit's.
+        if !navigating && decision_type != PolicyDecisionType::NewWindowAction {
+            return false;
+        }
+        let Some(mut navigation) = decision
+            .downcast_ref::<webkit6::NavigationPolicyDecision>()
+            .and_then(|decision| decision.navigation_action())
+        else {
+            return false;
+        };
+        let Some(uri) = navigation.request().and_then(|request| request.uri()) else {
+            return false;
+        };
+        if let Some(logger) = &logger {
+            let kind = if navigating {
+                "navigation"
+            } else {
+                "new window"
+            };
+            logger.debug(&format!("WebKit requested a {kind} to {uri}"));
+        }
+
+        if navigating {
+            if let Some(state) = weak_state.upgrade() {
+                let expected = state.borrow().state.clone();
+                if let Some(outcome) = redirect_outcome(uri.as_str(), &expected) {
+                    // Never let WebKit load the redirect; we consume it here.
+                    decision.ignore();
+                    match outcome {
+                        Redirect::BadState => {
+                            eprintln!("Zwift login failed: invalid OAuth state");
+                        }
+                        Redirect::Failed(error) => {
+                            match error {
+                                Some(error) => {
+                                    eprintln!("Zwift login was not completed ({error})")
+                                }
+                                None => eprintln!("Zwift login was not completed"),
+                            }
+                            // Return to the login page so the user can try again.
+                            load_login_page(webview, &state);
+                        }
+                        Redirect::Code(code) => {
+                            start_exchange(webview.clone(), state, code, cancellation.clone());
+                        }
+                    }
+                    return true;
+                }
+            }
+            // The launcher loads the Keycloak page itself and the user
+            // completes it by submitting a form; only a deliberate link
+            // click should leave the panel.
+            if navigation.navigation_type() != webkit6::NavigationType::LinkClicked {
+                return false;
+            }
+        }
+
+        // Follow the link in the system browser instead: the panel is far too
+        // small for a web page and offers no way back.
+        let Some(url) = external_url(uri.as_str()) else {
+            if let Some(logger) = &logger {
+                logger.debug(&format!("Leaving {uri} to WebKit"));
+            }
+            return false;
+        };
+        decision.ignore();
+        open_externally(url, logger.as_ref());
+        true
+    });
 }
 
 /// Regenerate PKCE material and load the Keycloak authorization URL.

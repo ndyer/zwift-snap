@@ -1,10 +1,13 @@
 //! GTK frontend and channel bridge for the launcher worker.
 
+use crate::accounts::Store;
 use crate::cancel::Cancellation;
 use crate::display::DisplayMode;
 use crate::install::InstallProgress;
 use crate::logging::Logger;
+use crate::oauth;
 use crate::orchestration::{self, Failure, LauncherBackend, LauncherUi};
+use crate::profile;
 use gtk::glib;
 use gtk::prelude::*;
 use std::io;
@@ -12,9 +15,12 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 
+mod accounts_panel;
+mod backdrop;
 mod login_panel;
 mod settings;
 
+use accounts_panel::{AccountsPanel, Handlers as AccountHandlers};
 use login_panel::LoginPanel;
 use settings::SettingsDialog;
 
@@ -251,6 +257,35 @@ pub fn launch(
 
 type Completion = std::rc::Rc<std::cell::RefCell<Option<Result<(), String>>>>;
 
+/// Which WebKit session a panel runs on.
+///
+/// The launcher's own gate uses [`SessionMode::Persistent`], so Zwift's "Remember
+/// me" cookie survives a restart. Logging in a *new* account from the picker uses
+/// [`SessionMode::Ephemeral`] instead: an ephemeral session shares no cookie
+/// storage, so the current account's Keycloak SSO cookie cannot silently sign the
+/// new login back into the account already in the store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionMode {
+    /// Cookies persist in `$SNAP_USER_COMMON/webkit` across launcher runs.
+    Persistent,
+    /// No persistent cookie or cache storage; nothing survives the view.
+    Ephemeral,
+}
+
+/// Build a WebView for `session`, falling back to a default view when the
+/// persistent store cannot be prepared.
+pub(super) fn webview_for(session: SessionMode) -> webkit6::WebView {
+    match session {
+        SessionMode::Persistent => persistent_webview(),
+        SessionMode::Ephemeral => Some(
+            webkit6::WebView::builder()
+                .network_session(&webkit6::NetworkSession::new_ephemeral())
+                .build(),
+        ),
+    }
+    .unwrap_or_default()
+}
+
 /// A WebView whose cookies persist in `$SNAP_USER_COMMON/webkit`, so Zwift's
 /// "Remember me" cookie survives a launcher restart. The directory and cookie
 /// database hold live session cookies, so they are created owner-only (0700/0600),
@@ -390,11 +425,75 @@ fn build_window(
         }
     }
 
-    let panel = std::rc::Rc::new(LoginPanel::new(cancellation.clone(), preview, logger));
+    let login_panel = std::rc::Rc::new(LoginPanel::new(
+        cancellation.clone(),
+        preview,
+        logger.clone(),
+    ));
 
     // The Settings dialog is built eagerly, while hidden, so its log view exists
     // before the Logger sinks register on the worker thread.
-    let dialog = SettingsDialog::new(&window, settings);
+    let dialog = SettingsDialog::new(&window, settings.clone());
+
+    // --- Account picker ---------------------------------------------------
+    // The store and the picker live beside the launcher's own login panel: the
+    // WebView is still built (and used when no account is remembered), and the
+    // grid is shown in its place once there is at least one account to choose.
+    let common = settings
+        .path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let store = std::rc::Rc::new(std::cell::RefCell::new(Store::open(&common)));
+    let grid_decision: std::rc::Rc<std::cell::RefCell<Option<Sender<bool>>>> = Default::default();
+    let add_result: std::rc::Rc<std::cell::RefCell<Option<Receiver<bool>>>> = Default::default();
+    let backdrop_path = backdrop::resolve(
+        settings.settings.backdrop.as_deref(),
+        &common,
+        logger.as_ref(),
+    );
+
+    let accounts_panel = {
+        let select = {
+            let store = store.clone();
+            let grid_decision = grid_decision.clone();
+            Box::new(move |id: String| {
+                {
+                    let mut store = store.borrow_mut();
+                    match store.select(&id) {
+                        Ok(()) => {
+                            if let Err(error) = store.save() {
+                                eprintln!("Unable to save accounts: {error}");
+                            }
+                        }
+                        Err(error) => eprintln!("Unable to select account: {error}"),
+                    }
+                }
+                if let Some(reply) = grid_decision.borrow_mut().take() {
+                    if reply.send(true).is_err() {
+                        eprintln!("Unable to confirm account selection: worker stopped");
+                    }
+                }
+            }) as Box<dyn Fn(String)>
+        };
+        let add = {
+            let login_panel = login_panel.clone();
+            let add_result = add_result.clone();
+            Box::new(move || {
+                // A fresh, cookie-less session: the current account's SSO cookie
+                // must not silently sign the new login back into itself.
+                login_panel.set_session(SessionMode::Ephemeral);
+                let (sender, receiver) = mpsc::channel();
+                *add_result.borrow_mut() = Some(receiver);
+                login_panel.start_login(sender);
+            }) as Box<dyn Fn()>
+        };
+        AccountsPanel::new(
+            store.clone(),
+            logger.clone(),
+            AccountHandlers { select, add },
+        )
+    };
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.set_margin_top(24);
@@ -426,8 +525,25 @@ fn build_window(
     content.append(&buttons);
     content.append(&actions);
     content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    content.append(panel.widget());
-    window.set_child(Some(&content));
+    content.append(accounts_panel.widget());
+    content.append(login_panel.widget());
+    accounts_panel.widget().set_visible(false);
+
+    if let Some(path) = backdrop_path {
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&backdrop::picture(&path)));
+        let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        // The picture is dark and opaquely painted, so the light theme's dark
+        // foreground would be unreadable over it: this class flips the text to
+        // white for everything drawn on top of the backdrop.
+        holder.add_css_class("on-backdrop");
+        install_backdrop_css();
+        holder.append(&content);
+        overlay.add_overlay(&holder);
+        window.set_child(Some(&overlay));
+    } else {
+        window.set_child(Some(&content));
+    }
 
     let dialog_for_button = dialog.clone();
     open_settings.connect_clicked(move |_| dialog_for_button.present());
@@ -453,7 +569,9 @@ fn build_window(
     let close_finished = finished.clone();
     let close_title = title.clone();
     let close_buttons = buttons.clone();
-    let close_panel = panel.clone();
+    let close_panel = login_panel.clone();
+    let close_grid_decision = grid_decision.clone();
+    let close_add_result = add_result.clone();
     let close_cancellation = cancellation.clone();
     window.connect_close_request(move |_| {
         if close_finished.get() {
@@ -464,6 +582,10 @@ fn build_window(
         close_title.set_text("Stopping Zwift launcher");
         close_buttons.set_visible(false);
         close_panel.cancel_login();
+        if let Some(reply) = close_grid_decision.borrow_mut().take() {
+            let _ = reply.send(false);
+        }
+        close_add_result.borrow_mut().take();
         if let Some(reply) = pending_on_close.borrow_mut().take() {
             if reply.send(false).is_err() {
                 eprintln!("Unable to cancel launcher decision: worker stopped");
@@ -476,6 +598,26 @@ fn build_window(
     glib::timeout_add_local(Duration::from_millis(50), move || {
         if window_weak.upgrade().is_none() {
             return glib::ControlFlow::Break;
+        }
+        // A login started from the picker's "add another account" button answers
+        // through its own channel; finalise it before touching the event queue.
+        let add_outcome = add_result.borrow().as_ref().map(Receiver::try_recv);
+        match add_outcome {
+            Some(Ok(true)) => {
+                add_result.borrow_mut().take();
+                finish_add_account(&store, &accounts_panel, &grid_decision, logger.as_ref());
+                login_panel.widget().set_visible(false);
+                accounts_panel.widget().set_visible(false);
+            }
+            Some(Ok(false)) => {
+                add_result.borrow_mut().take();
+                login_panel.widget().set_visible(false);
+                accounts_panel.widget().set_visible(true);
+            }
+            Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                add_result.borrow_mut().take();
+            }
+            _ => {}
         }
         for event in events.try_iter().take(100) {
             match event {
@@ -514,13 +656,56 @@ fn build_window(
                     buttons.set_visible(true);
                 }
                 Event::LoginRequired { decision } => {
-                    if cancellation.is_cancelled() || panel.has_pending() {
+                    if cancellation.is_cancelled() || login_panel.has_pending() {
                         let _ = decision.send(false);
                         continue;
                     }
-                    title.set_text("Log in to Zwift to continue");
-                    detail.set_text("Complete the login below to continue.");
-                    panel.start_login(decision);
+                    let remembered = {
+                        {
+                            let mut guard = store.borrow_mut();
+                            guard.load();
+                            // An install from before the picker existed has a
+                            // launch token but no account list: adopt that rider
+                            // so an upgrade does not ask them to log in again.
+                            if guard.is_empty() {
+                                if let Ok(token) = guard.launch_token() {
+                                    let claims = oauth::token_claims(&token);
+                                    match guard.import_legacy(&claims) {
+                                        Ok(Some(_)) => {
+                                            if let Err(error) = guard.save() {
+                                                eprintln!("Unable to save accounts: {error}");
+                                            }
+                                        }
+                                        Ok(None) => {}
+                                        Err(error) => {
+                                            eprintln!(
+                                                "Unable to adopt the existing login: {error}"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        accounts_panel.has_accounts()
+                    };
+                    if !remembered {
+                        // First run, or every account was forgotten: fall back to
+                        // the launcher's own WebView login, unchanged.
+                        title.set_text("Log in to Zwift to continue");
+                        detail.set_text("Complete the login below to continue.");
+                        accounts_panel.widget().set_visible(false);
+                        login_panel.widget().set_visible(true);
+                        login_panel.start_login(decision);
+                        continue;
+                    }
+                    refresh_accounts(&store, &accounts_panel);
+                    accounts_panel.refresh();
+                    *grid_decision.borrow_mut() = Some(decision);
+                    title.set_text("Choose a rider");
+                    detail.set_text("Pick an account to launch Zwift, or add another.");
+                    login_panel.set_session(SessionMode::Persistent);
+                    accounts_panel.widget().set_visible(true);
+                    login_panel.widget().set_visible(false);
                 }
                 Event::GameReady => {
                     title.set_text("Zwift started");
@@ -562,6 +747,183 @@ fn build_window(
     });
     window
 }
+
+/// Refresh the remembered accounts' cards from the Zwift API in the background.
+///
+/// The picker opens with the stats cached when each account was added and then
+/// quietly updates itself. Every step is best-effort: the launcher is routinely
+/// used offline, so a failed fetch keeps the cached values and the account is
+/// left untouched.
+fn refresh_accounts(
+    store: &std::rc::Rc<std::cell::RefCell<Store>>,
+    accounts_panel: &std::rc::Rc<AccountsPanel>,
+) {
+    let jobs: Vec<(String, String)> = {
+        let store = store.borrow();
+        store
+            .accounts
+            .iter()
+            .filter_map(|account| {
+                let token = store.account_token(&account.id).ok()?;
+                let access = token.get("access_token")?.as_str()?.to_owned();
+                Some((account.id.clone(), access))
+            })
+            .collect()
+    };
+    if jobs.is_empty() {
+        return;
+    }
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let refreshed = jobs
+            .into_iter()
+            .filter_map(|(id, access)| profile::fetch(&access).ok().map(|profile| (id, profile)))
+            .collect::<Vec<_>>();
+        let _ = sender.send(refreshed);
+    });
+
+    let store = store.clone();
+    let accounts_panel = accounts_panel.clone();
+    glib::timeout_add_local(Duration::from_millis(100), move || {
+        match receiver.try_recv() {
+            Ok(refreshed) => {
+                if !refreshed.is_empty() {
+                    {
+                        let mut store = store.borrow_mut();
+                        for (id, profile) in refreshed {
+                            store.refresh(&id, &profile);
+                        }
+                        if let Err(error) = store.save() {
+                            eprintln!("Unable to save accounts: {error}");
+                        }
+                    }
+                    accounts_panel.refresh();
+                }
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        }
+    });
+}
+
+/// Record the account that just logged in through the picker's "add another
+/// account" flow, then launch with it.
+///
+/// The login writes its token to the launch token file (`pairing-token.json`),
+/// exactly as the launcher's own gate does, so this reads it back, derives the
+/// identity from its claims, fetches the profile best-effort, stores the account
+/// (token, card fields, avatar) and answers the worker's pending decision so the
+/// game starts as the new rider.
+fn finish_add_account(
+    store: &std::rc::Rc<std::cell::RefCell<Store>>,
+    accounts_panel: &std::rc::Rc<AccountsPanel>,
+    grid_decision: &std::rc::Rc<std::cell::RefCell<Option<Sender<bool>>>>,
+    logger: Option<&Arc<Logger>>,
+) {
+    let token = match store.borrow().launch_token() {
+        Ok(token) => token,
+        Err(error) => {
+            eprintln!("Unable to read the new account's token: {error}");
+            return;
+        }
+    };
+    let claims = oauth::token_claims(&token);
+    // The profile is best-effort: if the API cannot be reached the account is
+    // still remembered (with whatever the token's claims name it).
+    let profile = token
+        .get("access_token")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|access| profile::fetch(access).ok())
+        .unwrap_or_default();
+    let id = match store.borrow_mut().upsert(&token, &profile, &claims) {
+        Ok(id) => id,
+        Err(error) => {
+            eprintln!("Unable to remember the new account: {error}");
+            return;
+        }
+    };
+    if let Some(url) = profile.large_avatar_url.as_deref() {
+        match profile::fetch_image(url) {
+            Ok(bytes) => {
+                if let Err(error) =
+                    store
+                        .borrow_mut()
+                        .write_avatar(&id, &bytes, image_extension(url))
+                {
+                    if let Some(logger) = logger {
+                        logger.warning(&format!("Unable to save the account avatar: {error}"));
+                    }
+                }
+            }
+            Err(error) => {
+                if let Some(logger) = logger {
+                    logger.debug(&format!("Unable to fetch the account avatar: {error}"));
+                }
+            }
+        }
+    }
+    {
+        let mut store = store.borrow_mut();
+        if let Err(error) = store.select(&id) {
+            eprintln!("Unable to select the new account: {error}");
+        }
+        if let Err(error) = store.save() {
+            eprintln!("Unable to save accounts: {error}");
+        }
+    }
+    accounts_panel.refresh();
+    if let Some(reply) = grid_decision.borrow_mut().take() {
+        if reply.send(true).is_err() {
+            eprintln!("Unable to confirm account selection: worker stopped");
+        }
+    }
+}
+
+/// The file extension implied by an image URL's path, defaulting to `jpg`.
+fn image_extension(url: &str) -> &str {
+    let without_query = url.split(['?', '#']).next().unwrap_or(url);
+    let name = without_query.rsplit('/').next().unwrap_or("");
+    match name.rsplit_once('.') {
+        Some((_, ext)) if ext.len() <= 4 && ext.chars().all(|c| c.is_ascii_alphanumeric()) => ext,
+        _ => "jpg",
+    }
+}
+
+/// Register the CSS that keeps text legible over a backdrop image. The launcher
+/// paints the backdrop itself (see [`backdrop`]), but the theme's foreground is
+/// dark in the light theme, so labels, flat buttons and the muted lines would
+/// disappear into the artwork. Done once per display, like the picker's CSS.
+fn install_backdrop_css() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let Some(display) = gtk::gdk::Display::default() else {
+            return;
+        };
+        let provider = gtk::CssProvider::new();
+        provider.load_from_data(BACKDROP_CSS);
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    });
+}
+
+/// Styles applied to the widget tree drawn over a backdrop image. Buttons keep
+/// their own background, so only the flat ones and the labels need help.
+const BACKDROP_CSS: &str = "
+.on-backdrop {
+    color: white;
+}
+.on-backdrop .dim-label {
+    color: alpha(white, 0.75);
+}
+.on-backdrop button.flat {
+    color: white;
+}
+";
 
 #[cfg(test)]
 mod tests {

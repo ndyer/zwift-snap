@@ -123,6 +123,49 @@ pub fn save_token(token: &Value, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Identity claims read out of an access token, used to label an account card.
+///
+/// Every field is optional: a token that is not a JWT, or whose payload carries
+/// no such claim, simply yields an empty value rather than an error.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Claims {
+    pub sub: Option<String>,
+    pub preferred_username: Option<String>,
+    pub email: Option<String>,
+}
+
+/// Read the identity claims from `token`'s `access_token`. The JWT signature is
+/// deliberately *not* verified: this only labels an account whose token the
+/// OAuth exchange has already obtained. A token that is not a JWT (or whose
+/// payload is not a JSON object) yields empty claims.
+pub fn token_claims(token: &Value) -> Claims {
+    let Some(payload) = token["access_token"].as_str().and_then(jwt_payload) else {
+        return Claims::default();
+    };
+    let string = |name: &str| {
+        payload
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    Claims {
+        sub: string("sub"),
+        preferred_username: string("preferred_username"),
+        email: string("email"),
+    }
+}
+
+/// Decode the payload (the middle, dot-separated segment) of a JWT into JSON.
+/// Returns `None` unless that segment is base64url-decodable JSON, so a token
+/// in any other shape is tolerated rather than rejected.
+fn jwt_payload(jwt: &str) -> Option<Value> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    let payload = jwt.split('.').nth(1)?.trim_end_matches('=');
+    let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 /// Exchange an authorization code for a token and save it to the standard token path.
 pub fn exchange_and_save(code: &str, verifier: &str) -> Result<(), String> {
     let token = exchange_code_for_token(code, verifier)?;
@@ -134,7 +177,9 @@ pub fn exchange_and_save(code: &str, verifier: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::describe_token_error;
+    use super::{describe_token_error, token_claims, Claims};
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use serde_json::json;
 
     #[test]
     fn token_error_shows_error_and_description() {
@@ -159,5 +204,69 @@ mod tests {
             describe_token_error(502, "<html>bad gateway</html>"),
             "Token request failed (HTTP 502)"
         );
+    }
+
+    /// Build a token whose `access_token` is a JWT carrying `payload`.
+    fn token_with_payload(payload: &serde_json::Value) -> serde_json::Value {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256"}"#);
+        let body = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
+        json!({ "access_token": format!("{header}.{body}.signature") })
+    }
+
+    #[test]
+    fn claims_are_read_from_the_jwt_payload() {
+        let token = token_with_payload(&json!({
+            "sub": "abc-123",
+            "preferred_username": "sara.campbell",
+            "email": "sara@example.com"
+        }));
+        assert_eq!(
+            token_claims(&token),
+            Claims {
+                sub: Some("abc-123".to_owned()),
+                preferred_username: Some("sara.campbell".to_owned()),
+                email: Some("sara@example.com".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn missing_or_empty_claims_are_none() {
+        let token = token_with_payload(&json!({ "sub": "", "email": 42 }));
+        assert_eq!(
+            token_claims(&token),
+            Claims {
+                sub: None,
+                preferred_username: None,
+                email: None,
+            }
+        );
+    }
+
+    #[test]
+    fn padded_payload_is_accepted() {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
+        let body = URL_SAFE_NO_PAD.encode(br#"{"sub":"x"}"#);
+        let token = json!({ "access_token": format!("{header}.{body}=.sig") });
+        assert_eq!(token_claims(&token).sub.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn non_jwt_tokens_yield_empty_claims() {
+        for value in [
+            json!({ "access_token": "not-a-jwt" }),
+            json!({ "access_token": "a.@@@.c" }),
+            json!({ "refresh_token": "abc" }),
+            json!({ "access_token": 7 }),
+            json!(null),
+        ] {
+            assert_eq!(token_claims(&value), Claims::default());
+        }
+    }
+
+    #[test]
+    fn non_object_payload_yields_empty_claims() {
+        let token = token_with_payload(&json!(["not", "an", "object"]));
+        assert_eq!(token_claims(&token), Claims::default());
     }
 }

@@ -32,6 +32,9 @@ pub struct Config {
     pub disable_egl: bool,
     pub bluetooth_debug: bool,
     pub verbosity: u8,
+    /// Optional image shown behind the account picker (`backdrop` in
+    /// `settings.json`).
+    pub backdrop: Option<String>,
     pub color: bool,
     pub poll_interval: Duration,
     /// The CDN root the game is downloaded from; `ZWIFT_CDN_BASE` overrides it,
@@ -123,6 +126,7 @@ impl Config {
             disable_egl: settings.disable_egl,
             bluetooth_debug: settings.bluetooth_debug,
             verbosity: settings.verbosity,
+            backdrop: settings.backdrop.clone(),
             color: flag("COLORED_OUTPUT", 0)?,
             poll_interval: Duration::from_secs(number("ZWIFT_POLL_INTERVAL", 5)?),
             cdn_base: match value("ZWIFT_CDN_BASE") {
@@ -316,6 +320,7 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
                         disable_egl: config.disable_egl,
                         bluetooth_debug: config.bluetooth_debug,
                         verbosity: config.verbosity,
+                        backdrop: config.backdrop.clone(),
                     },
                 };
                 return crate::gui::launch(

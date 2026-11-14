@@ -1,0 +1,35 @@
+*** Settings ***
+Documentation    Exercises the account picker against two remembered accounts.
+Resource         kvm.resource
+Library          yarf_ocr.py
+# saves every frame the suite captures when YARF_FRAME_DIR is set, for debugging failures
+Library          yarf_frames.py
+
+*** Test Cases ***
+Picker Shows Remembered Accounts, Removes One And Launches The Rest
+    # Two seeded accounts: the first is the last used one and shows imperial
+    # stats, the second is metric. Both cards must be on screen.
+    Match Text    Choose a rider    45
+    Match Text    Offline Tester    20
+    Match Text    Second Rider    20
+    # The first account's chips: 2444 m of climbing and 834 minutes ridden.
+    Match Text    8018 ft    20
+    Match Text    013:54:00    20
+    # Remove the first card (whichever one that is) and confirm the dialog.
+    Click Target    Remove
+    Match Text    Remove this account?    20
+    Click Target    Remove account
+    # The grid is rebuilt once the account is gone; let it repaint before the
+    # next click is measured against it.
+    Sleep    1s
+    # One account is gone, the other one is launchable.
+    Click Target    Play
+
+*** Keywords ***
+Click Target
+    [Arguments]    ${target}
+    Move Pointer To ${target}
+    Sleep    100ms
+    Press LEFT Button
+    Sleep    100ms
+    Release LEFT Button

@@ -23,6 +23,7 @@ IMPORTANT: Read the `.kb/agents.md` file.
 - [tests/.kb/pairing-test.md](tests/.kb/pairing-test.md) - The fake-login-server pairing-screen test.
 - [tests/.kb/inhibit-test.md](tests/.kb/inhibit-test.md) - The fake-session-service screensaver inhibitor test.
 - [tests/.kb/real-auth-token-helper.md](tests/.kb/real-auth-token-helper.md) - The manual real-authentication token helper.
+- [zwsnap-gui/.kb/accounts-picker.md](zwsnap-gui/.kb/accounts-picker.md) - The multi-account store and the rider picker.
 - [zwsnap-gui/.kb/launcher-architecture.md](zwsnap-gui/.kb/launcher-architecture.md) - The launcher's runtime architecture.
 - [zwsnap-gui/.kb/launcher-development.md](zwsnap-gui/.kb/launcher-development.md) - Developing and testing the launcher.
 - [zwsnap-gui/.kb/bluetooth-connection-interval.md](zwsnap-gui/.kb/bluetooth-connection-interval.md) - The opt-in BLE connection-interval override gated on `bluetooth-control`.

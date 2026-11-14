@@ -48,6 +48,22 @@ the workshop, which has no URL handler.
 - When probing cookies, log names, flags, expiry and length, or a hash prefix. Never log values:
   they are session secrets and would end up in `zwift.log`.
 
+## Remembered accounts
+
+The launcher remembers several riders itself, because the flow above yields one
+token at a time. Each login is exchanged exactly as described, then stored as an
+account under `$SNAP_USER_COMMON/accounts/<hex id>/` along with its avatar and
+the profile fields a picker card needs. Selecting an account copies its token
+over `$SNAP_USER_COMMON/pairing-token.json`, which stays the only token the rest
+of the launcher reads, so nothing downstream knows about accounts at all.
+
+Two consequences matter here. Adding another account runs the same OAuth flow in
+a cookie-less ephemeral WebView, so the current rider's remember-me cookies
+cannot silently sign the new login back into the same account. And an install
+from before the picker (a token but no account list) is adopted as the first
+account when the gate opens, so upgrading does not force a fresh login. Details
+in `.kb/accounts-picker.md`.
+
 ## zoffline reference (fatsbrown/zwift-offline)
 
 A clone of [fatsbrown/zwift-offline](https://github.com/fatsbrown/zwift-offline), the maintained fork of

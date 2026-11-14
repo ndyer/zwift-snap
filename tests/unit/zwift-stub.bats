@@ -136,3 +136,62 @@ with subprocess.Popen([
 PY
     assert_success
 }
+
+@test "stub --profile-out writes the /api/profiles/me bytes with identity and career stats" {
+    run python3 - "${ROOT}/tests/zwift-stub.py" "${BATS_TEST_TMPDIR}" <<'PY'
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+directory = Path(sys.argv[2])
+ready = directory / "ready"
+profile_out = directory / "profile.bin"
+with subprocess.Popen([
+    sys.executable, sys.argv[1], "--dir", str(directory), "--log", str(directory / "requests.log"),
+    "--port", "0", "--profile-out", str(profile_out), "--ready-file", str(ready),
+], stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+    try:
+        deadline = time.monotonic() + 15
+        while not ready.exists():
+            assert process.poll() is None, process.communicate()
+            assert time.monotonic() < deadline, "stub did not become ready"
+            time.sleep(0.05)
+    finally:
+        process.terminate()
+        process.communicate(timeout=5)
+
+
+def varint(data, offset):
+    value = shift = 0
+    while True:
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 127) << shift
+        if byte < 128:
+            return value, offset
+        shift += 7
+
+
+def fields(data):
+    offset = 0
+    while offset < len(data):
+        tag, offset = varint(data, offset)
+        if tag & 7 == 0:
+            value, offset = varint(data, offset)
+        else:
+            assert tag & 7 == 2, f"unexpected wire type: {tag & 7}"
+            size, offset = varint(data, offset)
+            value = data[offset:offset + size]
+            assert len(value) == size
+            offset += size
+        yield tag >> 3, value
+
+
+profile = dict(fields(profile_out.read_bytes()))
+assert profile[4] == b"Offline"
+assert profile[5] == b"Tester"
+assert profile[35] == 375600  # total_distance_in_meters
+PY
+    assert_success
+}
