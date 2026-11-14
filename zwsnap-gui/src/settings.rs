@@ -191,12 +191,16 @@ fn make_private(path: &Path) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
 }
 
-/// Whether the given snap interface plug is connected, via `snapctl`. Returns
-/// `None` when `snapctl` is unavailable (e.g. the launcher is not running inside
-/// the snap), so the caller can distinguish "unknown" from "no".
+/// Whether the given snap interface plug is connected, via `snapctl is-connected`
+/// (which exits 0 only when the plug is connected). Returns `None` when `snapctl`
+/// cannot be run at all, so the caller can distinguish "unknown" from "no". The
+/// child's stdio is discarded: outside the snap `snapctl` prints an error and
+/// exits non-zero, which must not reach the launcher's own output.
 pub fn snap_is_connected(plug: &str) -> Option<bool> {
     let status = std::process::Command::new("snapctl")
         .args(["is-connected", plug])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .ok()?;
     Some(status.success())
