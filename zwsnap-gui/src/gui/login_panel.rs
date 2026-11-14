@@ -5,8 +5,9 @@
 //! launcher reaches its login gate it asks the panel to start the OAuth login;
 //! the panel loads the Keycloak authorization URL and, once WebKit navigates to
 //! the `http://zwift/?code=...` redirect, exchanges the code for a token and
-//! unblocks the worker. The page content is never replaced after login (the game
-//! window takes over instead).
+//! unblocks the worker. The login page is only ever shown *in place of* the embed
+//! while a login is in progress; once it succeeds the embed page is put back (see
+//! [`LoginPanel::show_embed`]).
 //!
 //! Links in the page are handed to the system browser with `xdg-open` rather than
 //! followed inside the panel, which is far too small for a web page.
@@ -249,6 +250,14 @@ impl LoginPanel {
         load_login_page(&self.webview.borrow(), &self.state);
     }
 
+    /// Put the launcher's embed page back after a login replaced it. The WebView
+    /// is rebuilt on the persistent session first, so an embed restored after an
+    /// "add another account" login no longer carries that login's cookies.
+    pub fn show_embed(&self) {
+        self.set_session(super::SessionMode::Persistent);
+        self.webview.borrow().load_uri(EMBED_URL);
+    }
+
     /// Abort a pending login without completing it (window closed or cancelled).
     pub fn cancel_login(&self) {
         if let Some(reply) = self.state.borrow_mut().pending.take() {
@@ -387,6 +396,9 @@ fn start_exchange(
                 if let Some(reply) = state.borrow_mut().pending.take() {
                     let _ = reply.send(true);
                 }
+                // The login succeeded: put the embed page back in place of the
+                // login page. The caller swaps in a persistent view afterwards.
+                webview.load_uri(EMBED_URL);
             }
             Err(error) => {
                 eprintln!("Zwift login failed: {error}");

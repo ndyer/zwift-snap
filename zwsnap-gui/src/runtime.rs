@@ -3,7 +3,7 @@
 use crate::display::{configure_file, DisplayMode};
 use crate::graphics::{self, Setting as GraphicsSetting};
 use crate::inhibit::ScreenInhibitor;
-use crate::install::{self, InstallConfig, InstallProgress};
+use crate::install::{self, InstallConfig, InstallProgress, InstallTask, TaskState};
 use crate::launch::{self, LaunchConfig};
 use crate::logging::Logger;
 use crate::orchestration::LauncherBackend;
@@ -97,10 +97,22 @@ impl LauncherBackend for Runtime<'_> {
             cdn_base: self.install.cdn_base,
         };
         update::update_if_needed(&config, self.logger, &|percent, message| {
-            progress(InstallProgress::Phase {
-                percent,
-                message: message.to_string(),
-            })
+            // Nothing is downloaded while the served version is read, so the check
+            // has no fraction and only names the status line. The transfer that
+            // follows reports its percentage on the game tile, which therefore
+            // appears one step later than on a fresh install.
+            let event = if message == update::CHECK_MESSAGE {
+                InstallProgress::Task {
+                    task: InstallTask::UpdateCheck,
+                    state: TaskState::Running,
+                }
+            } else {
+                InstallProgress::Task {
+                    task: InstallTask::Game,
+                    state: TaskState::Fraction(percent.min(99)),
+                }
+            };
+            progress(event)
         })
         .map(|_| ())
         .map_err(io::Error::other)
@@ -148,9 +160,8 @@ impl LauncherBackend for Runtime<'_> {
             &self.launch,
             self.logger,
             self.wait_for_window,
-            &mut |percent, message| {
-                progress(InstallProgress::Phase {
-                    percent,
+            &mut |_percent, message| {
+                progress(InstallProgress::Launch {
                     message: message.to_string(),
                 })
             },
@@ -377,8 +388,6 @@ mod tests {
             cdn_base: &cdn_base,
             jobs: 2,
             adaptive: None,
-            expected_drive_c_bytes: 0,
-            sample_interval: Duration::from_secs(1),
         };
         let launch = LaunchConfig {
             wine_prefix: &prefix,
@@ -443,7 +452,7 @@ mod tests {
             });
             assert!(received.iter().any(|event| matches!(
                 event,
-                crate::gui::Event::Progress(InstallProgress::Phase { percent: 95, .. })
+                crate::gui::Event::Progress(InstallProgress::Launch { .. })
             )));
             assert!(received
                 .iter()
@@ -475,7 +484,7 @@ mod tests {
             .lock()
             .unwrap()
             .iter()
-            .any(|event| matches!(event, InstallProgress::Phase { percent: 95, .. })));
+            .any(|event| matches!(event, InstallProgress::Launch { .. })));
         fs::remove_dir_all(dir).unwrap();
     }
 }

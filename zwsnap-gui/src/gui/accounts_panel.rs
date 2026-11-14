@@ -5,8 +5,8 @@
 //! three stat chips the app shows (total distance, elevation gain, total ride
 //! time) and a muted line with level, FTP and weight. An orange play button
 //! launches that account; a Remove action forgets it. The card used last gets a
-//! "Last used" pill and is focused, so Enter relaunches it. A footer button adds
-//! a new account by logging in.
+//! "Last used" pill and is focused, so Enter relaunches it. A footer button on
+//! the right-hand side adds a new account by logging in.
 //!
 //! The panel owns the [`Store`] and rebuilds the grid from it on
 //! [`AccountsPanel::refresh`]; selecting and removing are the panel's own
@@ -32,7 +32,8 @@ pub struct Handlers {
     pub add: Box<dyn Fn()>,
 }
 
-/// The picker: a scrolled grid of cards plus the "add account" footer.
+/// The picker: a scrolled grid of cards plus the right-aligned "add account"
+/// footer.
 pub struct AccountsPanel {
     root: gtk::Box,
     flow: gtk::FlowBox,
@@ -74,9 +75,9 @@ impl AccountsPanel {
 
         let add_button = gtk::Button::with_label("Add another account");
         add_button.add_css_class("add-account");
-        add_button.set_halign(gtk::Align::Center);
+        add_button.set_halign(gtk::Align::End);
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        footer.set_halign(gtk::Align::Center);
+        footer.set_halign(gtk::Align::End);
         footer.set_margin_top(6);
         footer.append(&add_button);
 

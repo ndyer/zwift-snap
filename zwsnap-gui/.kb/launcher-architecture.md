@@ -28,6 +28,43 @@ default in `settings.json`) the pool grows toward that ceiling until the link
 saturates instead of running a fixed count. See `.kb/zwift-cdn-sync.md` for the full
 description.
 
+## Install progress
+
+The window moves through three phases: the install area, the account/login gate,
+and the launch spinner. `install.rs` defines a small event protocol in
+`InstallProgress`:
+
+- `InstallProgress::Task { task, state }`, where `task` is one of five
+  `InstallTask`s (`WineSetup`, `D3dCompiler`, `Vulkan`, `UpdateCheck`, `Game`) and
+  `state` is `Running`, `Fraction(u8)` (0..=99) or `Done`. `UpdateCheck` is the only
+  tile-less one: nothing is transferred while the served version is read, so it has
+  no fraction and is over in a moment; it only names the status line.
+- `InstallProgress::Launch { message }`, emitted as the game starts.
+
+On a fresh install the Wine prefix is created first (`wineboot`, serial, because
+the game's paths depend on it), then two tracks run concurrently on a
+`std::thread::scope`: `install_prerequisites` (the d3dcompiler then the Vulkan
+renderer) and `install_game` (the CDN sync). The game track reports byte progress
+as `Fraction`; the prerequisite tracks pulse while `Running` and go green on
+`Done`, because there is no byte count to sample (`ZWIFT_EXPECTED_DRIVE_C_BYTES`
+and `ZWIFT_PROGRESS_INTERVAL`, and the drive_c size sampler they configured, were
+removed). An update drives the `Game` task, preceded by `UpdateCheck`.
+
+Only transitions reach the log, never the ticks: `application.rs`'s `log_progress`
+records a task starting and a transfer's ten-percent milestones
+(`Downloading Zwift: 40%`), because the game transfer reports once per downloaded
+file and would otherwise fill the log with one line per file.
+
+Because the tracks run in parallel, task events interleave and no fixed order is
+guaranteed; consumers must not assume one.
+
+The GUI renders one tile per task in a horizontal, homogeneous row. Each tile is
+built hidden and revealed when its task first reports progress; `Running` pulses
+it, `Fraction` and `Done` set the bar. The whole install area hides once every
+*visible* tile has reached `1.0`, so the update path (only the `Game` tile) works.
+It also hides when the login gate opens or the launch begins. `Launch` reveals a
+spinner (`launch_area`) with the message, stopped again on `GameReady`.
+
 ## Window, display mode and login panel
 
 The GTK window and game share the `display_mode` setting (`settings.json`,
@@ -41,18 +78,20 @@ actions (see `gui/settings.rs`).
 A WebKitGTK 6.0 panel is always shown in the bottom section of the window: it starts
 on Zwift's launcher embed page and, once installation/update finishes and the login
 gate opens, navigates automatically to the OAuth sign-in page (PKCE and state
-validation protect the exchange). A successful login leaves the page as-is and lets
-the launch continue; an unsuccessful exchange reloads the login page so it can be
-retried, and closing the launcher cancels the wait. Remember-me cookies persist in
+validation protect the exchange). A successful login puts the embed page back and lets the launch continue; an
+unsuccessful exchange reloads the login page so it can be retried, and closing the
+launcher cancels the wait. Remember-me cookies persist in
 `$SNAP_USER_COMMON/webkit`.
 
 When at least one rider is remembered, the login gate is answered by the account
-picker instead: a grid of rider cards over Zwift artwork, with the WebView hidden
-and rebuilt only for "Add another account". With no accounts at all the gate
-behaves exactly as described above, so first runs are unchanged. The same gate
-also adopts a pre-picker install (a launch token but no account list) as the
-first account. See `.kb/accounts-picker.md` for the store, the cards, the
-`backdrop` setting and the GTK4 traps in that code.
+picker instead: a grid of rider cards appears at the top of the window, where the
+install tiles were, above the WebView, which keeps showing its embed page. The
+WebView leaves that page only for the gate's own login or "Add another account",
+and `LoginPanel::show_embed` puts it back once the login succeeds. With no
+accounts at all the gate behaves exactly as described above, so first runs are
+unchanged. The same gate also adopts a pre-picker install (a launch token but no
+account list) as the first account. See `.kb/accounts-picker.md` for the store,
+the cards and the GTK4 traps in that code.
 
 The very first run loads the `?registration=true` variant of the embed page instead:
 the panel writes a marker at `$SNAP_USER_COMMON/first-run` on its first construction

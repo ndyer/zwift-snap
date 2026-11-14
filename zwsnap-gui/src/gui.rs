@@ -3,7 +3,7 @@
 use crate::accounts::Store;
 use crate::cancel::Cancellation;
 use crate::display::DisplayMode;
-use crate::install::InstallProgress;
+use crate::install::{InstallProgress, InstallTask, TaskState};
 use crate::logging::Logger;
 use crate::oauth;
 use crate::orchestration::{self, Failure, LauncherBackend, LauncherUi};
@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 mod accounts_panel;
-mod backdrop;
 mod login_panel;
 mod settings;
 
@@ -173,10 +172,6 @@ impl LauncherBackend for PreviewBackend {
     fn prepare(&mut self) -> Result<(), Self::Error> {
         self.ui
             .log("Preview only: no Wine commands are run.\n".into());
-        self.ui.progress(InstallProgress::Phase {
-            percent: 8,
-            message: "Preparing Zwift".into(),
-        });
         Ok(())
     }
 
@@ -187,12 +182,19 @@ impl LauncherBackend for PreviewBackend {
     fn install(&mut self) -> Result<(), Self::Error> {
         if !self.failed_once {
             self.ui.cancellation.wait(Duration::from_millis(500))?;
-            self.ui.progress(InstallProgress::Sample(42));
+            self.ui.progress(InstallProgress::Task {
+                task: InstallTask::Game,
+                state: TaskState::Fraction(42),
+            });
             self.ui.log("Example installer output\n".into());
             self.failed_once = true;
             Err(io::Error::other("Example installation error"))
         } else {
             self.installed = true;
+            self.ui.progress(InstallProgress::Task {
+                task: InstallTask::Game,
+                state: TaskState::Done,
+            });
             Ok(())
         }
     }
@@ -206,8 +208,7 @@ impl LauncherBackend for PreviewBackend {
     }
 
     fn start(&mut self) -> Result<(), Self::Error> {
-        self.ui.progress(InstallProgress::Phase {
-            percent: 95,
+        self.ui.progress(InstallProgress::Launch {
             message: "Starting Zwift".into(),
         });
         Ok(())
@@ -436,9 +437,11 @@ fn build_window(
     let dialog = SettingsDialog::new(&window, settings.clone());
 
     // --- Account picker ---------------------------------------------------
-    // The store and the picker live beside the launcher's own login panel: the
-    // WebView is still built (and used when no account is remembered), and the
-    // grid is shown in its place once there is at least one account to choose.
+    // The picker sits above the launcher's own login panel: once at least one
+    // account is remembered the grid appears at the top (where the install
+    // tiles were) and the WebView keeps showing its embed page below. With no
+    // account remembered the WebView shows the login page and the grid stays
+    // hidden.
     let common = settings
         .path
         .parent()
@@ -447,11 +450,6 @@ fn build_window(
     let store = std::rc::Rc::new(std::cell::RefCell::new(Store::open(&common)));
     let grid_decision: std::rc::Rc<std::cell::RefCell<Option<Sender<bool>>>> = Default::default();
     let add_result: std::rc::Rc<std::cell::RefCell<Option<Receiver<bool>>>> = Default::default();
-    let backdrop_path = backdrop::resolve(
-        settings.settings.backdrop.as_deref(),
-        &common,
-        logger.as_ref(),
-    );
 
     let accounts_panel = {
         let select = {
@@ -503,8 +501,46 @@ fn build_window(
     let title = gtk::Label::new(Some("Getting Zwift ready"));
     title.set_wrap(true);
     title.set_xalign(0.0);
-    let progress = gtk::ProgressBar::new();
-    progress.set_show_text(true);
+
+    // One tile per install task, laid out in a row so the parallel tracks are
+    // visible side by side. Every tile is built up front, hidden, and revealed when
+    // its task first reports progress; the row disappears once they are all done.
+    let install_tiles: [(InstallTask, gtk::Box, gtk::ProgressBar); 4] = [
+        InstallTask::WineSetup,
+        InstallTask::D3dCompiler,
+        InstallTask::Vulkan,
+        InstallTask::Game,
+    ]
+    .map(|task| {
+        let tile = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        tile.set_hexpand(true);
+        let label = gtk::Label::new(Some(task.label()));
+        label.set_wrap(true);
+        label.set_xalign(0.0);
+        let bar = gtk::ProgressBar::new();
+        bar.set_show_text(true);
+        tile.append(&label);
+        tile.append(&bar);
+        tile.set_visible(false);
+        (task, tile, bar)
+    });
+    let install_area = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    install_area.set_homogeneous(true);
+    for (_, tile, _) in &install_tiles {
+        install_area.append(tile);
+    }
+
+    // The launch spinner replaces the install tiles once the game is starting.
+    let launch_spinner = gtk::Spinner::new();
+    let launch_status = gtk::Label::new(None);
+    launch_status.set_wrap(true);
+    launch_status.set_xalign(0.0);
+    launch_status.set_hexpand(true);
+    let launch_area = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    launch_area.append(&launch_spinner);
+    launch_area.append(&launch_status);
+    launch_area.set_visible(false);
+
     let detail = gtk::Label::new(None);
     detail.set_wrap(true);
     detail.set_xalign(0.0);
@@ -520,30 +556,18 @@ fn build_window(
     open_settings.set_hexpand(true);
     actions.append(&open_settings);
     content.append(&title);
-    content.append(&progress);
+    content.append(&install_area);
+    // The picker takes the top spot the install tiles occupied; both sit above
+    // the WebView, which keeps showing its embed page at the bottom.
+    content.append(accounts_panel.widget());
+    content.append(&launch_area);
     content.append(&detail);
     content.append(&buttons);
     content.append(&actions);
-    content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    content.append(accounts_panel.widget());
     content.append(login_panel.widget());
     accounts_panel.widget().set_visible(false);
 
-    if let Some(path) = backdrop_path {
-        let overlay = gtk::Overlay::new();
-        overlay.set_child(Some(&backdrop::picture(&path)));
-        let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        // The picture is dark and opaquely painted, so the light theme's dark
-        // foreground would be unreadable over it: this class flips the text to
-        // white for everything drawn on top of the backdrop.
-        holder.add_css_class("on-backdrop");
-        install_backdrop_css();
-        holder.append(&content);
-        overlay.add_overlay(&holder);
-        window.set_child(Some(&overlay));
-    } else {
-        window.set_child(Some(&content));
-    }
+    window.set_child(Some(&content));
 
     let dialog_for_button = dialog.clone();
     open_settings.connect_clicked(move |_| dialog_for_button.present());
@@ -606,12 +630,15 @@ fn build_window(
             Some(Ok(true)) => {
                 add_result.borrow_mut().take();
                 finish_add_account(&store, &accounts_panel, &grid_decision, logger.as_ref());
-                login_panel.widget().set_visible(false);
-                accounts_panel.widget().set_visible(false);
+                // The login page was only shown to add the account: put the embed
+                // page back now that the login has succeeded.
+                login_panel.show_embed();
             }
             Some(Ok(false)) => {
                 add_result.borrow_mut().take();
-                login_panel.widget().set_visible(false);
+                // The added login was cancelled or failed: back to the embed page
+                // with the picker still showing.
+                login_panel.show_embed();
                 accounts_panel.widget().set_visible(true);
             }
             Some(Err(mpsc::TryRecvError::Disconnected)) => {
@@ -621,12 +648,45 @@ fn build_window(
         }
         for event in events.try_iter().take(100) {
             match event {
-                Event::Progress(InstallProgress::Phase { percent, message }) => {
-                    title.set_text(&message);
-                    progress.set_fraction(f64::from(percent.min(99)) / 100.0);
+                Event::Progress(InstallProgress::Task { task, state }) => {
+                    // The heading names the step in hand, including the update
+                    // check, which has no tile of its own.
+                    if title.text().as_str() != task.label() {
+                        title.set_text(task.label());
+                    }
+                    for (candidate, tile, bar) in &install_tiles {
+                        if *candidate != task {
+                            continue;
+                        }
+                        tile.set_visible(true);
+                        match state {
+                            TaskState::Running => {
+                                bar.set_fraction(0.0);
+                                bar.pulse();
+                            }
+                            TaskState::Fraction(percent) => {
+                                bar.set_fraction(f64::from(percent.min(99)) / 100.0);
+                            }
+                            TaskState::Done => {
+                                bar.set_fraction(1.0);
+                                // The install is over for good once every tile that
+                                // was shown has finished, so the whole area goes.
+                                let all_done = install_tiles.iter().all(|(_, tile, bar)| {
+                                    !tile.is_visible() || bar.fraction() >= 1.0
+                                });
+                                if all_done {
+                                    install_area.set_visible(false);
+                                }
+                            }
+                        }
+                    }
                 }
-                Event::Progress(InstallProgress::Sample(percent)) => {
-                    progress.set_fraction(f64::from(percent.min(99)) / 100.0);
+                Event::Progress(InstallProgress::Launch { message }) => {
+                    install_area.set_visible(false);
+                    launch_area.set_visible(true);
+                    launch_spinner.start();
+                    launch_status.set_text(&message);
+                    title.set_text(&message);
                 }
                 Event::Log(text) => {
                     dialog.append_log(&text);
@@ -660,6 +720,9 @@ fn build_window(
                         let _ = decision.send(false);
                         continue;
                     }
+                    // The install tiles have served their purpose; the picker or
+                    // the WebView login takes over the window from here.
+                    install_area.set_visible(false);
                     let remembered = {
                         {
                             let mut guard = store.borrow_mut();
@@ -689,12 +752,14 @@ fn build_window(
                         accounts_panel.has_accounts()
                     };
                     if !remembered {
-                        // First run, or every account was forgotten: fall back to
-                        // the launcher's own WebView login, unchanged.
-                        title.set_text("Log in to Zwift to continue");
-                        detail.set_text("Complete the login below to continue.");
-                        accounts_panel.widget().set_visible(false);
-                        login_panel.widget().set_visible(true);
+                        // First run, or every account was forgotten: the WebView
+                        // loads the launcher's login page. This and "add another
+                        // account" are the only times the embed page is replaced;
+                        // it is put back once the login succeeds. Clear the
+                        // heading first, so the last install message ("Downloading
+                        // Zwift") does not linger over the login page, which
+                        // carries its own prompt.
+                        title.set_text("");
                         login_panel.start_login(decision);
                         continue;
                     }
@@ -703,12 +768,13 @@ fn build_window(
                     *grid_decision.borrow_mut() = Some(decision);
                     title.set_text("Choose a rider");
                     detail.set_text("Pick an account to launch Zwift, or add another.");
-                    login_panel.set_session(SessionMode::Persistent);
+                    // The grid appears at the top; the WebView keeps its embed page.
                     accounts_panel.widget().set_visible(true);
-                    login_panel.widget().set_visible(false);
                 }
                 Event::GameReady => {
                     title.set_text("Zwift started");
+                    launch_spinner.stop();
+                    launch_area.set_visible(false);
                     if !preview {
                         if let Some(window) = window_weak.upgrade() {
                             window.set_visible(false);
@@ -890,41 +956,6 @@ fn image_extension(url: &str) -> &str {
     }
 }
 
-/// Register the CSS that keeps text legible over a backdrop image. The launcher
-/// paints the backdrop itself (see [`backdrop`]), but the theme's foreground is
-/// dark in the light theme, so labels, flat buttons and the muted lines would
-/// disappear into the artwork. Done once per display, like the picker's CSS.
-fn install_backdrop_css() {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let Some(display) = gtk::gdk::Display::default() else {
-            return;
-        };
-        let provider = gtk::CssProvider::new();
-        provider.load_from_data(BACKDROP_CSS);
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    });
-}
-
-/// Styles applied to the widget tree drawn over a backdrop image. Buttons keep
-/// their own background, so only the flat ones and the labels need help.
-const BACKDROP_CSS: &str = "
-.on-backdrop {
-    color: white;
-}
-.on-backdrop .dim-label {
-    color: alpha(white, 0.75);
-}
-.on-backdrop button.flat {
-    color: white;
-}
-";
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1099,12 +1130,18 @@ mod tests {
         let (events, receiver) = mpsc::channel();
         let thread = std::thread::spawn(move || {
             let mut ui = WorkerUi::new(events);
-            ui.progress(InstallProgress::Sample(35));
+            ui.progress(InstallProgress::Task {
+                task: InstallTask::Game,
+                state: TaskState::Fraction(35),
+            });
             ui.failure(Failure::Update, "network error")
         });
         assert!(matches!(
             receiver.recv().unwrap(),
-            Event::Progress(InstallProgress::Sample(35))
+            Event::Progress(InstallProgress::Task {
+                task: InstallTask::Game,
+                state: TaskState::Fraction(35)
+            })
         ));
         match receiver.recv().unwrap() {
             Event::Failure {

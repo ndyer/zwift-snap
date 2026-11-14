@@ -439,8 +439,6 @@ impl SettingsDialog {
             bluetooth_debug: self.bluetooth_debug.is_active(),
             download_adapt: self.download_adapt.is_active(),
             verbosity: self.verbosity.value() as u8,
-            // Not edited by the dialog; keep whatever the file already had.
-            backdrop: self.context.settings.backdrop.clone(),
         })
     }
 

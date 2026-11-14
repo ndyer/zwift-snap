@@ -229,31 +229,7 @@ cat > "${accounts}/common/accounts.json" <<'JSON'
   ]
 }
 JSON
-# A solid-colour backdrop, so the picker paints artwork behind the cards without
-# hurting the OCR pass (no ImageMagick needed).
-python3 - "${accounts}/backdrop.png" <<'PY'
-import struct
-import sys
-import zlib
-
-width = height = 8
-row = b"\x00" + b"\x20\x30\x40" * width
-raw = row * height
-
-
-def chunk(kind, data):
-    return (struct.pack(">I", len(data)) + kind + data
-            + struct.pack(">I", zlib.crc32(kind + data)))
-
-
-png = (b"\x89PNG\r\n\x1a\n"
-       + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-       + chunk(b"IDAT", zlib.compress(raw))
-       + chunk(b"IEND", b""))
-open(sys.argv[1], "wb").write(png)
-PY
-printf '{"display_mode":"800x600","backdrop":"%s"}' "${accounts}/backdrop.png" \
-    > "${accounts}/common/settings.json"
+printf '{"display_mode":"800x600"}' > "${accounts}/common/settings.json"
 
 PATH="${accounts}/bin:${PATH}" SNAP="${accounts}" SNAP_USER_COMMON="${accounts}/common" \
     WINEPREFIX="${accounts}/common/.wine" ZWIFT_LOG="${accounts}/common/zwift.log" \

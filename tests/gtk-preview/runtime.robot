@@ -7,8 +7,13 @@ Library          yarf_frames.py
 
 *** Test Cases ***
 Real Lifecycle Shows Output And Waits At The Login Gate
-    Match Text    Log in to Zwift    45
-    Match Text    Complete the login below    20
+    # The fixture's install is already current, so the update transfers nothing
+    # and the launcher settles at its login gate. The launcher shows no heading of
+    # its own there, so the gate is proved by its WebView: the embed page is only
+    # a marketing slider, and its login form ("Remember me") appears solely on the
+    # sign-in page the gate navigates to.
+    Match Text    Settings    45
+    Match Text    Remember me    60
     Click Target    Settings
     Match Text    Show log    20
     Click Target    Show log
@@ -18,7 +23,7 @@ Real Lifecycle Shows Output And Waits At The Login Gate
     # never closes. Dismiss it here, before the suite ends.
     Match Text    Close    20
     Click Target    Close
-    Match Text    Log in to Zwift    20
+    Match Text    Remember me    20
 
 *** Keywords ***
 Click Target

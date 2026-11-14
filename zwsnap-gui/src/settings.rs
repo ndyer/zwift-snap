@@ -30,8 +30,6 @@ pub struct Settings {
     /// fixed pool. On by default; see [`crate::download::Adaptive`].
     pub download_adapt: bool,
     pub verbosity: u8,
-    /// Optional image shown behind the account picker, as a filesystem path.
-    pub backdrop: Option<String>,
 }
 
 impl Default for Settings {
@@ -43,7 +41,6 @@ impl Default for Settings {
             bluetooth_debug: false,
             download_adapt: true,
             verbosity: 1,
-            backdrop: None,
         }
     }
 }
@@ -140,23 +137,13 @@ impl Settings {
                 );
             }
         }
-        if let Some(backdrop) = object.get("backdrop") {
-            match backdrop.as_str() {
-                Some(value) if !value.is_empty() => settings.backdrop = Some(value.to_owned()),
-                Some(_) => {}
-                None => eprintln!(
-                    "warning: ignoring non-string backdrop in {}",
-                    path.display()
-                ),
-            }
-        }
         settings
     }
 
     /// Writes the settings atomically (temp file + rename) as prettified JSON,
     /// owner-only (0600).
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        let mut value = serde_json::json!({
+        let value = serde_json::json!({
             "display_mode": self.display.to_string(),
             "graphics_profile": self.graphics.to_string(),
             "disable_egl": self.disable_egl,
@@ -164,9 +151,6 @@ impl Settings {
             "download_adapt": self.download_adapt,
             "verbosity": self.verbosity,
         });
-        if let Some(backdrop) = &self.backdrop {
-            value["backdrop"] = serde_json::json!(backdrop);
-        }
         let text = serde_json::to_string_pretty(&value)
             .map_err(|error| io::Error::other(error.to_string()))?;
         write_atomic(path, text.as_bytes())

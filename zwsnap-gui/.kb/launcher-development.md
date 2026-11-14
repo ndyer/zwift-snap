@@ -30,9 +30,9 @@ workshop run build
 modes, plus the real lifecycle against stub Wine: the update check that finds the
 stub CDN's version already installed, live logs, the mandatory login gate (nothing
 launches before it) and the cancellation cleanup. Its last stage seeds two
-remembered accounts and drives the picker: the cards render over a fixture
-backdrop, one account is removed through the confirmation dialog, and playing
-the other actually starts the stub game with that account's token. Rust unit
+remembered accounts and drives the picker: the cards render, one account is
+removed through the confirmation dialog, and playing the other actually starts
+the stub game with that account's token. Rust unit
 tests
 verify that the worker cannot start the game before login confirmation and reads
 fresh token JSON only at launch. Integration tests execute the binary in terminal

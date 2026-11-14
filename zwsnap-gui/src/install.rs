@@ -6,16 +6,10 @@ use crate::launch;
 use crate::logging::Logger;
 use crate::sync::{self, SyncConfig};
 use crate::wine_tools::Tools;
-use std::collections::HashSet;
 use std::fs;
 use std::io::{self, ErrorKind};
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
-use std::sync::mpsc;
-use std::time::Duration;
-
-pub const EXPECTED_DRIVE_C_BYTES: u64 = 8_537_613_774;
 
 /// Where the Direct3D shader compiler's redistributable is downloaded from.
 ///
@@ -89,6 +83,9 @@ const WINE_PREREQUISITES: [Prerequisite; 1] = [Prerequisite {
 /// Progress message for the registry-only Vulkan prerequisite.
 const VULKAN_MESSAGE: &str = "Enabling the Vulkan renderer for video routes";
 
+/// Progress message for the Zwift game transfer.
+const GAME_MESSAGE: &str = "Downloading Zwift";
+
 /// `d3dcompiler_47` is loaded by the game instead of Wine's builtin, so the DLL is
 /// overridden to `native`. The leading `*` matches the form winetricks wrote.
 const DLLOVERRIDE_REG: &str =
@@ -98,11 +95,58 @@ const DLLOVERRIDE_REG: &str =
 const VULKAN_REG: &str =
     "[HKEY_CURRENT_USER\\Software\\Wine\\Direct3D]\r\n\"renderer\"=\"vulkan\"\r\n";
 
-/// Phase messages are independent of sampled percentages during a fresh install.
+/// One named step of the launcher's work. Every step but [`InstallTask::UpdateCheck`]
+/// gets a progress-bar tile of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallTask {
+    /// Creating and updating the Wine prefix (`wineboot`).
+    WineSetup,
+    /// The native `d3dcompiler_47` the game loads.
+    D3dCompiler,
+    /// Selecting Wine's Vulkan Direct3D renderer.
+    Vulkan,
+    /// Reading the version the CDN serves, to decide what to transfer.
+    ///
+    /// A check has no measurable fraction and is over in a moment, so it draws no
+    /// bar: it only names the status line. It is an update's first step and never
+    /// part of a fresh install.
+    UpdateCheck,
+    /// The Zwift game itself, fetched from the CDN.
+    Game,
+}
+
+impl InstallTask {
+    /// The label shown beside the task's progress bar, and in the status line.
+    pub fn label(self) -> &'static str {
+        match self {
+            InstallTask::WineSetup => "Setting up Wine",
+            InstallTask::D3dCompiler => WINE_PREREQUISITES[0].message,
+            InstallTask::Vulkan => VULKAN_MESSAGE,
+            InstallTask::UpdateCheck => crate::update::CHECK_MESSAGE,
+            InstallTask::Game => GAME_MESSAGE,
+        }
+    }
+}
+
+/// How far along one [`InstallTask`] is. A task with no measurable fraction pulses
+/// while [`TaskState::Running`] and completes with [`TaskState::Done`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskState {
+    /// In progress with no measurable fraction; the bar pulses.
+    Running,
+    /// In progress with a measured percentage, 0 to 99.
+    Fraction(u8),
+    /// Finished successfully.
+    Done,
+}
+
+/// Progress updates sent from the installer to the UI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstallProgress {
-    Phase { percent: u8, message: String },
-    Sample(u8),
+    /// A per-task update for one of the install bars.
+    Task { task: InstallTask, state: TaskState },
+    /// A message shown while the game starts, once the install bars are gone.
+    Launch { message: String },
 }
 
 pub struct InstallConfig<'a> {
@@ -129,9 +173,6 @@ pub struct InstallConfig<'a> {
     /// Grow the transfer count until the link saturates; `None` is a fixed pool of
     /// `jobs`.
     pub adaptive: Option<Adaptive>,
-    /// Set to zero to disable sampling, for example when running without a GUI.
-    pub expected_drive_c_bytes: u64,
-    pub sample_interval: Duration,
 }
 
 fn run(command: &mut Command, logger: &Logger, label: &str) -> io::Result<()> {
@@ -267,34 +308,13 @@ pub fn make_user_dirs_private(prefix: &Path, logger: &Logger) -> io::Result<()> 
     Ok(())
 }
 
-/// Apparent size like `du -sb`, without following symlinks or counting hardlinks twice.
-fn apparent_size(path: &Path, seen: &mut HashSet<(u64, u64)>) -> io::Result<u64> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(error),
-    };
-    if !seen.insert((metadata.dev(), metadata.ino())) {
-        return Ok(0);
-    }
-    let mut size = metadata.len();
-    if metadata.is_dir() {
-        for entry in fs::read_dir(path)? {
-            size = size.saturating_add(apparent_size(&entry?.path(), seen)?);
-        }
-    }
-    Ok(size)
-}
-
-fn sample_percent(bytes: u64, expected: u64, previous: u8) -> u8 {
-    let percent = (u128::from(bytes) * 99 / u128::from(expected)).min(99) as u8;
-    percent.max(previous)
-}
-
 /// Install Wine prerequisites, the Zwift launcher, and the game.
 ///
-/// The progress callback must be thread-safe: size samples arrive from a worker
-/// thread, while the remaining phase updates arrive from the calling thread.
+/// `wineboot` runs first because the game and its prerequisites are written inside
+/// the prefix it creates. The prerequisite track and the game transfer then run
+/// concurrently on scoped threads, so the progress callback is called from more
+/// than one thread and must be thread-safe. Both tracks are always joined; the
+/// prerequisite track's error takes precedence.
 pub fn install(
     config: &InstallConfig<'_>,
     logger: &Logger,
@@ -309,96 +329,66 @@ pub fn install(
             "Wine prefix, snap data and Zwift installation paths must be absolute",
         ));
     }
-    if config.expected_drive_c_bytes > 0 && config.sample_interval.is_zero() {
-        return Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "install progress sample interval must be nonzero",
-        ));
-    }
-    let sampled = std::sync::Mutex::new(0);
-    let report = |event| {
-        let mut sampled = sampled.lock().expect("install progress lock poisoned");
-        let event = match event {
-            InstallProgress::Sample(percent) => {
-                *sampled = percent;
-                InstallProgress::Sample(percent)
-            }
-            InstallProgress::Phase { message, .. } if config.expected_drive_c_bytes > 0 => {
-                InstallProgress::Phase {
-                    percent: *sampled,
-                    message,
-                }
-            }
-            event => event,
-        };
-        progress(event);
-    };
-    let progress = &report;
+    install_wine_prefix(config, logger, progress)?;
     std::thread::scope(|scope| {
-        let (stop, receiver) = mpsc::channel();
-        let (ready, ready_receiver) = mpsc::sync_channel(0);
-        let sampler = if config.expected_drive_c_bytes > 0 {
-            Some(scope.spawn(move || {
-                let mut previous = 0;
-                let mut milestone = 0;
-                let mut ready = Some(ready);
-                loop {
-                    match apparent_size(&config.wine_prefix.join("drive_c"), &mut HashSet::new()) {
-                        Ok(bytes) => {
-                            previous =
-                                sample_percent(bytes, config.expected_drive_c_bytes, previous);
-                            progress(InstallProgress::Sample(previous));
-                            if previous / 10 > milestone {
-                                milestone = previous / 10;
-                                logger.info(&format!("Install progress: {previous}%"));
-                            }
-                        }
-                        Err(error) => {
-                            logger.warning(&format!("Unable to sample install progress: {error}"))
-                        }
-                    }
-                    if let Some(ready) = ready.take() {
-                        let _ = ready.send(());
-                    }
-                    match receiver.recv_timeout(config.sample_interval) {
-                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                        Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    }
-                }
-            }))
-        } else {
-            None
-        };
-        if sampler.is_some() {
-            ready_receiver
-                .recv()
-                .expect("install progress sampler failed to start");
-        }
-        let result = install_steps(config, logger, progress);
-        drop(stop);
-        if let Some(sampler) = sampler {
-            sampler.join().expect("install progress sampler panicked");
-        }
-        result
+        let prerequisites = scope.spawn(|| install_prerequisites(config, logger, progress));
+        let game = scope.spawn(|| install_game(config, logger, progress));
+        let prerequisites_result = prerequisites.join().expect("prerequisite track panicked");
+        let game_result = game.join().expect("game track panicked");
+        prerequisites_result.and(game_result)
     })
 }
 
+/// A per-task progress event, for brevity at the call sites.
+fn task(task: InstallTask, state: TaskState) -> InstallProgress {
+    InstallProgress::Task { task, state }
+}
+
+/// The percentage of a byte transfer, capped below 100 until [`TaskState::Done`].
+fn fraction(done: u64, total: u64) -> TaskState {
+    let percent = if total == 0 {
+        0
+    } else {
+        (u128::from(done) * 100 / u128::from(total)).min(99) as u8
+    };
+    TaskState::Fraction(percent)
+}
+
+/// Create the Wine prefix and lock down its per-user directories.
+fn install_wine_prefix(
+    config: &InstallConfig<'_>,
+    logger: &Logger,
+    progress: &(impl Fn(InstallProgress) + Sync),
+) -> io::Result<()> {
+    progress(task(InstallTask::WineSetup, TaskState::Running));
+    run(
+        Command::new(config.wineboot)
+            .env("WINEPREFIX", config.wine_prefix)
+            .env("WINEDLLOVERRIDES", "mscoree,mshtml=;winemenubuilder.exe=d")
+            .arg("-u"),
+        logger,
+        "wineboot",
+    )?;
+    make_user_dirs_private(config.wine_prefix, logger)?;
+    progress(task(InstallTask::WineSetup, TaskState::Done));
+    Ok(())
+}
+
 /// Install the Wine prerequisites a fresh prefix needs.
+///
+/// The two steps share the prefix's registry, so they run one after the other.
 fn install_prerequisites(
     config: &InstallConfig<'_>,
     logger: &Logger,
     progress: &(impl Fn(InstallProgress) + Sync),
 ) -> io::Result<()> {
-    progress(InstallProgress::Phase {
-        percent: 10,
-        message: WINE_PREREQUISITES[0].message.to_string(),
-    });
+    progress(task(InstallTask::D3dCompiler, TaskState::Running));
     install_d3dcompiler(config, logger)?;
-    progress(InstallProgress::Phase {
-        percent: 20,
-        message: VULKAN_MESSAGE.to_string(),
-    });
-    configure_vulkan_renderer(config, logger)
+    progress(task(InstallTask::D3dCompiler, TaskState::Done));
+    progress(task(InstallTask::Vulkan, TaskState::Running));
+    configure_vulkan_renderer(config, logger)?;
+    progress(task(InstallTask::Vulkan, TaskState::Done));
+    Ok(())
 }
 
 /// Download the Direct3D shader compiler, install it, and override it to `native`.
@@ -487,30 +477,13 @@ fn write_registry(
     result
 }
 
-fn install_steps(
+/// Fetch the game from the CDN and replace its own launcher with the shim.
+fn install_game(
     config: &InstallConfig<'_>,
     logger: &Logger,
     progress: &(impl Fn(InstallProgress) + Sync),
 ) -> io::Result<()> {
-    let phase = |percent, message: &str| {
-        progress(InstallProgress::Phase {
-            percent,
-            message: message.to_string(),
-        })
-    };
-    phase(2, "Setting up wine");
-    run(
-        Command::new(config.wineboot)
-            .env("WINEPREFIX", config.wine_prefix)
-            .env("WINEDLLOVERRIDES", "mscoree,mshtml=;winemenubuilder.exe=d")
-            .arg("-u"),
-        logger,
-        "wineboot",
-    )?;
-    make_user_dirs_private(config.wine_prefix, logger)?;
-    install_prerequisites(config, logger, progress)?;
-
-    phase(80, "Downloading Zwift");
+    progress(task(InstallTask::Game, TaskState::Running));
     let fetcher = Remote::new(config.cdn_base);
     let sync_config = SyncConfig {
         install_dir: config.install_dir,
@@ -518,16 +491,8 @@ fn install_steps(
         jobs: config.jobs,
         adaptive: config.adaptive,
     };
-    // The sync reports bytes; map them onto the last stretch of the bar. The GUI
-    // replaces these percentages with the sampled prefix size, so the span only
-    // matters when running without one.
     let reporting = |done: u64, total: u64| {
-        let share = if total == 0 {
-            0
-        } else {
-            ((u128::from(done) * 18) / u128::from(total)).min(18) as u8
-        };
-        phase(80 + share, "Downloading Zwift");
+        progress(task(InstallTask::Game, fraction(done, total)));
     };
     sync::sync(&fetcher, &sync_config, logger, &reporting)
         .map_err(|error| io::Error::other(format!("Unable to download Zwift: {error}")))?;
@@ -540,6 +505,7 @@ fn install_steps(
             "The Zwift download finished but ZwiftApp.exe is missing",
         ));
     }
+    progress(task(InstallTask::Game, TaskState::Done));
     Ok(())
 }
 
@@ -618,8 +584,7 @@ mod tests {
                      \tcase \"$1\" in\n\t\t-F) inner=\"$2\"; shift 2;;\n\t\t-d) out=\"$2\"; shift 2;;\n\t\t*) shift;;\n\tesac\ndone\n\
                      mkdir -p \"$out\"\nprintf dll > \"$out/$inner\"\n\
                      echo \"cabextract $inner\" >> '{0}/calls'\n\
-                     test ! -f '{0}/fail-cabextract'\n\
-                     if [ -f '{0}/grow-prefix' ]; then dd if=/dev/zero of='{0}/prefix/drive_c/growth' bs=4096 count=16 2>/dev/null; sleep 0.2; fi",
+                     test ! -f '{0}/fail-cabextract'",
                     dir.display()
                 ),
             );
@@ -647,15 +612,11 @@ mod tests {
             }
         }
 
-        fn run(&self, sample_interval: Duration) -> (io::Result<()>, Vec<InstallProgress>) {
-            self.run_with_cdn(sample_interval, None)
+        fn run(&self) -> (io::Result<()>, Vec<InstallProgress>) {
+            self.run_with_cdn(None)
         }
 
-        fn run_with_cdn(
-            &self,
-            sample_interval: Duration,
-            cdn_base: Option<&str>,
-        ) -> (io::Result<()>, Vec<InstallProgress>) {
+        fn run_with_cdn(&self, cdn_base: Option<&str>) -> (io::Result<()>, Vec<InstallProgress>) {
             let prefix = self.dir.join("prefix");
             let common = self.dir.join("common");
             let game = self.dir.join("game");
@@ -685,8 +646,6 @@ mod tests {
                 cdn_base: &cdn_base,
                 jobs: 2,
                 adaptive: None,
-                expected_drive_c_bytes: 102_400,
-                sample_interval,
             };
             let events = Mutex::new(Vec::new());
             let result = install(&config, &logger, &|event| {
@@ -717,7 +676,7 @@ mod tests {
     #[test]
     fn fresh_install_executes_steps_and_downloads_game() {
         let fixture = Fixture::new("success");
-        let (result, events) = fixture.run(Duration::from_secs(30));
+        let (result, events) = fixture.run();
         result.unwrap();
         // wineboot, then the prerequisite cabinet is extracted and its two registry
         // files imported. The game is fetched over the CDN, so no further wine process
@@ -741,25 +700,43 @@ mod tests {
             "dll"
         );
         assert!(fixture.dir.join("prefix").join(D3DCOMPILER_PROOF).is_file());
-        let messages: Vec<_> = events
-            .iter()
-            .filter_map(|event| match event {
-                InstallProgress::Phase { message, .. } => Some(message.as_str()),
-                InstallProgress::Sample(_) => None,
-            })
-            .collect();
-        assert_eq!(
-            &messages[..4],
-            [
-                "Setting up wine",
-                "Installing the Direct3D shader compiler",
-                "Enabling the Vulkan renderer for video routes",
-                "Downloading Zwift",
-            ]
-        );
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, InstallProgress::Sample(_))));
+        // Every task starts and every task finishes. The prerequisite and game
+        // tracks run concurrently, so the events interleave and only the set matters.
+        let mut started = Vec::new();
+        let mut finished = Vec::new();
+        for event in &events {
+            if let InstallProgress::Task { task, state } = event {
+                if !started.contains(task) {
+                    started.push(*task);
+                }
+                if *state == TaskState::Done {
+                    finished.push(*task);
+                }
+            }
+        }
+        for task in [
+            InstallTask::WineSetup,
+            InstallTask::D3dCompiler,
+            InstallTask::Vulkan,
+            InstallTask::Game,
+        ] {
+            assert!(
+                started.contains(&task),
+                "{task:?} never started: {events:?}"
+            );
+            assert!(
+                finished.contains(&task),
+                "{task:?} never finished: {events:?}"
+            );
+        }
+        // The game transfer reports its own fraction as it goes.
+        assert!(events.iter().any(|event| matches!(
+            event,
+            InstallProgress::Task {
+                task: InstallTask::Game,
+                state: TaskState::Fraction(_)
+            }
+        )));
         // The manifest's files landed in the game directory, the version file was
         // written, and the program's own ZwiftLauncher.exe was replaced by the shim.
         assert_eq!(
@@ -789,7 +766,7 @@ mod tests {
     #[test]
     fn a_prefix_already_at_the_served_version_downloads_nothing() {
         // A restored game tree (or a reinstall triggered by a missing prerequisite
-        // proof) leaves the game at the served version before install_steps runs.
+        // proof) leaves the game at the served version before the install runs.
         // Nothing must be transferred then: the local file is left untouched.
         let fixture = Fixture::new("preinstalled");
         let game = fixture.dir.join("game");
@@ -818,7 +795,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let (result, _) = fixture.run(Duration::from_secs(30));
+        let (result, _) = fixture.run();
         result.unwrap();
         assert_eq!(
             fs::read_to_string(fixture.game("ZwiftApp.exe")).unwrap(),
@@ -842,15 +819,16 @@ mod tests {
     }
 
     #[test]
-    fn failure_stops_before_downloading_and_sampler_terminates() {
+    fn a_prerequisite_failure_fails_the_install() {
+        // The prerequisite and game tracks run concurrently, so the game may still
+        // have been fetched; the prefix track's error is the one that is returned.
         let fixture = Fixture::new("cabextract");
         fs::write(fixture.dir.join("fail-cabextract"), "").unwrap();
-        let (result, _) = fixture.run(Duration::from_secs(30));
+        let (result, _) = fixture.run();
         assert!(result
             .unwrap_err()
             .to_string()
             .contains(&format!("cabextract {D3DCOMPILER_CAB}")));
-        assert!(!fixture.game("ZwiftApp.exe").exists());
     }
 
     #[test]
@@ -859,19 +837,11 @@ mod tests {
         // populated cache or a truncated upload looks like.
         let fixture = Fixture::new("transfer");
         fs::remove_file(fixture.dir.join("cdn/v1/data/Worlds/world.txt")).unwrap();
-        let (result, _) = fixture.run(Duration::from_secs(30));
+        let (result, _) = fixture.run();
         let error = result.unwrap_err().to_string();
         assert!(error.contains("Unable to download Zwift"), "{error}");
         assert!(error.contains("world.txt"), "{error}");
         assert!(!fixture.game("ZwiftLauncher.exe").exists());
-    }
-
-    #[test]
-    fn sampler_is_monotonic_and_capped() {
-        assert_eq!(sample_percent(0, 100, 0), 0);
-        assert_eq!(sample_percent(50, 100, 0), 49);
-        assert_eq!(sample_percent(1, 100, 49), 49);
-        assert_eq!(sample_percent(u64::MAX, 1, 49), 99);
     }
 
     #[test]
@@ -904,14 +874,6 @@ mod tests {
     }
 
     #[test]
-    fn zero_sampling_interval_is_rejected_before_start() {
-        let fixture = Fixture::new("interval");
-        let (result, _) = fixture.run(Duration::ZERO);
-        assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
-        assert!(!fixture.dir.join("calls").exists());
-    }
-
-    #[test]
     fn resolves_and_privatizes_an_existing_prefix() {
         let fixture = Fixture::new("existing-prefix");
         let prefix = fixture.dir.join("prefix");
@@ -940,7 +902,7 @@ mod tests {
     fn fresh_install_fails_if_version_lookup_fails() {
         let fixture = Fixture::new("version");
         fs::remove_file(fixture.dir.join("cdn/Zwift_ver_cur.xml")).unwrap();
-        let (result, _) = fixture.run(Duration::from_secs(30));
+        let (result, _) = fixture.run();
         let error = result.unwrap_err().to_string();
         assert!(error.contains("Unable to download Zwift"), "{error}");
         assert!(error.contains("Zwift_ver_cur.xml"), "{error}");
@@ -951,7 +913,7 @@ mod tests {
     fn an_unwritable_cdn_base_fails_instead_of_installing_nothing() {
         let fixture = Fixture::new("bad-base");
         let base = format!("file://{}", fixture.dir.join("absent").display());
-        let (result, _) = fixture.run_with_cdn(Duration::from_secs(30), Some(&base));
+        let (result, _) = fixture.run_with_cdn(Some(&base));
         assert!(result
             .unwrap_err()
             .to_string()
@@ -963,39 +925,11 @@ mod tests {
         // The CDN can serve a manifest whose files are incomplete; the launcher must
         // not report a fresh install as done without the binary it launches.
         let fixture = Fixture::with_cdn("missing-game", &[("data/Worlds/world.txt", "world")]);
-        let (result, _) = fixture.run(Duration::from_secs(30));
+        let (result, _) = fixture.run();
         assert!(result
             .unwrap_err()
             .to_string()
             .contains("ZwiftApp.exe is missing"));
-    }
-
-    #[test]
-    fn sampler_observes_prefix_growth_and_stops_on_completion() {
-        let fixture = Fixture::new("growth");
-        fs::write(fixture.dir.join("grow-prefix"), "").unwrap();
-        let (result, events) = fixture.run(Duration::from_millis(20));
-        result.unwrap();
-        let samples: Vec<_> = events
-            .iter()
-            .filter_map(|event| match event {
-                InstallProgress::Sample(percent) => Some(*percent),
-                _ => None,
-            })
-            .collect();
-        assert!(samples.len() > 2);
-        assert!(samples.last().unwrap() > samples.first().unwrap());
-        assert!(samples.windows(2).all(|pair| pair[0] <= pair[1]));
-        assert!(samples.iter().all(|percent| *percent <= 99));
-        let percentages: Vec<_> = events
-            .iter()
-            .map(|event| match event {
-                InstallProgress::Sample(percent) | InstallProgress::Phase { percent, .. } => {
-                    *percent
-                }
-            })
-            .collect();
-        assert!(percentages.windows(2).all(|pair| pair[0] <= pair[1]));
     }
 
     #[test]
@@ -1038,7 +972,7 @@ mod tests {
         let proof = fixture.dir.join("prefix").join(D3DCOMPILER_PROOF);
         fs::create_dir_all(proof.parent().unwrap()).unwrap();
         fs::write(&proof, "sentinel").unwrap();
-        let (result, _) = fixture.run(Duration::from_secs(30));
+        let (result, _) = fixture.run();
         result.unwrap();
         assert!(
             !fixture.calls().contains("cabextract"),

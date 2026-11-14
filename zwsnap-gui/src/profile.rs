@@ -30,7 +30,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// A profile response is a single small message; anything larger is a mistake.
 const MAX_PROFILE_BYTES: u64 = 1 << 20;
 
-/// Avatars and backdrops are images; allow generously but not unboundedly.
+/// Avatars are images; allow generously but not unboundedly.
 const MAX_IMAGE_BYTES: u64 = 8 << 20;
 
 /// The rider's profile, reduced to the fields the account cards use. Protobuf

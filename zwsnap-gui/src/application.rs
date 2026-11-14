@@ -6,7 +6,7 @@ use crate::display::DisplayMode;
 use crate::download::Adaptive;
 use crate::graphics::Setting as GraphicsSetting;
 use crate::install::{
-    d3dcompiler_expect, InstallConfig, InstallProgress, D3DCOMPILER_BASE, EXPECTED_DRIVE_C_BYTES,
+    d3dcompiler_expect, InstallConfig, InstallProgress, TaskState, D3DCOMPILER_BASE,
 };
 use crate::launch::LaunchConfig;
 use crate::logging::Logger;
@@ -17,6 +17,7 @@ use crate::wine_tools::Tools;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,17 +37,12 @@ pub struct Config {
     /// `download_adapt` in `settings.json`.
     pub download_adapt: bool,
     pub verbosity: u8,
-    /// Optional image shown behind the account picker (`backdrop` in
-    /// `settings.json`).
-    pub backdrop: Option<String>,
     pub color: bool,
     pub poll_interval: Duration,
     /// The CDN root the game is downloaded from; `ZWIFT_CDN_BASE` overrides it,
     /// which is how the tests run the download against a local directory.
     pub cdn_base: String,
     pub jobs: usize,
-    pub expected_bytes: u64,
-    pub sample_interval: Duration,
 }
 
 impl Config {
@@ -110,13 +106,6 @@ impl Config {
         // User-facing settings live in `$SNAP_USER_COMMON/settings.json`, seeded
         // from the shipped template on first run. This also creates `common`.
         let settings = Settings::load(&crate::settings::ensure_initialized(&snap, &common)?);
-        let sample_interval = Duration::from_secs(number("ZWIFT_PROGRESS_INTERVAL", 5)?);
-        if sample_interval.is_zero() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "ZWIFT_PROGRESS_INTERVAL must be greater than zero",
-            ));
-        }
         Ok(Self {
             snap,
             common,
@@ -131,7 +120,6 @@ impl Config {
             bluetooth_debug: settings.bluetooth_debug,
             download_adapt: settings.download_adapt,
             verbosity: settings.verbosity,
-            backdrop: settings.backdrop.clone(),
             color: flag("COLORED_OUTPUT", 0)?,
             poll_interval: Duration::from_secs(number("ZWIFT_POLL_INTERVAL", 5)?),
             cdn_base: match value("ZWIFT_CDN_BASE") {
@@ -145,8 +133,6 @@ impl Config {
             },
             jobs: usize::try_from(number("ZWIFT_DOWNLOAD_JOBS", 32)?)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
-            expected_bytes: number("ZWIFT_EXPECTED_DRIVE_C_BYTES", EXPECTED_DRIVE_C_BYTES)?,
-            sample_interval,
         })
     }
 
@@ -236,8 +222,6 @@ pub fn run(
             cdn_base: &config.cdn_base,
             jobs: config.jobs,
             adaptive: config.download_adapt.then(Adaptive::default),
-            expected_drive_c_bytes: if graphical { config.expected_bytes } else { 0 },
-            sample_interval: config.sample_interval,
         },
         launch: LaunchConfig {
             wine_prefix: &config.prefix,
@@ -307,6 +291,33 @@ pub fn launch(config: Config, args: Vec<String>) -> io::Result<()> {
     result
 }
 
+/// Record a progress event in the log.
+///
+/// Only the lines worth keeping are written: a task starting, and a transfer's
+/// ten-percent milestones. The ticks that drive the bars arrive once per downloaded
+/// file, thousands of times, so logging each one would bury everything else.
+/// `milestone` remembers the last decile written; only the game transfer reports a
+/// fraction, so one counter is enough.
+fn log_progress(logger: &Logger, milestone: &AtomicU8, event: &InstallProgress) {
+    match event {
+        InstallProgress::Task {
+            task,
+            state: TaskState::Running,
+        } => logger.info(task.label()),
+        InstallProgress::Task {
+            task,
+            state: TaskState::Fraction(percent),
+        } => {
+            let step = percent / 10;
+            if milestone.fetch_max(step, Ordering::Relaxed) < step {
+                logger.info(&format!("{}: {percent}%", task.label()));
+            }
+        }
+        InstallProgress::Task { .. } => {}
+        InstallProgress::Launch { message } => logger.info(message),
+    }
+}
+
 fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Result<()> {
     #[cfg(feature = "gtk-ui")]
     if !config.no_gui
@@ -327,7 +338,6 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
                         bluetooth_debug: config.bluetooth_debug,
                         download_adapt: config.download_adapt,
                         verbosity: config.verbosity,
-                        backdrop: config.backdrop.clone(),
                     },
                 };
                 return crate::gui::launch(
@@ -347,10 +357,9 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
                         let progress_ui = ui.clone();
                         // Skip login when configured (e.g., --skip-login).
                         ui.set_require_login(!config.skip_login);
+                        let milestone = AtomicU8::new(0);
                         let progress = |event: InstallProgress| {
-                            if let InstallProgress::Phase { ref message, .. } = event {
-                                logger.info(message);
-                            }
+                            log_progress(&logger, &milestone, &event);
                             progress_ui.progress(event);
                         };
                         let result = run(&config, &logger, &mut ui, true, &progress, &args);
@@ -366,11 +375,8 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
             )),
         }
     }
-    let progress = |event| {
-        if let InstallProgress::Phase { message, .. } = event {
-            logger.info(&message);
-        }
-    };
+    let milestone = AtomicU8::new(0);
+    let progress = |event: InstallProgress| log_progress(&logger, &milestone, &event);
     let result = run(
         &config,
         &logger,
@@ -466,7 +472,7 @@ mod tests {
     fn invalid_environment_values_are_rejected() {
         for (name, value) in [
             ("WINEPREFIX", "relative"),
-            ("ZWIFT_PROGRESS_INTERVAL", "0"),
+            ("ZWIFT_POLL_INTERVAL", "-1"),
             ("ZWIFT_DOWNLOAD_JOBS", "-1"),
             ("ZWIFT_NO_GUI", "2"),
         ] {
