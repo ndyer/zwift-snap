@@ -17,7 +17,21 @@ use std::rc::Rc;
 use std::time::Duration;
 
 /// The graphics profiles offered in the dialog, in `Setting::to_string` order.
+/// These are the values that are stored and parsed; see `GRAPHICS_LABELS` for
+/// what the dialog actually displays.
 const GRAPHICS_PROFILES: [&str; 6] = ["auto", "basic", "medium", "high", "ultra", "default"];
+
+/// The labels shown in the graphics dropdown, in `GRAPHICS_PROFILES` order. Only
+/// the `auto` entry is elaborated (so the dropdown explains itself); the values
+/// written to the settings file stay the brief `GRAPHICS_PROFILES` words.
+const GRAPHICS_LABELS: [&str; 6] = [
+    "auto (runs the probe on every launch)",
+    "basic",
+    "medium",
+    "high",
+    "ultra",
+    "default",
+];
 
 /// Where the launcher keeps the files the dialog reads and edits.
 #[derive(Clone, Debug)]
@@ -111,15 +125,29 @@ impl SettingsDialog {
         grid.attach(&row_label("Display mode"), 0, 0, 1, 1);
         grid.attach(&display, 1, 0, 1, 1);
 
-        let graphics = gtk::DropDown::from_strings(&GRAPHICS_PROFILES);
+        let graphics = gtk::DropDown::from_strings(&GRAPHICS_LABELS);
         if let Some(index) = GRAPHICS_PROFILES
             .iter()
             .position(|name| *name == settings.graphics.to_string())
         {
             graphics.set_selected(index as u32);
         }
+
+        // The probe button and its result sit directly under the selector they
+        // influence: a successful probe selects the recommended profile.
+        let reprobe = gtk::Button::with_label("Run graphics probe");
+        reprobe.set_halign(gtk::Align::Start);
+        let gpu = gtk::Label::new(Some("Graphics probe: not run yet"));
+        gpu.set_xalign(0.0);
+        gpu.set_wrap(true);
+        gpu.set_selectable(true);
+
+        let graphics_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        graphics_box.append(&graphics);
+        graphics_box.append(&reprobe);
+        graphics_box.append(&gpu);
         grid.attach(&row_label("Graphics profile"), 0, 1, 1, 1);
-        grid.attach(&graphics, 1, 1, 1, 1);
+        grid.attach(&graphics_box, 1, 1, 1, 1);
 
         let disable_egl = gtk::CheckButton::with_label("Disable EGL (use GLX)");
         disable_egl.set_active(settings.disable_egl);
@@ -153,16 +181,6 @@ impl SettingsDialog {
         status.set_wrap(true);
         status.set_selectable(true);
         content.append(&status);
-
-        let gpu = gtk::Label::new(Some("Graphics probe: not run yet"));
-        gpu.set_xalign(0.0);
-        gpu.set_wrap(true);
-        gpu.set_selectable(true);
-        content.append(&gpu);
-
-        let reprobe = gtk::Button::with_label("Run graphics probe");
-        reprobe.set_halign(gtk::Align::Start);
-        content.append(&reprobe);
 
         // --- Maintenance ----------------------------------------------------
         content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
@@ -431,10 +449,19 @@ impl SettingsDialog {
     }
 
     /// Measures the GPU on a worker thread so the (potentially slow, EGL-loading)
-    /// probe never freezes the dialog, then reports the profile it implies.
+    /// probe never freezes the dialog, then selects the profile it recommends
+    /// (persisted only when the dialog is saved) and reports the measurement.
     fn run_probe(&self) {
         self.gpu.set_text("Graphics probe: running…");
-        run_off_thread(self.gpu.clone(), store::probe_gpu, describe_probe);
+        let graphics = self.graphics.clone();
+        run_off_thread(self.gpu.clone(), store::probe_gpu, move |outcome| {
+            if let Ok(probe) = &outcome {
+                if let Some(index) = profile_index(probe.profile) {
+                    graphics.set_selected(index);
+                }
+            }
+            describe_probe(outcome)
+        });
     }
 
     /// Asks for confirmation before running a destructive `action`, then runs it
@@ -517,10 +544,19 @@ fn present(path: &std::path::Path) -> &'static str {
     }
 }
 
+/// The dropdown position of a probed profile, so a successful probe can select
+/// the recommended profile. `None` if the profile is not one of the listed words.
+fn profile_index(profile: crate::graphics::Profile) -> Option<u32> {
+    GRAPHICS_PROFILES
+        .iter()
+        .position(|name| *name == profile.name())
+        .map(|index| index as u32)
+}
+
 fn describe_probe(outcome: Result<GpuProbe, String>) -> String {
     match outcome {
         Ok(probe) => format!(
-            "Graphics probe: {:.2} ms on {} — suggests profile '{}'",
+            "Graphics probe: {:.2} ms on {} — selected profile '{}'",
             probe.frame_ms, probe.renderer, probe.profile
         ),
         Err(error) => format!("Graphics probe failed: {error}"),
@@ -557,6 +593,29 @@ mod tests {
             let setting = GraphicsSetting::parse(name).unwrap();
             assert_eq!(setting.to_string(), name);
         }
+    }
+
+    #[test]
+    fn graphics_labels_only_elaborate_auto_and_align_with_the_values() {
+        assert_eq!(GRAPHICS_LABELS.len(), GRAPHICS_PROFILES.len());
+        assert!(
+            GRAPHICS_LABELS[0].starts_with("auto"),
+            "{}",
+            GRAPHICS_LABELS[0]
+        );
+        // Every other label is the exact stored value, so parsing stays correct.
+        for (label, value) in GRAPHICS_LABELS.iter().zip(GRAPHICS_PROFILES).skip(1) {
+            assert_eq!(*label, value);
+        }
+    }
+
+    #[test]
+    fn profile_index_maps_profiles_to_dropdown_positions() {
+        use crate::graphics::Profile;
+        assert_eq!(profile_index(Profile::Basic), Some(1));
+        assert_eq!(profile_index(Profile::Medium), Some(2));
+        assert_eq!(profile_index(Profile::High), Some(3));
+        assert_eq!(profile_index(Profile::Ultra), Some(4));
     }
 
     #[test]
