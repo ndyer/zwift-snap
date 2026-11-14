@@ -11,18 +11,13 @@ Real Lifecycle Shows Output And Waits At The Login Gate
     # and the launcher settles at its login gate. The launcher shows no heading of
     # its own there, so the gate is proved by its WebView: the embed page is only
     # a marketing slider, and its login form ("Remember me") appears solely on the
-    # sign-in page the gate navigates to.
+    # sign-in page the gate navigates to. The log toggle lives in the window's
+    # top-right corner; opening it reveals the log pane beside the WebView.
     Match Text    Settings    45
     Match Text    Remember me    60
-    Click Target    Settings
     Match Text    Show log    20
     Click Target    Show log
     Match Text    already installed    20
-    # Leave the main window focused: this settings dialog is modal and transient,
-    # so while it is open it captures the harness's later Alt+F4 and the launcher
-    # never closes. Dismiss it here, before the suite ends.
-    Match Text    Close    20
-    Click Target    Close
     Match Text    Remember me    20
 
 *** Keywords ***

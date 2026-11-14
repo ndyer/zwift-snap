@@ -69,13 +69,17 @@ spinner (`launch_area`) with the message, stopped again on `GameReady`.
 
 The GTK window and game share the `display_mode` setting (`settings.json`,
 default fullscreen, or `WIDTHxHEIGHT` windowed). The window hides after the
-first game window appears; the launcher stays alive until the game exits. Errors
-retain the in-app log view (the Settings dialog's **Show log** toggle).
-Installation failures offer Retry; update failures
-offer Launch anyway. A **Settings** button in the window opens a dialog that edits
-the settings file, shows token/`bluez`/GPU status and offers the maintenance
-actions (see `gui/settings.rs`).
-A WebKitGTK 6.0 panel is always shown in the bottom section of the window: it starts
+first game window appears; the launcher stays alive until the game exits.
+Installation failures offer Retry; update failures offer Launch anyway. The
+window's top-right corner holds the launcher's controls: a **Show log** toggle,
+a **Settings** button, and — in a fullscreen session, which has no decorations
+to close from — a **Quit** button that runs the same cancellation and cleanup as
+closing the window. Settings opens a dialog that edits the settings file, shows
+token/`bluez`/GPU status and offers the maintenance actions (see
+`gui/settings.rs`); the log view is no longer part of that dialog.
+The bottom of the window is a split pane (`gtk::Paned`): a WebKitGTK 6.0 panel on
+the left and the launcher log on the right, hidden until its toggle is activated,
+so hiding it leaves the WebView the full width. The WebKit panel starts
 on Zwift's launcher embed page and, once installation/update finishes and the login
 gate opens, navigates automatically to the OAuth sign-in page (PKCE and state
 validation protect the exchange). A successful login puts the embed page back and lets the launch continue; an

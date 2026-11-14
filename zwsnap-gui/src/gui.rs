@@ -16,10 +16,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 mod accounts_panel;
+mod log_panel;
 mod login_panel;
 mod settings;
 
 use accounts_panel::{AccountsPanel, Handlers as AccountHandlers};
+use log_panel::LogPanel;
 use login_panel::LoginPanel;
 use settings::SettingsDialog;
 
@@ -432,8 +434,7 @@ fn build_window(
         logger.clone(),
     ));
 
-    // The Settings dialog is built eagerly, while hidden, so its log view exists
-    // before the Logger sinks register on the worker thread.
+    // The Settings dialog is built while hidden; `present` shows it on demand.
     let dialog = SettingsDialog::new(&window, settings.clone());
 
     // --- Account picker ---------------------------------------------------
@@ -546,46 +547,79 @@ fn build_window(
     detail.set_xalign(0.0);
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let retry = gtk::Button::with_label("Retry");
-    let quit = gtk::Button::with_label("Quit");
     buttons.append(&retry);
-    buttons.append(&quit);
     buttons.set_visible(false);
-    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+
+    // The header row: the status heading on the left, and the launcher's own
+    // controls pinned to the top-right corner — the picker's add-account button,
+    // the log toggle, Settings, and, in a fullscreen session, Quit.
+    let log_panel = LogPanel::new();
     let open_settings = gtk::Button::with_label("Settings");
-    open_settings.set_halign(gtk::Align::End);
-    open_settings.set_hexpand(true);
-    actions.append(&open_settings);
-    content.append(&title);
+    title.set_hexpand(true);
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    header.append(&title);
+    header.append(accounts_panel.add_button());
+    header.append(log_panel.toggle_button());
+    header.append(&open_settings);
+    if matches!(mode, DisplayMode::Fullscreen) {
+        // A fullscreen window has no decorations to close from, so offer an
+        // explicit Quit that takes the same cancellation-and-cleanup path as
+        // closing the window.
+        let quit_launcher = gtk::Button::with_label("Quit");
+        quit_launcher.connect_clicked({
+            let window = window.clone();
+            move |_| window.close()
+        });
+        header.append(&quit_launcher);
+    }
+
+    // The bottom pane is split: the WebKit login panel on the left, the log view
+    // on the right, hidden until its toggle is activated. The log pane is the
+    // end child, so hiding it leaves the WebView the full width.
+    let body = gtk::Paned::new(gtk::Orientation::Horizontal);
+    body.set_position(560);
+    body.set_wide_handle(true);
+    body.set_start_child(Some(login_panel.widget()));
+    body.set_end_child(Some(log_panel.widget()));
+    body.set_resize_start_child(true);
+    body.set_shrink_start_child(false);
+    body.set_resize_end_child(false);
+    body.set_shrink_end_child(false);
+    body.set_vexpand(true);
+
+    content.append(&header);
     content.append(&install_area);
     // The picker takes the top spot the install tiles occupied; both sit above
-    // the WebView, which keeps showing its embed page at the bottom.
+    // the split, whose WebView keeps showing its embed page at the bottom.
     content.append(accounts_panel.widget());
     content.append(&launch_area);
     content.append(&detail);
     content.append(&buttons);
-    content.append(&actions);
-    content.append(login_panel.widget());
-    accounts_panel.widget().set_visible(false);
+    content.append(&body);
+    accounts_panel.set_visible(false);
 
     window.set_child(Some(&content));
 
     let dialog_for_button = dialog.clone();
     open_settings.connect_clicked(move |_| dialog_for_button.present());
     let pending = std::rc::Rc::new(std::cell::RefCell::new(None::<Sender<bool>>));
-    for (button, decision) in [(&retry, true), (&quit, false)] {
+    // Only Retry offers a decision here; declining the failure (the `false`
+    // reply) is done by closing the window, which has no decorations in
+    // fullscreen but offers the header's Quit instead.
+    retry.connect_clicked({
         let pending = pending.clone();
         let buttons = buttons.clone();
         let detail = detail.clone();
-        button.connect_clicked(move |_| {
+        move |_| {
             if let Some(reply) = pending.borrow_mut().take() {
-                if reply.send(decision).is_err() {
+                if reply.send(true).is_err() {
                     eprintln!("Unable to send launcher decision: worker stopped");
                 }
             }
             buttons.set_visible(false);
             detail.set_text("");
-        });
-    }
+        }
+    });
     let pending_on_close = pending.clone();
     let closing = std::rc::Rc::new(std::cell::Cell::new(false));
     let finished = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -639,7 +673,7 @@ fn build_window(
                 // The added login was cancelled or failed: back to the embed page
                 // with the picker still showing.
                 login_panel.show_embed();
-                accounts_panel.widget().set_visible(true);
+                accounts_panel.set_visible(true);
             }
             Some(Err(mpsc::TryRecvError::Disconnected)) => {
                 add_result.borrow_mut().take();
@@ -689,7 +723,7 @@ fn build_window(
                     title.set_text(&message);
                 }
                 Event::Log(text) => {
-                    dialog.append_log(&text);
+                    log_panel.append(&text);
                 }
                 Event::Failure {
                     kind,
@@ -760,6 +794,7 @@ fn build_window(
                         // Zwift") does not linger over the login page, which
                         // carries its own prompt.
                         title.set_text("");
+                        accounts_panel.set_visible(false);
                         login_panel.start_login(decision);
                         continue;
                     }
@@ -767,9 +802,8 @@ fn build_window(
                     accounts_panel.refresh();
                     *grid_decision.borrow_mut() = Some(decision);
                     title.set_text("Choose a rider");
-                    detail.set_text("Pick an account to launch Zwift, or add another.");
                     // The grid appears at the top; the WebView keeps its embed page.
-                    accounts_panel.widget().set_visible(true);
+                    accounts_panel.set_visible(true);
                 }
                 Event::GameReady => {
                     title.set_text("Zwift started");

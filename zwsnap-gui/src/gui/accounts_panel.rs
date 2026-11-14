@@ -5,8 +5,9 @@
 //! three stat chips the app shows (total distance, elevation gain, total ride
 //! time) and a muted line with level, FTP and weight. An orange play button
 //! launches that account; a Remove action forgets it. The card used last gets a
-//! "Last used" pill and is focused, so Enter relaunches it. A footer button on
-//! the right-hand side adds a new account by logging in.
+//! "Last used" pill and is focused, so Enter relaunches it. An "Add another
+//! account" button, which the launcher places in the window header, adds a new
+//! account by logging in.
 //!
 //! The panel owns the [`Store`] and rebuilds the grid from it on
 //! [`AccountsPanel::refresh`]; selecting and removing are the panel's own
@@ -24,6 +25,11 @@ use std::sync::Arc;
 /// The diameter of a card's avatar, in pixels.
 const AVATAR_SIZE: i32 = 72;
 
+/// The tallest the grid is allowed to grow before it starts scrolling. Below
+/// this it sizes to its content, so a couple of accounts do not stretch the
+/// launcher across the whole screen.
+const MAX_GRID_HEIGHT: i32 = 320;
+
 /// Callbacks the panel uses to hand a selection back to the launcher.
 pub struct Handlers {
     /// Called with an account id when its card is chosen.
@@ -32,11 +38,13 @@ pub struct Handlers {
     pub add: Box<dyn Fn()>,
 }
 
-/// The picker: a scrolled grid of cards plus the right-aligned "add account"
-/// footer.
+/// The picker: a scrolled grid of cards plus the "add account" button, which
+/// the launcher places in the window header alongside the log toggle and
+/// Settings.
 pub struct AccountsPanel {
-    root: gtk::Box,
     flow: gtk::FlowBox,
+    scroller: gtk::ScrolledWindow,
+    add_button: gtk::Button,
     store: Rc<std::cell::RefCell<Store>>,
     logger: Option<Arc<Logger>>,
     select: Rc<dyn Fn(String)>,
@@ -65,33 +73,45 @@ impl AccountsPanel {
             .build();
         flow.add_css_class("account-grid");
 
+        // Size to the content rather than filling the window. A `FlowBox`
+        // reports its natural height for its *natural* width, which packs
+        // several narrow cards onto one line, so its own request is far too
+        // short. Instead the scroller's height is pinned to the grid measured
+        // at the width it is actually given (see [`Self::update_height`]), capped
+        // at [`MAX_GRID_HEIGHT`] so many accounts scroll rather than stretch the
+        // launcher down the whole window.
         let scroller = gtk::ScrolledWindow::builder()
             .child(&flow)
             .hscrollbar_policy(gtk::PolicyType::Never)
-            .min_content_height(320)
-            .vexpand(true)
+            .max_content_height(MAX_GRID_HEIGHT)
+            .vexpand(false)
             .hexpand(true)
             .build();
 
         let add_button = gtk::Button::with_label("Add another account");
         add_button.add_css_class("add-account");
-        add_button.set_halign(gtk::Align::End);
-        let footer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        footer.set_halign(gtk::Align::End);
-        footer.set_margin_top(6);
-        footer.append(&add_button);
-
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        root.append(&scroller);
-        root.append(&footer);
+        // The launcher appends this to the header; it starts hidden and is
+        // revealed with the grid by [`AccountsPanel::set_visible`].
+        add_button.set_visible(false);
 
         let panel = Rc::new(Self {
-            root,
             flow,
+            scroller: scroller.clone(),
+            add_button: add_button.clone(),
             store,
             logger,
             select: Rc::from(handlers.select),
             add: Rc::from(handlers.add),
+        });
+
+        // The grid's height depends on the width it is given, which is only
+        // known once the panel is mapped and allocated, so recompute it then as
+        // well as on every refresh.
+        let weak = Rc::downgrade(&panel);
+        scroller.connect_map(move |_| {
+            if let Some(panel) = weak.upgrade() {
+                panel.request_height_update();
+            }
         });
 
         let weak = Rc::downgrade(&panel);
@@ -109,7 +129,19 @@ impl AccountsPanel {
 
     /// The widget to place in the window layout.
     pub fn widget(&self) -> &gtk::Widget {
-        self.root.upcast_ref()
+        self.scroller.upcast_ref()
+    }
+
+    /// The "Add another account" button, for the launcher to place in the
+    /// header.
+    pub fn add_button(&self) -> &gtk::Button {
+        &self.add_button
+    }
+
+    /// Show or hide the picker (the grid and the header's add button) together.
+    pub fn set_visible(&self, visible: bool) {
+        self.scroller.set_visible(visible);
+        self.add_button.set_visible(visible);
     }
 
     /// Whether the store holds at least one account (so the launcher can decide
@@ -132,6 +164,43 @@ impl AccountsPanel {
             // `insert(-1)` appends; the shorthand needs GTK 4.6, beyond the crate's API level.
             self.flow.insert(&card, -1);
         }
+        drop(store);
+        self.request_height_update();
+    }
+
+    /// Pin the scroller to the grid's content height, retrying briefly if the
+    /// grid has not been allocated a width yet.
+    ///
+    /// The height-for-width measurement needs the grid's real width, but the
+    /// panel is shown before its first allocation, so a single attempt at map
+    /// time can still see a width of zero and leave the scroller clipped to
+    /// nothing. Poll on a short timer until the width is known.
+    fn request_height_update(self: &Rc<Self>) {
+        if self.update_height() {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+            match weak.upgrade() {
+                Some(panel) if panel.update_height() => glib::ControlFlow::Break,
+                Some(_) => glib::ControlFlow::Continue,
+                None => glib::ControlFlow::Break,
+            }
+        });
+    }
+
+    /// Measure the grid at the width it actually has and pin the scroller to
+    /// that height, capped at [`MAX_GRID_HEIGHT`]. Returns whether the width was
+    /// known (and the height therefore set).
+    fn update_height(&self) -> bool {
+        let width = self.flow.width();
+        if width <= 0 {
+            return false;
+        }
+        let (_, natural, _, _) = self.flow.measure(gtk::Orientation::Vertical, width);
+        self.scroller
+            .set_min_content_height(natural.clamp(0, MAX_GRID_HEIGHT));
+        true
     }
 
     /// Forget `id`, saving the store and rebuilding the grid. Returns whether an
@@ -167,12 +236,16 @@ impl AccountsPanel {
         account: &Account,
         last_used: Option<&str>,
     ) -> gtk::Widget {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        row.add_css_class("account-card");
-        row.set_margin_top(6);
-        row.set_margin_bottom(6);
+        // The card stacks the avatar and details on top with the actions in a
+        // row underneath, rather than beside them, so each card stays narrow
+        // and the grid packs more riders per line.
+        let card = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        card.add_css_class("account-card");
+        card.set_margin_top(6);
+        card.set_margin_bottom(6);
 
-        row.append(&self.avatar(store, account));
+        let top = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        top.append(&self.avatar(store, account));
 
         // Name, the three stat chips, and the muted level/FTP/weight line.
         let info = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -209,10 +282,11 @@ impl AccountsPanel {
         meta.add_css_class("dim-label");
         info.append(&meta);
 
-        row.append(&info);
-        row.append(&self.actions(account, last_used == Some(account.id.as_str())));
+        top.append(&info);
+        card.append(&top);
+        card.append(&self.actions(account, last_used == Some(account.id.as_str())));
 
-        row.upcast()
+        card.upcast()
     }
 
     /// The avatar image, or an initials badge when none is stored.
@@ -235,13 +309,14 @@ impl AccountsPanel {
         badge.upcast()
     }
 
-    /// The play and Remove buttons on the right of a card.
+    /// The Remove and Play buttons, laid out as a full-width row underneath the
+    /// rider's details.
     fn actions(self: &Rc<Self>, account: &Account, is_last_used: bool) -> gtk::Widget {
         let box_ = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        box_.set_valign(gtk::Align::Center);
 
         let remove = gtk::Button::with_label("Remove");
         remove.add_css_class("flat");
+        remove.set_hexpand(true);
         let remove_id = account.id.clone();
         let weak = self.weak();
         remove.connect_clicked(move |button| {
@@ -280,6 +355,7 @@ impl AccountsPanel {
         let play = gtk::Button::with_label("Play");
         play.add_css_class("account-play");
         play.add_css_class("suggested-action");
+        play.set_hexpand(true);
         let play_id = account.id.clone();
         let weak = self.weak();
         play.connect_clicked(move |_| {
@@ -364,7 +440,7 @@ fn install_css() {
 /// chips, the last-used pill and the orange play button.
 const CSS: &str = "
 .account-card {
-    background-color: alpha(white, 0.08);
+    background-color: rgba(0, 0, 0, 0.10);
     border-radius: 12px;
     padding: 12px;
 }

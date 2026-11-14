@@ -229,7 +229,9 @@ cat > "${accounts}/common/accounts.json" <<'JSON'
   ]
 }
 JSON
-printf '{"display_mode":"800x600"}' > "${accounts}/common/settings.json"
+# A roomy window: the rider cards carry avatars, stat chips and their own
+# Remove/Play row, so a small window clips them and the OCR assertions fail.
+printf '{"display_mode":"1200x900"}' > "${accounts}/common/settings.json"
 
 PATH="${accounts}/bin:${PATH}" SNAP="${accounts}" SNAP_USER_COMMON="${accounts}/common" \
     WINEPREFIX="${accounts}/common/.wine" ZWIFT_LOG="${accounts}/common/zwift.log" \

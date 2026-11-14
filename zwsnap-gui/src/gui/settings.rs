@@ -1,5 +1,5 @@
-//! The Settings dialog: the launcher's user-editable settings, the launcher log,
-//! and the maintenance actions that reset the Wine prefix or the game data.
+//! The Settings dialog: the launcher's user-editable settings and the
+//! maintenance actions that reset the Wine prefix or the game data.
 //!
 //! Everything here is optional to the launch itself: the settings file is read
 //! before GTK starts (see `crate::settings`), so changes made in this dialog take
@@ -68,12 +68,9 @@ impl SettingsContext {
 }
 
 /// The dialog's own top-level window plus the widgets the launcher keeps in touch
-/// with (the log view and the re-usable re-probe).
+/// with (the re-usable re-probe).
 pub struct SettingsDialog {
     window: gtk::Window,
-    log: gtk::TextView,
-    log_scroll: gtk::ScrolledWindow,
-    log_toggle: gtk::ToggleButton,
     display: gtk::Entry,
     graphics: gtk::DropDown,
     disable_egl: gtk::CheckButton,
@@ -205,11 +202,10 @@ impl SettingsDialog {
         purge_actions.append(&purge_game);
         content.append(&purge_actions);
 
-        // --- Buttons and log ------------------------------------------------
-        // The log view and the button bar live outside the scroller (which holds
-        // only the fixed settings above), so the log gets real vertical space
-        // when shown and Close/Save stay reachable on a screen too short for the
-        // whole dialog.
+        // --- Buttons --------------------------------------------------------
+        // The button bar lives outside the scroller (which holds only the fixed
+        // settings above), so Close/Save stay reachable on a screen too short
+        // for the whole dialog.
         let cancel = gtk::Button::with_label("Close");
         let save = gtk::Button::with_label("Save");
         save.add_css_class("suggested-action");
@@ -222,25 +218,6 @@ impl SettingsDialog {
         buttons.append(&cancel);
         buttons.append(&save);
 
-        let log_toggle = gtk::ToggleButton::with_label("Show log");
-        log_toggle.set_halign(gtk::Align::Start);
-        log_toggle.set_margin_start(18);
-        log_toggle.set_margin_end(18);
-        log_toggle.set_margin_top(6);
-        let log = gtk::TextView::new();
-        log.set_editable(false);
-        log.set_monospace(true);
-        log.set_wrap_mode(gtk::WrapMode::WordChar);
-        let log_scroll = gtk::ScrolledWindow::builder()
-            .min_content_height(180)
-            .child(&log)
-            .vexpand(true)
-            .margin_start(18)
-            .margin_end(18)
-            .margin_bottom(6)
-            .visible(false)
-            .build();
-
         let scroller = gtk::ScrolledWindow::builder()
             .child(&content)
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -251,16 +228,11 @@ impl SettingsDialog {
         let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
         outer.append(&scroller);
         outer.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-        outer.append(&log_toggle);
-        outer.append(&log_scroll);
         outer.append(&buttons);
         window.set_child(Some(&outer));
 
         let dialog = Rc::new(Self {
             window,
-            log,
-            log_scroll,
-            log_toggle,
             display,
             graphics,
             disable_egl,
@@ -282,18 +254,6 @@ impl SettingsDialog {
             &status,
         );
         dialog
-    }
-
-    /// Appends launcher log output to the dialog's log view, trimming it to the
-    /// same 200k characters the launcher used to keep in its main window.
-    pub fn append_log(&self, text: &str) {
-        let buffer = self.log.buffer();
-        buffer.insert(&mut buffer.end_iter(), text);
-        if buffer.char_count() > 200_000 {
-            let mut start = buffer.start_iter();
-            let mut cutoff = buffer.iter_at_offset(buffer.char_count() - 200_000);
-            buffer.delete(&mut start, &mut cutoff);
-        }
     }
 
     /// Shows the dialog.
@@ -349,18 +309,6 @@ impl SettingsDialog {
         purge_game: &gtk::Button,
         status: &gtk::Label,
     ) {
-        let weak = Rc::downgrade(self);
-        self.log_toggle.connect_toggled(move |button| {
-            if let Some(dialog) = weak.upgrade() {
-                dialog.log_scroll.set_visible(button.is_active());
-            }
-            button.set_label(if button.is_active() {
-                "Hide log"
-            } else {
-                "Show log"
-            });
-        });
-
         let weak = Rc::downgrade(self);
         cancel.connect_clicked(move |_| {
             if let Some(dialog) = weak.upgrade() {

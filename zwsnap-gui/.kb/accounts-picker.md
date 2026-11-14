@@ -41,11 +41,13 @@ The directory key is the account id hex-encoded, so a hostile `sub` claim can ne
 
 ## The picker
 
-`AccountsPanel` owns the `Store` (behind `Rc<RefCell<..>>`), a `gtk::FlowBox` grid (`insert(&card, -1)` - `append` needs GTK 4.6, past this crate's API level) and an "Add another account" footer pinned to the right-hand side.
+`AccountsPanel` owns the `Store` (behind `Rc<RefCell<..>>`), a `gtk::FlowBox` grid (`insert(&card, -1)` - `append` needs GTK 4.6, past this crate's API level) and an "Add another account" button, which the launcher places in the window header next to the log toggle and Settings. The panel exposes that button via `add_button()` and shows/hides it with the grid via `set_visible()`.
 
 The panel is placed at the top of the window, in the space the install tiles occupied, with the WebView kept below it: the picker appears *above* the WebView rather than replacing it. `refresh()` clears the grid and rebuilds one card per account; the store is the only state.
 
-A card is a horizontal box: avatar (or an initials badge), a vertical info column (name row with an optional "Last used" pill, three chips, a `dim-label` meta line), then the Play and Remove buttons. Chips format through `stats::distance`, `stats::elevation` and `stats::duration`, with metric or imperial chosen by the account's `use_metric` (default metric). Unset values render as `-`.
+A card is a vertical box: a horizontal top row (avatar, or an initials badge, beside a vertical info column with the name row, an optional "Last used" pill, three chips and a `dim-label` meta line), then a full-width row with the Play and Remove buttons underneath. Stacking the buttons below keeps each card narrow, so the grid packs more riders per line. Chips format through `stats::distance`, `stats::elevation` and `stats::duration`, with metric or imperial chosen by the account's `use_metric` (default metric). Unset values render as `-`.
+
+The grid's height is pinned by `AccountsPanel::update_height`: a `FlowBox` reports its natural height for its *natural* width, which packs every card onto one line, so the `ScrolledWindow`'s `min_content_height` is set from the grid measured at the width it actually has (capped at `MAX_GRID_HEIGHT`). The width is only known after allocation, so `request_height_update` retries on a short timer until it is.
 
 Remove shows a `gtk::MessageDialog` whose confirm button is labelled **Remove account** (the card's own button stays **Remove**, so an OCR click target is never ambiguous), then `Store::remove` deletes the directory, clears `pairing-token.json` when that account was selected, saves and rebuilds the grid.
 
