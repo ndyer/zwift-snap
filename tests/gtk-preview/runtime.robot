@@ -13,6 +13,12 @@ Real Lifecycle Shows Output And Waits At The Login Gate
     Match Text    Show log    20
     Click Target    Show log
     Match Text    already installed    20
+    # Leave the main window focused: this settings dialog is modal and transient,
+    # so while it is open it captures the harness's later Alt+F4 and the launcher
+    # never closes. Dismiss it here, before the suite ends.
+    Match Text    Close    20
+    Click Target    Close
+    Match Text    Log in to Zwift    20
 
 *** Keywords ***
 Click Target
