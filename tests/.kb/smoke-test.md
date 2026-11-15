@@ -13,8 +13,9 @@ IMPORTANT: Read the `.kb/agents.md` file.
 
 `tests/smoke.sh` starts a `mir-test-tools` Mir compositor, runs the real launcher
 against it and drives the Robot Framework suite in `tests/smoke/` with
-[yarf](https://documentation.ubuntu.com/yarf): test 1 looks for the launcher's
-`Settings` button, test 2 requires the Zwift SIGN UP screen through OCR. The first run on a fresh wine prefix installs wine prerequisites
+[yarf](https://documentation.ubuntu.com/yarf): test 1 matches the launcher's
+icon-only settings gear against `settings.png` (the header controls carry no text
+any more), test 2 requires the Zwift SIGN UP screen through OCR. The first run on a fresh wine prefix installs wine prerequisites
 and downloads Zwift (tens of minutes), later runs are quick. No login is performed.
 Extra arguments to the `smoke` action are passed to yarf (for example,
 `--variant light`). The harness installs `yarf` and `mir-test-tools` and connects

@@ -27,6 +27,8 @@ pub struct LogPanel {
 impl LogPanel {
     /// Builds the pane, hidden until its toggle is activated.
     pub fn new() -> Self {
+        install_css();
+
         let view = gtk::TextView::new();
         view.set_editable(false);
         view.set_monospace(true);
@@ -41,9 +43,15 @@ impl LogPanel {
             .visible(false)
             .build();
 
-        // A plain, fully-chromed toggle button: it must read as a button in the
-        // header, so it is deliberately *not* given the `flat` class.
-        let toggle = gtk::ToggleButton::with_label("Show log");
+        // The toggle is icon-only. It keeps its full chrome (deliberately *not*
+        // given the `flat` class) so it reads as a button, and its *checked*
+        // highlight shows whether the log is currently visible.
+        let toggle = gtk::ToggleButton::new();
+        let icon = gtk::Image::from_icon_name("text-x-generic-symbolic");
+        icon.set_pixel_size(16);
+        toggle.set_child(Some(&icon));
+        toggle.set_tooltip_text(Some("Show log"));
+        toggle.add_css_class("log-toggle");
 
         let panel = Self {
             scroll,
@@ -75,17 +83,15 @@ impl LogPanel {
         }
     }
 
-    /// Reveals or hides the pane and relabels the toggle to match.
+    /// Reveals or hides the pane, and flips the button's hover text to match.
+    /// The visibility itself is shown by the toggle's checked highlight.
     fn wire(&self) {
         self.toggle.connect_toggled({
             let scroll = self.scroll.clone();
             move |button| {
-                scroll.set_visible(button.is_active());
-                button.set_label(if button.is_active() {
-                    "Hide log"
-                } else {
-                    "Show log"
-                });
+                let active = button.is_active();
+                scroll.set_visible(active);
+                button.set_tooltip_text(Some(if active { "Hide log" } else { "Show log" }));
             }
         });
     }
@@ -96,3 +102,32 @@ impl Default for LogPanel {
         Self::new()
     }
 }
+
+/// Register the toggle's CSS once per display. Unknown properties are ignored by
+/// GTK, so this is best-effort and never fatal.
+fn install_css() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let Some(display) = gtk::gdk::Display::default() else {
+            return;
+        };
+        let provider = gtk::CssProvider::new();
+        provider.load_from_data(CSS);
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    });
+}
+
+/// The toggle's styles. The button keeps its default chrome; the `:checked`
+/// state gets an accent tint so it is obvious the log pane is currently open.
+const CSS: &str = "
+.log-toggle:checked {
+    background-image: none;
+    background-color: alpha(#f26b1d, 0.35);
+    color: white;
+}
+";

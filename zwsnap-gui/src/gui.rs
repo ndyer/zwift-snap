@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 mod accounts_panel;
+mod icons;
 mod log_panel;
 mod login_panel;
 mod settings;
@@ -553,8 +554,9 @@ fn build_window(
     status.append(&launch_spinner);
     // Retry a failed install (or launch anyway after a failed update). It joins
     // the header's button group and is revealed only when a failure needs an
-    // answer; it does not deserve a row of its own.
-    let retry = gtk::Button::with_label("Retry");
+    // answer; it does not deserve a row of its own. It is icon-only, so its
+    // hover text carries the label.
+    let retry = icons::icon_button("view-refresh-symbolic", "Retry");
     retry.set_visible(false);
 
     // The header row: the launch spinner and status heading on the left, and the
@@ -562,7 +564,7 @@ fn build_window(
     // add-account button, the log toggle, Settings, and, in a fullscreen session,
     // Quit.
     let log_panel = LogPanel::new();
-    let open_settings = gtk::Button::with_label("Settings");
+    let open_settings = icons::icon_button("preferences-other-symbolic", "Settings");
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     header.append(&status);
     header.append(&retry);
@@ -573,7 +575,7 @@ fn build_window(
         // A fullscreen window has no decorations to close from, so offer an
         // explicit Quit that takes the same cancellation-and-cleanup path as
         // closing the window.
-        let quit_launcher = gtk::Button::with_label("Quit");
+        let quit_launcher = icons::icon_button("application-exit-symbolic", "Quit");
         quit_launcher.connect_clicked({
             let window = window.clone();
             move |_| window.close()
@@ -754,10 +756,12 @@ fn build_window(
                     // The heading stays short; the full reason goes to the log,
                     // alongside the rest of the installer output.
                     log_panel.append(&format!("{headline}: {message}\n"));
-                    retry.set_label(match kind {
+                    // The icon stays the same; the hover text says what the
+                    // button will do.
+                    retry.set_tooltip_text(Some(match kind {
                         Failure::Install => "Retry",
                         Failure::Update => "Launch anyway",
-                    });
+                    }));
                     *pending.borrow_mut() = Some(decision);
                     retry.set_visible(true);
                 }

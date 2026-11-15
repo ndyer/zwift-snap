@@ -1,6 +1,6 @@
 # Preface
 
-The launcher can remember several Zwift riders and show a picker before the game starts: a grid of rider cards over Zwift artwork, each with an avatar, a name, three stat chips, a level/FTP/weight line, an orange Play button and a Remove button.
+The launcher can remember several Zwift riders and show a picker before the game starts: a grid of rider cards over Zwift artwork, each with an avatar, a name, three stat chips, a level/FTP/weight line and a small remove icon in its top-right corner. The whole card is the launch target - clicking anywhere on it (except the remove icon) selects that rider.
 
 This file covers the account store (`accounts.rs`), the picker widget (`gui/accounts_panel.rs`), the launcher-side wiring in `gui.rs`, and the GTK4 traps that made two real bugs.
 
@@ -45,11 +45,11 @@ The directory key is the account id hex-encoded, so a hostile `sub` claim can ne
 
 The panel is placed at the top of the window, in the space the install tiles occupied, with the WebView kept below it: the picker appears *above* the WebView rather than replacing it. `refresh()` clears the grid and rebuilds one card per account; the store is the only state.
 
-A card is a vertical box: a horizontal top row (avatar, or an initials badge, beside a vertical info column with the name row, an optional "Last used" pill, three chips and a `dim-label` meta line), then a full-width row with the Play and Remove buttons underneath. Stacking the buttons below keeps each card narrow, so the grid packs more riders per line. Chips format through `stats::distance`, `stats::elevation` and `stats::duration`, with metric or imperial chosen by the account's `use_metric` (default metric). Unset values render as `-`.
+A card is a `gtk::Overlay`: the base layer is a `gtk::Button` (CSS class `account-card`) that *is* the whole card and launches the rider when clicked, so there is no separate Play button. The card's content - a vertical box with a horizontal top row (avatar, or an initials badge, beside a vertical info column with the name row, an optional "Last used" pill, three chips and a `dim-label` meta line) - is set as that button's child, so the box inherits the button's click. The remove control is an icon-only `gtk::Button` (`edit-delete-symbolic`, CSS class `account-remove`) in the overlay's top-right corner (`halign` End, `valign` Start); the info column reserves room for it with `set_margin_end(28)` so text never runs under the icon. Chips format through `stats::distance`, `stats::elevation` and `stats::duration`, with metric or imperial chosen by the account's `use_metric` (default metric). Unset values render as `-`.
 
 The grid's height is pinned by `AccountsPanel::update_height`: a `FlowBox` reports its natural height for its *natural* width, which packs every card onto one line, so the `ScrolledWindow`'s `min_content_height` is set from the grid measured at the width it actually has (capped at `MAX_GRID_HEIGHT`). The width is only known after allocation, so `request_height_update` retries on a short timer until it is.
 
-Remove shows a `gtk::MessageDialog` whose confirm button is labelled **Remove account** (the card's own button stays **Remove**, so an OCR click target is never ambiguous), then `Store::remove` deletes the directory, clears `pairing-token.json` when that account was selected, saves and rebuilds the grid.
+Remove shows a `gtk::MessageDialog` whose confirm button is labelled **Remove account**, then `Store::remove` deletes the directory, clears `pairing-token.json` when that account was selected, saves and rebuilds the grid. The remove control is icon-only (its tooltip names the rider), so it never competes with the card's name text as an OCR click target; because every card's remove icon is identical, automated suites must identify the *removed* card by position (first match) and the *surviving* card by name.
 
 ## Selecting and adding
 
@@ -75,6 +75,6 @@ An install from before the picker has `pairing-token.json` but no `accounts.json
 
 ## Testing
 
-`tests/gtk-preview/accounts.robot` (driven by `tests/gtk-preview.sh`, stage `accounts-suite`) seeds a fixture with two accounts and `settings.json`, launches the binary with `ZWIFT_NO_GUI=0`, and asserts the picker text ("Choose a rider", both names, a stat chip), removes the second account through the confirmation dialog, then plays the first. The bash side additionally asserts that `window-ready`/`game-running` appear (polled for up to 20 s) and that `pairing-token.json` holds exactly the played account's token.
+`tests/gtk-preview/accounts.robot` (driven by `tests/gtk-preview.sh`, stage `accounts-suite`) seeds a fixture with two accounts and `settings.json`, launches the binary with `ZWIFT_NO_GUI=0`, and asserts the picker text ("Choose a rider", both names, a stat chip), removes one account by clicking the `remove.png` icon template (the two remove icons are identical, so the first match is what goes), confirms the dialog, then launches the survivor by clicking its rider name (the card is the launch target now) - trying "Offline Tester" first and falling back to "Second Rider" with `Run Keyword And Return Status`. The bash side additionally asserts that `window-ready`/`game-running` appear (polled for up to 20 s) and that `pairing-token.json` holds exactly the played account's token.
 
 Useful while debugging: every captured frame lands in `$YARF_FRAME_DIR` with `index.log` mapping frame numbers to wait labels, and `Move Pointer To` costs a full OCR pass (~2.5 s), so a click lands later than the timestamp of the frame it was measured on.

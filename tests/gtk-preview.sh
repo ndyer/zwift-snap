@@ -21,9 +21,12 @@ trap cleanup EXIT
 cargo build --manifest-path "${root}/zwsnap-gui/Cargo.toml" --features gtk-ui
 mkdir -p "${stage}/suite" "${stage}/close-suite" "${stage}/runtime-suite" "${stage}/accounts-suite" "${stage}/out" "${runtime}/snap.yarf"
 cp "${root}/tests/gtk-preview/preview.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/suite/"
+cp "${root}"/tests/gtk-preview/*.png "${stage}/suite/"
 cp "${root}/tests/gtk-preview/close.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/close-suite/"
 cp "${root}/tests/gtk-preview/runtime.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/runtime-suite/"
+cp "${root}"/tests/gtk-preview/*.png "${stage}/runtime-suite/"
 cp "${root}/tests/gtk-preview/accounts.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/accounts-suite/"
+cp "${root}"/tests/gtk-preview/*.png "${stage}/accounts-suite/"
 cp "${root}/tests/tools/yarf/input.py" "${stage}/"
 
 # every frame the suites capture is kept here, so a failed wait can be replayed with
@@ -187,7 +190,7 @@ grep -q '<USER_RESOLUTION_PREF>800x600</USER_RESOLUTION_PREF>' "${data}/prefs.xm
 echo "Testing the account picker"
 accounts="${stage}/accounts"
 mkdir -p "${stage}/out/accounts"
-# Reuse the stub Wine fixture above: the picker's Play button must reach the
+# Reuse the stub Wine fixture above: clicking a rider card must reach the
 # same launch path the login gate does.
 cp -a "${fixture}" "${accounts}"
 rm -f "${accounts}/cleanup" "${accounts}/window-ready" "${accounts}/game-running" \
@@ -229,8 +232,8 @@ cat > "${accounts}/common/accounts.json" <<'JSON'
   ]
 }
 JSON
-# A roomy window: the rider cards carry avatars, stat chips and their own
-# Remove/Play row, so a small window clips them and the OCR assertions fail.
+# A roomy window: the rider cards carry avatars, stat chips and a remove icon,
+# so a small window clips them and the OCR assertions fail.
 printf '{"display_mode":"1200x900"}' > "${accounts}/common/settings.json"
 
 PATH="${accounts}/bin:${PATH}" SNAP="${accounts}" SNAP_USER_COMMON="${accounts}/common" \
@@ -242,8 +245,8 @@ PATH="${accounts}/bin:${PATH}" SNAP="${accounts}" SNAP_USER_COMMON="${accounts}/
 gui_pid=$!
 yarf --platform Mir "${stage}/accounts-suite" --outdir "${stage}/out/accounts" \
     2>&1 | tee "${stage}/yarf-accounts.log"
-# Play was pressed, so the chosen account's token became the launch token and
-# the game was started with it.
+# A rider card was clicked, so the chosen account's token became the launch
+# token and the game was started with it.
 started() { [[ -f ${accounts}/window-ready && -f ${accounts}/game-running ]]; }
 for ((i = 0; i < 200; i++)); do
     started && break

@@ -3,11 +3,12 @@
 //!
 //! Each card shows the rider's avatar (or an initials badge), their name, the
 //! three stat chips the app shows (total distance, elevation gain, total ride
-//! time) and a muted line with level, FTP and weight. An orange play button
-//! launches that account; a Remove action forgets it. The card used last gets a
-//! "Last used" pill and is focused, so Enter relaunches it. An "Add another
-//! account" button, which the launcher places in the window header, adds a new
-//! account by logging in.
+//! time) and a muted line with level, FTP and weight. The whole card is a single
+//! button: clicking anywhere on it launches that account. A small remove icon
+//! floats over the card's top-right corner and forgets the account. The card
+//! used last gets a "Last used" pill and is focused, so Enter relaunches it. An
+//! "Add another account" button, which the launcher places in the window header,
+//! adds a new account by logging in.
 //!
 //! The panel owns the [`Store`] and rebuilds the grid from it on
 //! [`AccountsPanel::refresh`]; selecting and removing are the panel's own
@@ -21,6 +22,8 @@ use gtk::glib;
 use gtk::prelude::*;
 use std::rc::Rc;
 use std::sync::Arc;
+
+use super::icons;
 
 /// The diameter of a card's avatar, in pixels.
 const AVATAR_SIZE: i32 = 72;
@@ -88,7 +91,7 @@ impl AccountsPanel {
             .hexpand(true)
             .build();
 
-        let add_button = gtk::Button::with_label("Add another account");
+        let add_button = icons::icon_button("list-add-symbolic", "Add another account");
         add_button.add_css_class("add-account");
         // The launcher appends this to the header; it starts hidden and is
         // revealed with the grid by [`AccountsPanel::set_visible`].
@@ -236,14 +239,11 @@ impl AccountsPanel {
         account: &Account,
         last_used: Option<&str>,
     ) -> gtk::Widget {
-        // The card stacks the avatar and details on top with the actions in a
-        // row underneath, rather than beside them, so each card stays narrow
-        // and the grid packs more riders per line.
-        let card = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        card.add_css_class("account-card");
-        card.set_margin_top(6);
-        card.set_margin_bottom(6);
-
+        // The card is a single button: the avatar and details sit inside it and
+        // clicking anywhere on it launches the rider. The remove icon floats
+        // over the button's top-right corner as an `Overlay` child, so a click
+        // on the icon is handled by the icon alone and never also fires the
+        // launch button underneath.
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         top.append(&self.avatar(store, account));
 
@@ -251,6 +251,9 @@ impl AccountsPanel {
         let info = gtk::Box::new(gtk::Orientation::Vertical, 4);
         info.set_valign(gtk::Align::Center);
         info.set_hexpand(true);
+        // Reserve room on the right for the floating remove icon, so a long name
+        // or the "Last used" pill never runs underneath it.
+        info.set_margin_end(28);
 
         let name_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let name = gtk::Label::new(Some(&account.name));
@@ -283,10 +286,37 @@ impl AccountsPanel {
         info.append(&meta);
 
         top.append(&info);
-        card.append(&top);
-        card.append(&self.actions(account, last_used == Some(account.id.as_str())));
 
-        card.upcast()
+        let launch = gtk::Button::builder()
+            .child(&top)
+            .tooltip_text(format!("Launch {}", account.name))
+            .build();
+        launch.add_css_class("account-card");
+        launch.set_margin_top(6);
+        launch.set_margin_bottom(6);
+        let launch_id = account.id.clone();
+        let weak = self.weak();
+        launch.connect_clicked(move |_| {
+            if let Some(panel) = weak.upgrade() {
+                (panel.select)(launch_id.clone());
+            }
+        });
+        if last_used == Some(account.id.as_str()) {
+            // Focus the last-used card's button, so Enter relaunches it.
+            glib::idle_add_local_once({
+                let weak = launch.downgrade();
+                move || {
+                    if let Some(button) = weak.upgrade() {
+                        button.grab_focus();
+                    }
+                }
+            });
+        }
+
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&launch));
+        overlay.add_overlay(&self.remove_button(account));
+        overlay.upcast()
     }
 
     /// The avatar image, or an initials badge when none is stored.
@@ -309,17 +339,18 @@ impl AccountsPanel {
         badge.upcast()
     }
 
-    /// The Remove and Play buttons, laid out as a full-width row underneath the
-    /// rider's details.
-    fn actions(self: &Rc<Self>, account: &Account, is_last_used: bool) -> gtk::Widget {
-        let box_ = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    /// The small remove control floating over a card's top-right corner. It owns
+    /// the confirmation dialog, because forgetting an account deletes its saved
+    /// login and avatar from this computer.
+    fn remove_button(self: &Rc<Self>, account: &Account) -> gtk::Button {
+        let button = icons::icon_button("edit-delete-symbolic", "Remove account");
+        button.add_css_class("account-remove");
+        button.set_halign(gtk::Align::End);
+        button.set_valign(gtk::Align::Start);
 
-        let remove = gtk::Button::with_label("Remove");
-        remove.add_css_class("flat");
-        remove.set_hexpand(true);
         let remove_id = account.id.clone();
         let weak = self.weak();
-        remove.connect_clicked(move |button| {
+        button.connect_clicked(move |button| {
             let Some(panel) = weak.upgrade() else { return };
             let confirm = gtk::MessageDialog::builder()
                 .modal(true)
@@ -334,8 +365,8 @@ impl AccountsPanel {
                 }
             }
             confirm.add_button("Cancel", gtk::ResponseType::Cancel);
-            // Labelled differently from the card's own "Remove" button so a
-            // click target is never ambiguous between the two.
+            // Labelled differently from the card's own remove icon so a click
+            // target is never ambiguous between the two.
             let remove = confirm.add_button("Remove account", gtk::ResponseType::Ok);
             remove.add_css_class("destructive-action");
             let panel = panel.clone();
@@ -352,32 +383,7 @@ impl AccountsPanel {
             confirm.present();
         });
 
-        let play = gtk::Button::with_label("Play");
-        play.add_css_class("account-play");
-        play.add_css_class("suggested-action");
-        play.set_hexpand(true);
-        let play_id = account.id.clone();
-        let weak = self.weak();
-        play.connect_clicked(move |_| {
-            if let Some(panel) = weak.upgrade() {
-                (panel.select)(play_id.clone());
-            }
-        });
-        if is_last_used {
-            // Focus the last-used card's play button, so Enter relaunches it.
-            glib::idle_add_local_once({
-                let weak = play.downgrade();
-                move || {
-                    if let Some(play) = weak.upgrade() {
-                        play.grab_focus();
-                    }
-                }
-            });
-        }
-
-        box_.append(&remove);
-        box_.append(&play);
-        box_.upcast()
+        button
     }
 
     fn weak(self: &Rc<Self>) -> std::rc::Weak<AccountsPanel> {
@@ -436,13 +442,32 @@ fn install_css() {
     });
 }
 
-/// The picker's styles. Deliberately small: a card surface, a round avatar, the
-/// chips, the last-used pill and the orange play button.
+/// The picker's styles. Deliberately small: a clickable card surface, a round
+/// avatar, the chips, the last-used pill and the floating remove icon.
 const CSS: &str = "
 .account-card {
+    background-image: none;
     background-color: rgba(0, 0, 0, 0.10);
+    border: none;
+    box-shadow: none;
     border-radius: 12px;
     padding: 12px;
+    cursor: pointer;
+}
+.account-card:hover {
+    background-color: rgba(0, 0, 0, 0.18);
+}
+.account-remove {
+    min-width: 0;
+    min-height: 0;
+    margin: 4px;
+    padding: 2px;
+    border-radius: 6px;
+    background-image: none;
+    background-color: transparent;
+}
+.account-remove:hover {
+    background-color: alpha(black, 0.25);
 }
 .account-avatar {
     border-radius: 9999px;
@@ -462,17 +487,6 @@ const CSS: &str = "
     border-radius: 6px;
     padding: 1px 8px;
     font-size: 0.8em;
-}
-.account-play {
-    background-image: none;
-    background-color: #f26b1d;
-    color: white;
-    border-radius: 9999px;
-    padding: 6px 18px;
-    font-weight: bold;
-}
-.account-play:hover {
-    background-color: #ff7d33;
 }
 .account-grid {
     padding: 6px;
