@@ -503,8 +503,12 @@ fn build_window(
     content.set_margin_bottom(24);
     content.set_margin_start(24);
     content.set_margin_end(24);
+    // The heading is a single line: a wrapping label that does not expand is
+    // allocated only its minimum width (the widest word) once it sits in a box
+    // beside the spinner, so it wrapped even with space to spare. Long messages
+    // go to the log instead, so the heading never needs to wrap.
     let title = gtk::Label::new(Some("Getting Zwift ready"));
-    title.set_wrap(true);
+    title.set_wrap(false);
     title.set_xalign(0.0);
 
     // One tile per install task, laid out in a row so the parallel tracks are
@@ -535,33 +539,33 @@ fn build_window(
         install_area.append(tile);
     }
 
-    // The launch spinner replaces the install tiles once the game is starting.
+    // The launch spinner trails the status heading, so the window never grows a
+    // second line of text: a long failure or error message goes to the log
+    // (reachable through the header's "Show log" toggle), while the heading stays
+    // short. The heading and spinner share a box that takes the free space, so
+    // the spinner sits immediately after the text rather than drifting over to
+    // the right-hand button group.
     let launch_spinner = gtk::Spinner::new();
-    let launch_status = gtk::Label::new(None);
-    launch_status.set_wrap(true);
-    launch_status.set_xalign(0.0);
-    launch_status.set_hexpand(true);
-    let launch_area = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    launch_area.append(&launch_spinner);
-    launch_area.append(&launch_status);
-    launch_area.set_visible(false);
-
-    let detail = gtk::Label::new(None);
-    detail.set_wrap(true);
-    detail.set_xalign(0.0);
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    launch_spinner.set_valign(gtk::Align::Center);
+    let status = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    status.set_hexpand(true);
+    status.append(&title);
+    status.append(&launch_spinner);
+    // Retry a failed install (or launch anyway after a failed update). It joins
+    // the header's button group and is revealed only when a failure needs an
+    // answer; it does not deserve a row of its own.
     let retry = gtk::Button::with_label("Retry");
-    buttons.append(&retry);
-    buttons.set_visible(false);
+    retry.set_visible(false);
 
-    // The header row: the status heading on the left, and the launcher's own
-    // controls pinned to the top-right corner — the picker's add-account button,
-    // the log toggle, Settings, and, in a fullscreen session, Quit.
+    // The header row: the launch spinner and status heading on the left, and the
+    // launcher's own controls pinned to the top-right corner — the picker's
+    // add-account button, the log toggle, Settings, and, in a fullscreen session,
+    // Quit.
     let log_panel = LogPanel::new();
     let open_settings = gtk::Button::with_label("Settings");
-    title.set_hexpand(true);
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    header.append(&title);
+    header.append(&status);
+    header.append(&retry);
     header.append(accounts_panel.add_button());
     header.append(log_panel.toggle_button());
     header.append(&open_settings);
@@ -596,9 +600,6 @@ fn build_window(
     // The picker takes the top spot the install tiles occupied; both sit above
     // the split, whose WebView keeps showing its embed page at the bottom.
     content.append(accounts_panel.widget());
-    content.append(&launch_area);
-    content.append(&detail);
-    content.append(&buttons);
     content.append(&body);
     accounts_panel.set_visible(false);
 
@@ -612,16 +613,14 @@ fn build_window(
     // fullscreen but offers the header's Quit instead.
     retry.connect_clicked({
         let pending = pending.clone();
-        let buttons = buttons.clone();
-        let detail = detail.clone();
+        let retry = retry.clone();
         move |_| {
             if let Some(reply) = pending.borrow_mut().take() {
                 if reply.send(true).is_err() {
                     eprintln!("Unable to send launcher decision: worker stopped");
                 }
             }
-            buttons.set_visible(false);
-            detail.set_text("");
+            retry.set_visible(false);
         }
     });
     let pending_on_close = pending.clone();
@@ -630,7 +629,7 @@ fn build_window(
     let close_requested = closing.clone();
     let close_finished = finished.clone();
     let close_title = title.clone();
-    let close_buttons = buttons.clone();
+    let close_retry = retry.clone();
     let close_panel = login_panel.clone();
     let close_grid_decision = grid_decision.clone();
     let close_add_result = add_result.clone();
@@ -642,7 +641,7 @@ fn build_window(
         close_requested.set(true);
         close_cancellation.cancel();
         close_title.set_text("Stopping Zwift launcher");
-        close_buttons.set_visible(false);
+        close_retry.set_visible(false);
         close_panel.cancel_login();
         if let Some(reply) = close_grid_decision.borrow_mut().take() {
             let _ = reply.send(false);
@@ -729,9 +728,7 @@ fn build_window(
                 }
                 Event::Progress(InstallProgress::Launch { message }) => {
                     install_area.set_visible(false);
-                    launch_area.set_visible(true);
                     launch_spinner.start();
-                    launch_status.set_text(&message);
                     title.set_text(&message);
                 }
                 Event::Log(text) => {
@@ -749,17 +746,20 @@ fn build_window(
                         }
                         continue;
                     }
-                    title.set_text(match kind {
+                    let headline = match kind {
                         Failure::Install => "Zwift installation failed",
                         Failure::Update => "Zwift update failed",
-                    });
+                    };
+                    title.set_text(headline);
+                    // The heading stays short; the full reason goes to the log,
+                    // alongside the rest of the installer output.
+                    log_panel.append(&format!("{headline}: {message}\n"));
                     retry.set_label(match kind {
                         Failure::Install => "Retry",
                         Failure::Update => "Launch anyway",
                     });
-                    detail.set_text(&message);
                     *pending.borrow_mut() = Some(decision);
-                    buttons.set_visible(true);
+                    retry.set_visible(true);
                 }
                 Event::LoginRequired { decision } => {
                     if cancellation.is_cancelled() || login_panel.has_pending() {
@@ -820,7 +820,6 @@ fn build_window(
                 Event::GameReady => {
                     title.set_text("Zwift started");
                     launch_spinner.stop();
-                    launch_area.set_visible(false);
                     if !preview {
                         if let Some(window) = window_weak.upgrade() {
                             window.set_visible(false);
@@ -844,13 +843,14 @@ fn build_window(
                         Ok(()) => title.set_text("Preview complete"),
                         Err(error) => {
                             title.set_text("Launcher stopped");
-                            detail.set_text(&error);
+                            // The heading stays short; the full error goes to the log.
+                            log_panel.append(&format!("{error}\n"));
                         }
                     }
                     if let Some(window) = window_weak.upgrade() {
                         window.present();
                     }
-                    buttons.set_visible(false);
+                    retry.set_visible(false);
                     return glib::ControlFlow::Break;
                 }
             }

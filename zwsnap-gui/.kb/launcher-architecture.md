@@ -65,19 +65,24 @@ The GUI renders one tile per task in a horizontal, homogeneous row. Each tile is
 built hidden and revealed when its task first reports progress; `Running` pulses
 it, `Fraction` and `Done` set the bar. The whole install area hides once every
 *visible* tile has reached `1.0`, so the update path (only the `Game` tile) works.
-It also hides when the login gate opens or the launch begins. `Launch` reveals a
-spinner (`launch_area`) with the message, stopped again on `GameReady`.
+It also hides when the login gate opens or the launch begins. The status heading
+carries the short message; `Launch` also starts a spinner immediately after the
+text (the heading and spinner share an expanding box in the window header),
+stopped again on `GameReady`. The heading is a single, non-wrapping line —
+keeping long messages out of it is what stops a second row appearing — so a
+failure's reason and the final error go to the log panel instead.
 
 ## Window, display mode and login panel
 
 The GTK window and game share the `display_mode` setting (`settings.json`,
 default fullscreen, or `WIDTHxHEIGHT` windowed). The window hides after the
 first game window appears; the launcher stays alive until the game exits.
-Installation failures offer Retry; update failures offer Launch anyway. The
-window's top-right corner holds the launcher's controls: a **Show log** toggle,
-a **Settings** button, and — in a fullscreen session, which has no decorations
-to close from — a **Quit** button that runs the same cancellation and cleanup as
-closing the window. Settings opens a dialog that edits the settings file, shows
+Installation failures offer a **Retry** button and update failures offer Launch
+anyway; Retry is revealed in the header's button group rather than on a row of
+its own. The window's top-right corner holds the launcher's controls: the
+picker's add-account button, a **Show log** toggle, a **Settings** button, and —
+in a fullscreen session, which has no decorations to close from — a **Quit**
+button that runs the same cancellation and cleanup as closing the window. Settings opens a dialog that edits the settings file, shows
 token/`bluez`/GPU status and offers the maintenance actions (see
 `gui/settings.rs`); the log view is no longer part of that dialog.
 The bottom of the window is a split pane (`gtk::Paned`): a WebKitGTK 6.0 panel on
