@@ -96,11 +96,11 @@ impl LauncherBackend for Runtime<'_> {
             adaptive: self.install.adaptive,
             cdn_base: self.install.cdn_base,
         };
-        update::update_if_needed(&config, self.logger, &|percent, message| {
+        update::update_if_needed(&config, self.logger, &|percent, message, rate| {
             // Nothing is downloaded while the served version is read, so the check
             // has no fraction and only names the status line. The transfer that
-            // follows reports its percentage on the game tile, which therefore
-            // appears one step later than on a fresh install.
+            // follows reports its percentage and rate on the game tile, which
+            // therefore appears one step later than on a fresh install.
             let event = if message == update::CHECK_MESSAGE {
                 InstallProgress::Task {
                     task: InstallTask::UpdateCheck,
@@ -109,7 +109,10 @@ impl LauncherBackend for Runtime<'_> {
             } else {
                 InstallProgress::Task {
                     task: InstallTask::Game,
-                    state: TaskState::Fraction(percent.min(99)),
+                    state: TaskState::Fraction {
+                        percent: percent.min(99),
+                        rate,
+                    },
                 }
             };
             progress(event)

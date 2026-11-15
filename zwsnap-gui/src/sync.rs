@@ -17,7 +17,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 use crate::cdn::Fetcher;
-use crate::download::{download, Adaptive, DownloadConfig};
+use crate::download::{download, Adaptive, ByteProgress, DownloadConfig};
 use crate::logging::Logger;
 use crate::manifest::{parse_manifest, parse_ver_cur, FileEntry, Manifest, RelPath, VerCur};
 use crate::version::{Version, VER_CUR_FILE};
@@ -160,14 +160,14 @@ pub fn local_manifest(install_dir: &Path) -> Manifest {
 
 /// Bring the install directory up to the version the CDN serves.
 ///
-/// `progress` receives bytes completed and the total to complete while files are
-/// transferred. On success the install directory holds the served file set and the
-/// version files that record it.
+/// `progress` receives bytes completed, the total to complete, and the current
+/// transfer rate when known, while files are transferred. On success the install
+/// directory holds the served file set and the version files that record it.
 pub fn sync(
     fetcher: &dyn Fetcher,
     config: &SyncConfig<'_>,
     logger: &Logger,
-    progress: &(dyn Fn(u64, u64) + Sync),
+    progress: ByteProgress<'_>,
 ) -> Result<Outcome, String> {
     let ver_cur = fetcher.fetch_ver_cur()?;
     sync_version(fetcher, &ver_cur, config, logger, progress)
@@ -184,7 +184,7 @@ pub fn sync_version(
     ver_cur: &VerCur,
     config: &SyncConfig<'_>,
     logger: &Logger,
-    progress: &(dyn Fn(u64, u64) + Sync),
+    progress: ByteProgress<'_>,
 ) -> Result<Outcome, String> {
     let installed = local_version(config.install_dir);
     match assess(installed, ver_cur) {
@@ -601,7 +601,8 @@ mod tests {
             &[("F/a.bin", a), ("F/sub/b.bin", b)],
         );
         let seen = Mutex::new(Vec::new());
-        let progress = |done: u64, total: u64| seen.lock().unwrap().push((done, total));
+        let progress =
+            |done: u64, total: u64, _rate: Option<f64>| seen.lock().unwrap().push((done, total));
         let outcome = sync(&memory, &scratch.config(), &scratch.logger, &progress).unwrap();
         assert_eq!(
             outcome,
@@ -642,7 +643,7 @@ mod tests {
             manifest_xml("1.0.5", "F", &[("a.bin", a, Some(crc(a)))]),
             &[("F/a.bin", a)],
         );
-        let progress = |_, _| {};
+        let progress = |_, _, _| {};
         sync(&memory, &scratch.config(), &scratch.logger, &progress).unwrap();
         assert_eq!(memory.fetches.load(Ordering::Relaxed), 1);
         let outcome = sync(&memory, &scratch.config(), &scratch.logger, &progress).unwrap();
@@ -690,7 +691,7 @@ mod tests {
             manifest_xml("1.0.5", "F", &[("a.bin", a2, Some(crc(a2)))]),
             &[("F/a.bin", a2)],
         );
-        let progress = |_, _| {};
+        let progress = |_, _, _| {};
         let outcome = sync(&memory, &scratch.config(), &scratch.logger, &progress).unwrap();
         assert_eq!(
             outcome,
@@ -733,7 +734,7 @@ mod tests {
             manifest_xml("1.0.168456", "F", &[("a.bin", a, Some(crc(a)))]),
             &[("F/a.bin", a)],
         );
-        let progress = |_, _| {};
+        let progress = |_, _, _| {};
         sync(&memory, &scratch.config(), &scratch.logger, &progress).unwrap();
         assert!(!scratch.install.join(VER_CUR_FILENAME_FILE).exists());
         assert!(!scratch.install.join("Zwift_ver_cur.168455.xml").exists());

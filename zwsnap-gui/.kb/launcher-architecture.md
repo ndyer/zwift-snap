@@ -36,7 +36,10 @@ and the launch spinner. `install.rs` defines a small event protocol in
 
 - `InstallProgress::Task { task, state }`, where `task` is one of five
   `InstallTask`s (`WineSetup`, `D3dCompiler`, `Vulkan`, `UpdateCheck`, `Game`) and
-  `state` is `Running`, `Fraction(u8)` (0..=99) or `Done`. `UpdateCheck` is the only
+  `state` is `Running`, `Fraction { percent, rate }` (percent 0..=99, `rate` an
+  optional bytes-per-second transfer speed) or `Done`. The bar text renders
+  `percent` and, when known, the rate through `stats::transfer_progress`
+  (`"42% · 12.3 MB/s"`). `UpdateCheck` is the only
   tile-less one: nothing is transferred while the served version is read, so it has
   no fraction and is over in a moment; it only names the status line.
 - `InstallProgress::Launch { message }`, emitted as the game starts.

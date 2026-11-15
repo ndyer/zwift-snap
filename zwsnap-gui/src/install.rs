@@ -130,18 +130,19 @@ impl InstallTask {
 
 /// How far along one [`InstallTask`] is. A task with no measurable fraction pulses
 /// while [`TaskState::Running`] and completes with [`TaskState::Done`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TaskState {
     /// In progress with no measurable fraction; the bar pulses.
     Running,
-    /// In progress with a measured percentage, 0 to 99.
-    Fraction(u8),
+    /// In progress with a measured percentage, 0 to 99, and the transfer rate in
+    /// bytes per second when the downloader has one to show.
+    Fraction { percent: u8, rate: Option<f64> },
     /// Finished successfully.
     Done,
 }
 
 /// Progress updates sent from the installer to the UI.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum InstallProgress {
     /// A per-task update for one of the install bars.
     Task { task: InstallTask, state: TaskState },
@@ -344,14 +345,15 @@ fn task(task: InstallTask, state: TaskState) -> InstallProgress {
     InstallProgress::Task { task, state }
 }
 
-/// The percentage of a byte transfer, capped below 100 until [`TaskState::Done`].
-fn fraction(done: u64, total: u64) -> TaskState {
+/// The percentage of a byte transfer, capped below 100 until [`TaskState::Done`],
+/// carrying the transfer rate when one is known.
+fn fraction(done: u64, total: u64, rate: Option<f64>) -> TaskState {
     let percent = if total == 0 {
         0
     } else {
         (u128::from(done) * 100 / u128::from(total)).min(99) as u8
     };
-    TaskState::Fraction(percent)
+    TaskState::Fraction { percent, rate }
 }
 
 /// Create the Wine prefix and lock down its per-user directories.
@@ -491,8 +493,8 @@ fn install_game(
         jobs: config.jobs,
         adaptive: config.adaptive,
     };
-    let reporting = |done: u64, total: u64| {
-        progress(task(InstallTask::Game, fraction(done, total)));
+    let reporting = |done: u64, total: u64, rate: Option<f64>| {
+        progress(task(InstallTask::Game, fraction(done, total, rate)));
     };
     sync::sync(&fetcher, &sync_config, logger, &reporting)
         .map_err(|error| io::Error::other(format!("Unable to download Zwift: {error}")))?;
@@ -734,7 +736,7 @@ mod tests {
             event,
             InstallProgress::Task {
                 task: InstallTask::Game,
-                state: TaskState::Fraction(_)
+                state: TaskState::Fraction { .. }
             }
         )));
         // The manifest's files landed in the game directory, the version file was

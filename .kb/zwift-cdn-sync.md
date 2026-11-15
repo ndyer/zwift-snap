@@ -39,10 +39,17 @@ Two environment variables, both parsed in `application.rs`, configure it:
 checks) and `ZWIFT_DOWNLOAD_JOBS` caps the number of parallel transfers (default 32).
 
 The transfer count is also adaptive by default: unless `download_adapt` is turned off in
-`settings.json`, `download.rs` starts below the `ZWIFT_DOWNLOAD_JOBS` ceiling and grows
-the pool by one for each sampling window whose throughput improves, halving it when
-throughput drops, so the count settles where the link saturates rather than being guessed
-up front.
+`settings.json`, `download.rs` starts below the `ZWIFT_DOWNLOAD_JOBS` ceiling and grows the
+pool by one while throughput keeps improving, so the count settles where the link
+saturates rather than being guessed up front. It measures throughput as a *rate* over the
+real elapsed time of the sampling window (not raw bytes, which vary with a stalled window),
+smooths it with an exponential moving average, and only trims the pool back after a
+sustained run of declines (four windows in a row each down at least a tenth, and then by a
+quarter, not a half) so one noisy patch cannot ratchet the count down toward one. A window
+is skipped after any change so the next reading reflects it, and near the end of the
+transfer a tail guard stops adapting once the remaining bytes are less than about two
+windows' payload. Each change is logged with the current rate in MB/s, and the workers'
+per-file ticks repeat the last measured rate so the GUI's progress bar keeps showing it.
 
 ## The launcher shim
 

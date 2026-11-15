@@ -64,9 +64,9 @@ pub struct UpdateConfig<'a> {
 pub fn update_if_needed(
     config: &UpdateConfig<'_>,
     logger: &Logger,
-    progress: &(dyn Fn(u8, &str) + Sync),
+    progress: &(dyn Fn(u8, &str, Option<f64>) + Sync),
 ) -> Result<UpdateOutcome, String> {
-    progress(PERCENT_CHECK, CHECK_MESSAGE);
+    progress(PERCENT_CHECK, CHECK_MESSAGE, None);
     let fetcher = Remote::new(config.cdn_base);
     let Some(ver_cur) = check(&fetcher, logger)? else {
         return Ok(UpdateOutcome::CheckUnavailable);
@@ -77,10 +77,11 @@ pub fn update_if_needed(
         jobs: config.jobs,
         adaptive: config.adaptive,
     };
-    let reporting = |done: u64, total: u64| {
+    let reporting = |done: u64, total: u64, rate: Option<f64>| {
         progress(
             PERCENT_DOWNLOAD_START + percent_of(done, total, PERCENT_DOWNLOAD_SPAN),
             DOWNLOAD_MESSAGE,
+            rate,
         );
     };
     match sync::sync_version(&fetcher, &ver_cur, &sync_config, logger, &reporting) {
@@ -165,7 +166,7 @@ mod tests {
                     cdn_base: &self.cdn_base(),
                 },
                 &self.logger,
-                &move |percent, message| {
+                &move |percent, message, _rate| {
                     recorded
                         .lock()
                         .unwrap()

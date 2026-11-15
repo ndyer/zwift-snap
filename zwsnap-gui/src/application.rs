@@ -306,7 +306,7 @@ fn log_progress(logger: &Logger, milestone: &AtomicU8, event: &InstallProgress) 
         } => logger.info(task.label()),
         InstallProgress::Task {
             task,
-            state: TaskState::Fraction(percent),
+            state: TaskState::Fraction { percent, .. },
         } => {
             let step = percent / 10;
             if milestone.fetch_max(step, Ordering::Relaxed) < step {
@@ -415,9 +415,16 @@ mod tests {
 
     #[test]
     fn defaults_match_the_shell_launcher() {
-        let config = config(&[("SNAP", "/snap/zwift/x1"), ("SNAP_USER_COMMON", "/data")]).unwrap();
-        assert_eq!(config.prefix, PathBuf::from("/data/.wine"));
-        assert_eq!(config.log, PathBuf::from("/data/zwift.log"));
+        // A per-test directory under the system temp dir, not a fixed `/data`:
+        // the config seeds `settings.json` into it, which needs somewhere writable.
+        let common = tmp("defaults");
+        let config = config(&[
+            ("SNAP", "/snap/zwift/x1"),
+            ("SNAP_USER_COMMON", common.to_str().unwrap()),
+        ])
+        .unwrap();
+        assert_eq!(config.prefix, common.join(".wine"));
+        assert_eq!(config.log, common.join("zwift.log"));
         assert_eq!(config.display, DisplayMode::Fullscreen);
         assert_eq!(config.graphics, GraphicsSetting::Auto);
         assert!(!config.disable_egl);

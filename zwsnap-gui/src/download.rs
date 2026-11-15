@@ -16,21 +16,31 @@
 //!   once, not the whole plan. A full first install is several GiB and must not need
 //!   twice that.
 //!
-//! With [`Adaptive`] the pool also grows and shrinks while it runs: it starts lower
-//! than the ceiling and adds a worker for each window whose throughput improves,
-//! halving when throughput drops, so the transfer count settles where the link is
-//! saturated instead of being guessed up front.
+//! With [`Adaptive`] the pool also grows and shrinks while it runs: it measures the
+//! throughput of each window as a *rate* (bytes per second, over the window's real
+//! elapsed time rather than its raw byte total), smooths it with an exponential
+//! moving average, adds a worker while the rate still improves, and trims the count
+//! back once several windows in a row decline. Measuring a rate is what makes this stable:
+//! a window that merely lasted longer, or a stalled patch of the plan, can no longer
+//! be misread as the link slowing down, so the count settles where the link is
+//! saturated instead of being guessed up front or ratcheting down toward one.
 
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::cancel::Cancellation;
 use crate::cdn::{Expect, Fetcher};
 use crate::logging::Logger;
 use crate::manifest::{FileEntry, RelPath};
+
+/// A transfer-progress callback: bytes completed, the total to complete, and the
+/// transfer rate in bytes per second when the downloader has measured one. Only the
+/// adaptive controller measures a rate, and its workers repeat the last one on their
+/// per-file ticks, so the UI can show it beside the bar throughout.
+pub type ByteProgress<'a> = &'a (dyn Fn(u64, u64, Option<f64>) + Sync);
 
 /// Where a plan's files come from and go.
 pub struct DownloadConfig<'a> {
@@ -50,10 +60,10 @@ pub struct DownloadConfig<'a> {
 
 /// Parameters for the adaptive transfer count.
 ///
-/// The count starts at `start`, grows by one whenever a window's throughput
-/// improves, and halves when it drops: the additive-increase, multiplicative-decrease
-/// response to a saturated link. It never exceeds the [`DownloadConfig::jobs`]
-/// ceiling.
+/// The count starts at `start`, grows by one while a window's throughput improves,
+/// and is trimmed back once several windows in a row decline: the additive-increase,
+/// multiplicative-decrease response to a saturated link. It never exceeds the
+/// [`DownloadConfig::jobs`] ceiling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Adaptive {
     /// Transfers to begin with. Clamped to `1..=jobs`.
@@ -77,16 +87,17 @@ impl Default for Adaptive {
 
 /// Download every file in `files` into `config.install_dir`.
 ///
-/// `progress` is called with bytes completed and the total to complete, from the
-/// worker threads as well as from the calling thread. On the first failure the
-/// remaining files are skipped and that error is returned; files already placed are
-/// verified content, so a later run only re-fetches what is still missing.
+/// `progress` is called with bytes completed, the total to complete, and the current
+/// transfer rate when one is known, from the worker threads as well as from the
+/// calling thread. On the first failure the remaining files are skipped and that
+/// error is returned; files already placed are verified content, so a later run only
+/// re-fetches what is still missing.
 pub fn download(
     fetcher: &dyn Fetcher,
     config: &DownloadConfig<'_>,
     files: &[(RelPath, FileEntry)],
     logger: &Logger,
-    progress: &(dyn Fn(u64, u64) + Sync),
+    progress: ByteProgress<'_>,
 ) -> Result<usize, String> {
     if files.is_empty() {
         return Ok(0);
@@ -95,7 +106,7 @@ pub fn download(
         .iter()
         .map(|(_, entry)| entry.length)
         .fold(0, u64::saturating_add);
-    progress(0, total);
+    progress(0, total, None);
 
     // A shared cursor into `files`, so workers pull work without a channel.
     let next = AtomicUsize::new(0);
@@ -103,6 +114,10 @@ pub fn download(
     // Network bytes consumed during the current sampling window, summed by the
     // workers through `on_bytes` and drained by the controller each window.
     let bytes = AtomicU64::new(0);
+    // The most recent rate the controller measured, as `f64` bits, so a worker's
+    // per-file tick can repeat it instead of dropping the display back to a bare
+    // percentage between windows. NaN until the first window, meaning "unknown".
+    let last_rate = AtomicU64::new(f64::NAN.to_bits());
     let failure: Mutex<Option<String>> = Mutex::new(None);
     let cancellation = logger.cancellation();
 
@@ -125,6 +140,7 @@ pub fn download(
             let next = &next;
             let done = &done;
             let bytes = &bytes;
+            let last_rate = &last_rate;
             let failure = &failure;
             let cancellation = &cancellation;
             let pool = &pool;
@@ -138,6 +154,7 @@ pub fn download(
                     next,
                     done,
                     bytes,
+                    last_rate,
                     failure,
                     cancellation,
                     pool,
@@ -150,24 +167,45 @@ pub fn download(
         // same point and no worker can be left waiting for it.
         if let Some(adaptive) = adapt {
             let window = adaptive.window;
-            let mut desired = start;
-            let mut previous = 0;
+            let mut controller = Controller::new(start, max);
             loop {
                 // A cancelled launcher makes this return at once; stop sampling and
                 // let the workers notice the cancellation themselves.
+                let started = Instant::now();
                 if cancellation.wait(window).is_err() || pool.is_closing() {
                     break;
                 }
+                let elapsed = started.elapsed().as_secs_f64();
                 let now = bytes.swap(0, Ordering::Relaxed);
-                let wanted = next_desired(previous, now, desired, max);
-                previous = now;
-                if wanted != desired {
+                if elapsed <= 0.0 {
+                    continue;
+                }
+                // Bytes over the window's *real* duration, so an uneven or stalled
+                // window is compared on the same footing as any other.
+                let rate = now as f64 / elapsed;
+                let completed = done.load(Ordering::Relaxed);
+                // Remember the rate for the workers' own ticks, and publish it with
+                // the bytes so the UI can show the transfer speed.
+                last_rate.store(rate.to_bits(), Ordering::Relaxed);
+                progress(completed, total, Some(rate));
+                let before = controller.desired;
+                // Near the end of the plan there is too little left to keep the pool
+                // busy, so throughput falls for reasons that say nothing about the
+                // link: hold instead of reading the tail as a loss.
+                let wanted = if total.saturating_sub(completed) < tail_bytes(rate, elapsed) {
+                    before
+                } else {
+                    controller.observe(rate)
+                };
+                if wanted != before {
                     logger.debug(&format!(
-                        "Download concurrency {desired} -> {wanted} ({now} bytes per {window:?})"
+                        "Download concurrency {before} -> {wanted} ({}) using {} bytes in {:.2}s",
+                        crate::stats::rate(rate),
+                        now,
+                        elapsed
                     ));
-                    desired = wanted;
-                    peak.fetch_max(desired, Ordering::Relaxed);
-                    pool.set_desired(desired);
+                    peak.fetch_max(wanted, Ordering::Relaxed);
+                    pool.set_desired(wanted);
                 }
             }
         }
@@ -207,10 +245,11 @@ fn run_worker(
     next: &AtomicUsize,
     done: &AtomicU64,
     bytes: &AtomicU64,
+    last_rate: &AtomicU64,
     failure: &Mutex<Option<String>>,
     cancellation: &Cancellation,
     pool: &Pool,
-    progress: &(dyn Fn(u64, u64) + Sync),
+    progress: ByteProgress<'_>,
 ) {
     let on_bytes = |delta: u64| {
         bytes.fetch_add(delta, Ordering::Relaxed);
@@ -256,7 +295,13 @@ fn run_worker(
             break;
         }
         let completed = done.fetch_add(entry.length, Ordering::Relaxed) + entry.length;
-        progress(completed, total);
+        // Repeat the controller's last rate, so a file finishing between windows does
+        // not momentarily drop the rate from the progress display.
+        progress(
+            completed,
+            total,
+            tick_rate(last_rate.load(Ordering::Relaxed)),
+        );
     }
 }
 
@@ -325,34 +370,135 @@ impl Pool {
     }
 }
 
-/// The transfer count for the next window, from the last two windows' throughput:
-/// the additive-increase, multiplicative-decrease rule.
+/// The smoothed throughput must rise by this fraction of the previous window to
+/// add a transfer.
+const GROWTH_FRACTION: f64 = 0.05;
+
+/// Decode the rate a worker's per-file tick should report from the bits the
+/// controller last stored. `None` until the first window has measured a rate, so a
+/// file that finishes before then does not invent one.
+fn tick_rate(bits: u64) -> Option<f64> {
+    let rate = f64::from_bits(bits);
+    rate.is_finite().then_some(rate)
+}
+
+/// The smoothed throughput must fall by this fraction to count as a decline.
+const DECLINE_FRACTION: f64 = 0.10;
+
+/// Consecutive declining windows before the transfer count is trimmed back.
+const DECLINE_RUN: u32 = 4;
+
+/// How much of the pool survives a cutback, as a fraction (`DECLINE_KEEP / 4`): a
+/// quarter given up rather than half, so one bad patch costs far less additive
+/// growth to recover from.
+const DECLINE_KEEP: usize = 3;
+
+/// The weight the newest window carries in the smoothed throughput.
+const SMOOTHING: f64 = 0.4;
+
+/// The adaptive transfer-count controller: additive increase, multiplicative
+/// decrease, but driven by a smoothed *rate* and only after a run of declines.
 ///
-/// While `now` is at least [`GROWTH_PERCENT`] above `prev`, one transfer is added
-/// (up to `max`): each addition is still buying throughput. When `now` falls below
-/// [`DECAY_PERCENT`] of `prev`, the count is halved, never below one: adding transfers
-/// made things worse, so give most of them up. Flat throughput is treated as
-/// saturated and held.
-fn next_desired(prev: u64, now: u64, desired: usize, max: usize) -> usize {
-    /// Throughput must improve by this much to add a transfer.
-    const GROWTH_PERCENT: u64 = 5;
-    /// Throughput dropping below this fraction of the previous window halves the count.
-    const DECAY_PERCENT: u64 = 80;
-    if prev == 0 {
-        // Nothing to compare against yet: grow once bytes start moving, else hold.
-        return if now > 0 {
-            (desired + 1).min(max)
-        } else {
-            desired.clamp(1, max)
+/// Measuring a rate (bytes per second, over each window's real elapsed time) instead
+/// of the window's raw byte total removes the old rule's main failure: a window that
+/// merely lasted longer, or one the plan stalled through, no longer looks like a
+/// loss. Smoothing the rate and requiring several windows in a row to decline removes
+/// the other: a single noisy dip no longer shrinks the pool, so the count cannot
+/// ratchet itself down toward one.
+struct Controller {
+    /// The transfer count to run for the next window.
+    desired: usize,
+    /// The ceiling: the plan's file count, or the configured `jobs`.
+    max: usize,
+    /// The smoothed throughput in bytes per second, or `None` until the first window.
+    smoothed: Option<f64>,
+    /// Windows in a row whose smoothed throughput fell by at least [`DECLINE_FRACTION`].
+    declines: u32,
+    /// Set for the single window after a change, to absorb the slow start of the
+    /// connections that change opened.
+    settle: bool,
+}
+
+impl Controller {
+    /// A controller starting at `start` transfers, never above `max`.
+    fn new(start: usize, max: usize) -> Controller {
+        let max = max.max(1);
+        Controller {
+            desired: start.clamp(1, max),
+            max,
+            smoothed: None,
+            declines: 0,
+            settle: false,
+        }
+    }
+
+    /// Fold one window's `rate` (bytes per second) into the average and return the
+    /// transfer count to run for the next window.
+    fn observe(&mut self, rate: f64) -> usize {
+        let smoothed = match self.smoothed {
+            Some(previous) => SMOOTHING * rate + (1.0 - SMOOTHING) * previous,
+            None => rate,
         };
+        let previous = self.smoothed.replace(smoothed);
+
+        // The window right after a change is mostly its new connections' slow start,
+        // not the link's steady state, so it only feeds the average.
+        if self.settle {
+            self.settle = false;
+            return self.desired;
+        }
+
+        let Some(previous) = previous else {
+            // Nothing to compare the first window against; if bytes moved, spend the
+            // next window trying one more transfer.
+            return if smoothed > 0.0 {
+                self.change(self.desired + 1)
+            } else {
+                self.desired
+            };
+        };
+        if previous <= 0.0 {
+            return self.desired;
+        }
+
+        let change = smoothed / previous - 1.0;
+        if change >= GROWTH_FRACTION {
+            // Still buying throughput: add one transfer and clear any decline run.
+            self.declines = 0;
+            self.change(self.desired + 1)
+        } else if change <= -DECLINE_FRACTION {
+            // Worse, but only give transfers up once the fall is sustained.
+            self.declines += 1;
+            if self.declines >= DECLINE_RUN {
+                self.declines = 0;
+                self.change((self.desired * DECLINE_KEEP / 4).max(1))
+            } else {
+                self.desired
+            }
+        } else {
+            // Flat: the link is saturated, or the wobble is inside the noise band.
+            self.declines = 0;
+            self.desired
+        }
     }
-    if now.saturating_mul(100) >= prev.saturating_mul(100 + GROWTH_PERCENT) {
-        (desired + 1).min(max)
-    } else if now.saturating_mul(100) < prev.saturating_mul(DECAY_PERCENT) {
-        (desired / 2).max(1)
-    } else {
-        desired.clamp(1, max)
+
+    /// Adopt `desired` (clamped to `1..=max`), arming the settle window only when it
+    /// actually moves.
+    fn change(&mut self, desired: usize) -> usize {
+        let desired = desired.clamp(1, self.max);
+        if desired != self.desired {
+            self.desired = desired;
+            self.settle = true;
+        }
+        self.desired
     }
+}
+
+/// The byte count below which a plan's tail distorts throughput: about two windows'
+/// worth at the current rate. Too little is left to keep the pool busy, so the
+/// controller holds rather than reading the shrinking remainder as the link slowing.
+fn tail_bytes(rate: f64, window_secs: f64) -> u64 {
+    (rate * window_secs * 2.0).max(0.0) as u64
 }
 
 /// Fetch one file into staging, stamp its modification time, and move it into place.
@@ -552,7 +698,7 @@ mod tests {
             adaptive: None,
         };
         let logger = &test_logger(&install);
-        let progress = |_, _| {};
+        let progress = |_, _, _| {};
         let count = download(&fake, &config, &plan, logger, &progress).unwrap();
         assert_eq!(count, 2);
         assert_eq!(fs::read(install.join("a.bin")).unwrap(), b"alpha");
@@ -576,7 +722,7 @@ mod tests {
             adaptive: None,
         };
         let logger = &test_logger(&install);
-        let progress = |_, _| {};
+        let progress = |_, _, _| {};
         download(&fake, &config, &plan, logger, &progress).unwrap();
         let placed = install.join("data/Worlds/w.wad");
         assert_eq!(fs::read(&placed).unwrap(), bytes);
@@ -606,7 +752,7 @@ mod tests {
             adaptive: None,
         };
         let logger = &test_logger(&install);
-        let progress = |_, _| {};
+        let progress = |_, _, _| {};
         let error = download(&fake, &config, &plan, logger, &progress).unwrap_err();
         assert!(error.contains("corruption"), "{error}");
         assert!(!install.join("x.bin").exists());
@@ -627,7 +773,7 @@ mod tests {
             adaptive: None,
         };
         let logger = &test_logger(&install);
-        let progress = |_, _| {};
+        let progress = |_, _, _| {};
         let error = download(&fake, &config, &plan, logger, &progress).unwrap_err();
         assert!(error.contains("fake failure"), "{error}");
         assert!(!install.join("x.bin").exists());
@@ -645,7 +791,7 @@ mod tests {
             adaptive: None,
         };
         let logger = &test_logger(&install);
-        let progress = |_, _| {};
+        let progress = |_, _, _| {};
         assert_eq!(download(&fake, &config, &[], logger, &progress).unwrap(), 0);
         assert_eq!(fake.fetches.load(Ordering::Relaxed), 0);
     }
@@ -669,7 +815,7 @@ mod tests {
         };
         let logger = &test_logger(&install);
         let seen = Mutex::new(Vec::new());
-        let progress = |done: u64, total: u64| {
+        let progress = |done: u64, total: u64, _rate: Option<f64>| {
             seen.lock().unwrap().push((done, total));
         };
         download(&fake, &config, &plan, logger, &progress).unwrap();
@@ -699,7 +845,7 @@ mod tests {
         let logger = test_logger(&install);
         let fake =
             Fake::new(&[("F/a", a), ("F/b", b)]).with_cancellation(logger.cancellation().clone());
-        let progress = |_, _| {};
+        let progress = |_, _, _| {};
         let error = download(&fake, &config, &plan, &logger, &progress).unwrap_err();
         // The launcher used to download with a child `wget` that died with it; the
         // in-process transfer has to notice the same cancellation itself.
@@ -711,20 +857,81 @@ mod tests {
     }
 
     #[test]
-    fn the_transfer_policy_grows_on_gain_and_halves_on_loss() {
-        // First window with traffic adds a transfer; an idle one holds.
-        assert_eq!(next_desired(0, 100, 2, 8), 3);
-        assert_eq!(next_desired(0, 0, 2, 8), 2);
-        // A meaningful gain adds one, up to the ceiling.
-        assert_eq!(next_desired(100, 110, 3, 8), 4);
-        assert_eq!(next_desired(100, 110, 8, 8), 8);
-        // A gain below the threshold is treated as flat and held.
-        assert_eq!(next_desired(100, 103, 4, 8), 4);
-        // A drop below the threshold halves, never below one.
-        assert_eq!(next_desired(100, 50, 6, 8), 3);
-        assert_eq!(next_desired(100, 50, 1, 8), 1);
-        // A small dip is flat and held.
-        assert_eq!(next_desired(100, 90, 6, 8), 6);
+    fn the_controller_grows_while_throughput_improves() {
+        let mut controller = Controller::new(2, 8);
+        // Doubling the rate every window keeps driving the count up, one transfer at
+        // a time (a window is absorbed after each change, see the settle test below),
+        // until it reaches the ceiling and stays there.
+        let mut rate = 100.0;
+        for _ in 0..24 {
+            controller.observe(rate);
+            rate *= 2.0;
+        }
+        assert_eq!(controller.desired, 8);
+    }
+
+    #[test]
+    fn the_controller_holds_a_flat_rate() {
+        let mut controller = Controller::new(4, 16);
+        // The first window with traffic spends one more transfer; the next is the
+        // settle window for that change.
+        controller.observe(1_000.0);
+        controller.observe(1_000.0);
+        let settled = controller.desired;
+        // Flat throughput is saturated: it must not keep growing, nor shrink.
+        for _ in 0..10 {
+            controller.observe(1_000.0);
+        }
+        assert_eq!(controller.desired, settled);
+    }
+
+    #[test]
+    fn the_controller_trims_only_after_a_sustained_decline() {
+        let mut controller = Controller::new(8, 16);
+        controller.observe(1_000.0);
+        controller.observe(1_000.0);
+        let steady = controller.desired;
+        assert!(steady > 8);
+
+        // A single slow window is smoothed away and must not shrink the pool.
+        controller.observe(10.0);
+        assert_eq!(controller.desired, steady);
+
+        // Only a sustained run of declines is a real loss of throughput, and even
+        // then the cutback is a quarter, not a half.
+        controller.observe(10.0);
+        controller.observe(10.0);
+        controller.observe(10.0);
+        assert_eq!(controller.desired, (steady * DECLINE_KEEP / 4).max(1));
+    }
+
+    #[test]
+    fn the_controller_never_trims_below_one() {
+        let mut controller = Controller::new(2, 16);
+        // Run the count up on a healthy window, then pull the rate down in a long,
+        // steep slide. Repeated cutbacks reach the floor of one transfer and stop
+        // there rather than falling to zero.
+        controller.observe(1_000_000.0);
+        for step in 0..50 {
+            controller.observe(1_000_000.0 / (step as f64 + 2.0));
+        }
+        assert_eq!(controller.desired, 1);
+    }
+
+    #[test]
+    fn worker_ticks_repeat_the_last_measured_rate() {
+        // Until the controller has measured a window there is no rate to repeat.
+        assert_eq!(tick_rate(f64::NAN.to_bits()), None);
+        // Afterwards, a worker's tick carries the same rate the controller last did.
+        assert_eq!(tick_rate(8_400_000.0f64.to_bits()), Some(8_400_000.0));
+    }
+
+    #[test]
+    fn the_tail_guard_scales_with_the_rate() {
+        // About two windows' worth of bytes: at 1 MB/s over a one-second window, try
+        // to leave 2 MB, below which the controller stops adapting.
+        assert_eq!(tail_bytes(1_000_000.0, 1.0), 2_000_000);
+        assert_eq!(tail_bytes(0.0, 1.0), 0);
     }
 
     #[test]
@@ -759,7 +966,7 @@ mod tests {
             }),
         };
         let logger = &test_logger(&install);
-        let progress = |_, _| {};
+        let progress = |_, _, _| {};
         let count = download(&fake, &config, &plan, logger, &progress).unwrap();
         assert_eq!(count, 16);
         for (path, bytes) in &payload {

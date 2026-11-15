@@ -8,6 +8,7 @@ use crate::logging::Logger;
 use crate::oauth;
 use crate::orchestration::{self, Failure, LauncherBackend, LauncherUi};
 use crate::profile;
+use crate::stats;
 use gtk::glib;
 use gtk::prelude::*;
 use std::io;
@@ -186,7 +187,10 @@ impl LauncherBackend for PreviewBackend {
             self.ui.cancellation.wait(Duration::from_millis(500))?;
             self.ui.progress(InstallProgress::Task {
                 task: InstallTask::Game,
-                state: TaskState::Fraction(42),
+                state: TaskState::Fraction {
+                    percent: 42,
+                    rate: Some(8_400_000.0),
+                },
             });
             self.ui.log("Example installer output\n".into());
             self.failed_once = true;
@@ -696,12 +700,20 @@ fn build_window(
                         match state {
                             TaskState::Running => {
                                 bar.set_fraction(0.0);
+                                // Drop any rate left over from an earlier fraction.
+                                bar.set_text(None);
                                 bar.pulse();
                             }
-                            TaskState::Fraction(percent) => {
+                            TaskState::Fraction { percent, rate } => {
                                 bar.set_fraction(f64::from(percent.min(99)) / 100.0);
+                                // The percentage with the transfer speed beside it,
+                                // formatted exactly as the debug log quotes it.
+                                let label = stats::transfer_progress(percent, rate);
+                                bar.set_text(Some(label.as_str()));
                             }
                             TaskState::Done => {
+                                // Back to GTK's own 100 % caption: the rate is stale now.
+                                bar.set_text(None);
                                 bar.set_fraction(1.0);
                                 // The install is over for good once every tile has
                                 // finished, so the whole area goes.
@@ -1186,7 +1198,10 @@ mod tests {
             let mut ui = WorkerUi::new(events);
             ui.progress(InstallProgress::Task {
                 task: InstallTask::Game,
-                state: TaskState::Fraction(35),
+                state: TaskState::Fraction {
+                    percent: 35,
+                    rate: Some(4_200_000.0),
+                },
             });
             ui.failure(Failure::Update, "network error")
         });
@@ -1194,7 +1209,10 @@ mod tests {
             receiver.recv().unwrap(),
             Event::Progress(InstallProgress::Task {
                 task: InstallTask::Game,
-                state: TaskState::Fraction(35)
+                state: TaskState::Fraction {
+                    percent: 35,
+                    rate: Some(_)
+                }
             })
         ));
         match receiver.recv().unwrap() {

@@ -66,6 +66,25 @@ pub fn initials(first: Option<&str>, last: Option<&str>) -> String {
     }
 }
 
+/// A transfer rate in bytes per second, as decimal megabytes (10⁶, how network
+/// speeds are quoted) to one decimal place. Used by both the debug log and the
+/// download progress bar, so the two always read the same.
+pub fn rate(bytes_per_second: f64) -> String {
+    format!("{:.1} MB/s", bytes_per_second / 1_000_000.0)
+}
+
+/// The caption for a download's progress bar: the completion percentage, and the
+/// transfer rate when the downloader has one to show (`None` on the per-file
+/// ticks, which carry no fresh measurement).
+pub fn transfer_progress(percent: u8, rate: Option<f64>) -> String {
+    match rate {
+        Some(bytes_per_second) => {
+            format!("{}% · {}", percent.min(99), self::rate(bytes_per_second))
+        }
+        None => format!("{}%", percent.min(99)),
+    }
+}
+
 /// Metres in a statute mile.
 const METERS_PER_MILE: f64 = 1609.344;
 
@@ -118,5 +137,21 @@ mod tests {
         assert_eq!(initials(None, None), "?");
         assert_eq!(initials(Some(""), Some("")), "?");
         assert_eq!(initials(Some("  "), Some(" Campbell ")), "C");
+    }
+
+    #[test]
+    fn rate_is_decimal_megabytes_per_second() {
+        assert_eq!(rate(0.0), "0.0 MB/s");
+        assert_eq!(rate(12_340_000.0), "12.3 MB/s");
+        assert_eq!(rate(1_000_000.0), "1.0 MB/s");
+        assert_eq!(rate(999_999.0), "1.0 MB/s");
+    }
+
+    #[test]
+    fn transfer_progress_appends_the_rate_only_when_known() {
+        assert_eq!(transfer_progress(42, None), "42%");
+        assert_eq!(transfer_progress(42, Some(12_340_000.0)), "42% · 12.3 MB/s");
+        // The percentage is capped below 100 until the task's own Done tick.
+        assert_eq!(transfer_progress(150, None), "99%");
     }
 }
