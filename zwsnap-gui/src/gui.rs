@@ -11,7 +11,9 @@ use crate::profile;
 use crate::stats;
 use gtk::glib;
 use gtk::prelude::*;
+use std::cell::Cell;
 use std::io;
+use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,6 +30,80 @@ use login_panel::LoginPanel;
 use settings::SettingsDialog;
 
 pub use settings::SettingsContext;
+
+#[derive(Clone, Copy, Default)]
+struct TileCompletion {
+    generation: u64,
+    completed: bool,
+}
+
+impl TileCompletion {
+    fn running(&mut self) {
+        if self.completed {
+            self.generation = self.generation.wrapping_add(1);
+            self.completed = false;
+        }
+    }
+
+    fn complete(&mut self) -> Option<u64> {
+        if self.completed {
+            return None;
+        }
+        self.completed = true;
+        Some(self.generation)
+    }
+
+    fn matches(&self, generation: u64) -> bool {
+        self.completed && self.generation == generation
+    }
+}
+
+fn update_install_tile(
+    tile: &gtk::Box,
+    bar: &gtk::ProgressBar,
+    completion: &Rc<Cell<TileCompletion>>,
+    state: TaskState,
+) {
+    match state {
+        TaskState::Running | TaskState::Fraction { .. } => {
+            let mut current = completion.get();
+            current.running();
+            completion.set(current);
+            tile.set_visible(true);
+            match state {
+                TaskState::Running => {
+                    bar.set_fraction(0.0);
+                    bar.set_text(None);
+                    bar.pulse();
+                }
+                TaskState::Fraction { percent, rate } => {
+                    bar.set_fraction(f64::from(percent.min(99)) / 100.0);
+                    let label = stats::transfer_progress(percent, rate);
+                    bar.set_text(Some(label.as_str()));
+                }
+                TaskState::Done => unreachable!(),
+            }
+        }
+        TaskState::Done => {
+            let mut current = completion.get();
+            if let Some(generation) = current.complete() {
+                completion.set(current);
+                tile.set_visible(true);
+                bar.set_text(None);
+                bar.set_fraction(1.0);
+                let tile = tile.downgrade();
+                let completion = Rc::clone(completion);
+                glib::timeout_add_local_once(Duration::from_secs(2), move || {
+                    if completion.get().matches(generation) {
+                        if let Some(tile) = tile.upgrade() {
+                            tile.set_visible(false);
+                        }
+                    }
+                });
+            }
+        }
+    }
+}
 
 /// Events are sent to the GTK main thread, never directly to GTK widgets.
 pub enum Event {
@@ -513,9 +589,8 @@ fn build_window(
     title.set_xalign(0.0);
 
     // One tile per install task, laid out in a row so the parallel tracks are
-    // visible side by side. Every tile is built up front, hidden, and revealed when
-    // its task first reports progress; the row disappears once they are all done.
-    let install_tiles: [(InstallTask, gtk::Box, gtk::ProgressBar); 4] = [
+    // visible side by side. Tiles are revealed as their tasks report progress.
+    let install_tiles = [
         InstallTask::WineSetup,
         InstallTask::D3dCompiler,
         InstallTask::Vulkan,
@@ -532,11 +607,16 @@ fn build_window(
         tile.append(&label);
         tile.append(&bar);
         tile.set_visible(false);
-        (task, tile, bar)
+        (
+            task,
+            tile,
+            bar,
+            Rc::new(Cell::new(TileCompletion::default())),
+        )
     });
     let install_area = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     install_area.set_homogeneous(true);
-    for (_, tile, _) in &install_tiles {
+    for (_, tile, _, _) in &install_tiles {
         install_area.append(tile);
     }
 
@@ -693,39 +773,11 @@ fn build_window(
                     if title.text().as_str() != task.label() {
                         title.set_text(task.label());
                     }
-                    for (candidate, tile, bar) in &install_tiles {
+                    for (candidate, tile, bar, completion) in &install_tiles {
                         if *candidate != task {
                             continue;
                         }
-                        tile.set_visible(true);
-                        match state {
-                            TaskState::Running => {
-                                bar.set_fraction(0.0);
-                                // Drop any rate left over from an earlier fraction.
-                                bar.set_text(None);
-                                bar.pulse();
-                            }
-                            TaskState::Fraction { percent, rate } => {
-                                bar.set_fraction(f64::from(percent.min(99)) / 100.0);
-                                // The percentage with the transfer speed beside it,
-                                // formatted exactly as the debug log quotes it.
-                                let label = stats::transfer_progress(percent, rate);
-                                bar.set_text(Some(label.as_str()));
-                            }
-                            TaskState::Done => {
-                                // Back to GTK's own 100 % caption: the rate is stale now.
-                                bar.set_text(None);
-                                bar.set_fraction(1.0);
-                                // The install is over for good once every tile has
-                                // finished, so the whole area goes.
-                                let all_done = install_bars_complete(
-                                    install_tiles.iter().map(|(_, _, bar)| bar.fraction()),
-                                );
-                                if all_done {
-                                    install_area.set_visible(false);
-                                }
-                            }
-                        }
+                        update_install_tile(tile, bar, completion, state);
                     }
                 }
                 Event::Progress(InstallProgress::Launch { message }) => {
@@ -862,16 +914,6 @@ fn build_window(
         glib::ControlFlow::Continue
     });
     window
-}
-
-/// Whether every install tile has finished, given each tile's bar fraction.
-///
-/// The install area is hidden only then. Every task emits `Running` and later
-/// `Done`, and the tracks run in sequence and in parallel, so at any moment some
-/// bars sit at 0.0 because their task has not started yet; those must keep the
-/// area visible rather than being mistaken for finished work.
-fn install_bars_complete(fractions: impl IntoIterator<Item = f64>) -> bool {
-    fractions.into_iter().all(|fraction| fraction >= 1.0)
 }
 
 /// Refresh the remembered accounts' cards from the Zwift API in the background.
@@ -1022,13 +1064,76 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
-    fn the_install_area_stays_until_every_bar_is_complete() {
-        // WineSetup finishes before the parallel track's bars have appeared, so the
-        // three not-yet-started tiles still read 0.0. Treating those as finished hid
-        // the whole area and the later download bar was never seen.
-        assert!(!install_bars_complete([1.0, 0.0, 0.0, 0.0]));
-        assert!(!install_bars_complete([1.0, 1.0, 0.5, 0.0]));
-        assert!(install_bars_complete([1.0, 1.0, 1.0, 1.0]));
+    fn tile_completion_ignores_duplicates_and_invalidates_old_timeouts() {
+        let mut tile = TileCompletion::default();
+        let first = tile.complete().unwrap();
+        assert!(tile.matches(first));
+        assert_eq!(tile.complete(), None);
+
+        tile.running();
+        assert!(!tile.matches(first));
+        let second = tile.complete().unwrap();
+        assert_ne!(first, second);
+        assert!(!tile.matches(first));
+        assert!(tile.matches(second));
+    }
+
+    #[test]
+    #[ignore = "requires the GTK preview compositor"]
+    fn completed_tiles_hide_independently_on_the_gtk_main_loop() {
+        gtk::init().unwrap();
+        let window = gtk::Window::new();
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        window.set_child(Some(&row));
+        let tiles = [0, 1, 2].map(|_| {
+            let tile = gtk::Box::new(gtk::Orientation::Vertical, 6);
+            let bar = gtk::ProgressBar::new();
+            tile.append(&bar);
+            tile.set_visible(false);
+            row.append(&tile);
+            (tile, bar, Rc::new(Cell::new(TileCompletion::default())))
+        });
+        window.present();
+        let wait = |duration| {
+            let main_loop = glib::MainLoop::new(None, false);
+            let stop = main_loop.clone();
+            glib::timeout_add_local_once(duration, move || stop.quit());
+            main_loop.run();
+        };
+        let (first_tile, first_bar, first_completion) = &tiles[0];
+        let (second_tile, second_bar, second_completion) = &tiles[1];
+        let (running_tile, running_bar, running_completion) = &tiles[2];
+        update_install_tile(first_tile, first_bar, first_completion, TaskState::Done);
+        update_install_tile(
+            running_tile,
+            running_bar,
+            running_completion,
+            TaskState::Running,
+        );
+        wait(Duration::from_secs(1));
+        assert!(first_tile.is_visible());
+        assert_eq!(first_bar.fraction(), 1.0);
+        update_install_tile(first_tile, first_bar, first_completion, TaskState::Done);
+        update_install_tile(second_tile, second_bar, second_completion, TaskState::Done);
+        wait(Duration::from_millis(1200));
+        assert!(!first_tile.is_visible());
+        assert!(second_tile.is_visible());
+        assert!(running_tile.is_visible());
+        update_install_tile(first_tile, first_bar, first_completion, TaskState::Done);
+        assert!(!first_tile.is_visible());
+        update_install_tile(
+            second_tile,
+            second_bar,
+            second_completion,
+            TaskState::Running,
+        );
+        update_install_tile(second_tile, second_bar, second_completion, TaskState::Done);
+        wait(Duration::from_millis(1100));
+        assert!(second_tile.is_visible());
+        wait(Duration::from_millis(1100));
+        assert!(!second_tile.is_visible());
+        assert!(running_tile.is_visible());
+        window.close();
     }
 
     struct StubBackend {

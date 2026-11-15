@@ -63,9 +63,9 @@ guaranteed; consumers must not assume one.
 
 The GUI renders one tile per task in a horizontal, homogeneous row. Each tile is
 built hidden and revealed when its task first reports progress; `Running` pulses
-it, `Fraction` and `Done` set the bar. The whole install area hides once every
-*visible* tile has reached `1.0`, so the update path (only the `Game` tile) works.
-It also hides when the login gate opens or the launch begins. The status heading
+it, `Fraction` and `Done` set the bar. Each completed tile hides after two seconds,
+independently of the others. A restarted task invalidates its previous timer. The
+whole area hides immediately when the login gate opens or the launch begins. The status heading
 carries the short message; `Launch` also starts a spinner immediately after the
 text (the heading and spinner share an expanding box in the window header),
 stopped again on `GameReady`. The heading is a single, non-wrapping line —
