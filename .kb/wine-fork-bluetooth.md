@@ -82,3 +82,18 @@ bounded by the pending call's timeout. There is exactly one dispatcher (the
 `p_dbus_connection_read_write_dispatch` call in `bluez_dbus_loop`); keep it that way when
 touching the wait, and remember that a blocked event-loop thread stops BLE event delivery to
 wine entirely.
+
+## Only BLE, and a limited set of hardware
+
+The fork implements the BLE (Bluetooth LE) scanning and GATT support Zwift uses and nothing
+more: only LE devices are discovered, classic Bluetooth is not supported, and game
+controllers are not exposed to the game. This is the user-facing reason the README calls
+smart trainers experimental — if a device does not show up, pairing it through the Zwift
+Companion app is the documented workaround.
+
+The whole path (discovery, adapter selection, connect, GATT reads) is exercised in testing
+against a mocked BLE trainer, not a real one: `tests/tools/bluetooth/bluetooth-trainer.py`
+makes bluezoo's second adapter an LE FTMS/Cycling-Power trainer named "KICKR", and
+`tests/bluetooth.sh` asserts Zwift's winebth sees and connects it (see
+`tests/.kb/bluetooth-test.md`). Real trainers have only been tried against a small selection
+of hardware, so a device that works in the mock may still fail against real firmware.

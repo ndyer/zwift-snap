@@ -140,8 +140,13 @@ is expected on a headless host: the workshop container ships no browser, so link
 clicks there always end in that warning even though the same snap works on a desktop.
 The token file in `$SNAP_USER_COMMON/pairing-token.json` has owner-only permissions,
 and its compact JSON is read at launch time and forwarded as `--token=<json>`.
-`ZWIFT_NO_GUI=1`, no display, or failed GTK initialization selects terminal mode,
-which retains the game's own login flow rather than requiring browser authentication.
+`ZWIFT_NO_GUI=1`, no display, or failed GTK initialization selects terminal mode. It has
+no embedded-browser login gate and retains the game's own login flow (or accepts
+explicitly supplied game arguments), and its failure handling differs from the GUI's:
+`TerminalUi::failure` returns true only for `Failure::Update`, so an installation error
+quits while an update error is non-fatal and the launcher still starts the installed
+copy — where the GUI instead offers **Retry** for an install and **Launch anyway** for an
+update.
 
 ## Logging and cancellation
 
