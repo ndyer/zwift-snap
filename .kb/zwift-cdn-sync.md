@@ -51,6 +51,16 @@ transfer a tail guard stops adapting once the remaining bytes are less than abou
 windows' payload. Each change is logged with the current rate in MB/s, and the workers'
 per-file ticks repeat the last measured rate so the GUI's progress bar keeps showing it.
 
+Because a window's throughput depends on the sizes in flight, and `diff` returns the plan
+in manifest (path) order, which clusters similar-sized files together, `sync.rs` reorders
+the plan before transferring it (`order_for_download`): it sorts by size and then
+interleaves the largest and smallest remaining files. Every window of the transfer then
+spans the whole size range, so the rate the controller reads tracks the link rather than
+drift from the plan's shape — without the interleave, the run reaches a few large files
+first and a long tail of tiny ones last, the rate falls as the small files take over, and
+the controller trims the pool exactly when the many small, latency-bound files want more
+transfers, not fewer.
+
 ## The launcher shim
 
 The CDN manifest does not carry a `ZwiftLauncher.exe`, and `ZwiftApp.exe` only starts when

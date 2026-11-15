@@ -12,6 +12,7 @@
 //! The version key is the `version` attribute (for example `1.0.168455`), not the
 //! human-facing `sversion`; the latter is kept for display and the smoke test's cache.
 
+use std::collections::VecDeque;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -115,6 +116,34 @@ pub fn diff(local: &Manifest, server: &Manifest) -> Plan {
     Plan { fetch, delete }
 }
 
+/// Reorder a fetch plan so the mix of file sizes stays stable over the transfer.
+///
+/// [`diff`] returns the plan in manifest (path) order, which clusters files of
+/// similar size together: a run meets a few large files first and a long tail of
+/// tiny ones last. Throughput over a sampling window depends on the sizes in
+/// flight, so that drift makes a perfectly healthy link look like it slows down as
+/// the small files take over — and the adaptive transfer count in
+/// [`crate::download`] reads the change as a loss and trims back, exactly when the
+/// many small, latency-bound files want *more* transfers, not fewer. Interleaving
+/// the largest and smallest remaining files removes the artifact: every window then
+/// spans the full size range, so the measured throughput tracks the link rather
+/// than the plan's shape.
+fn order_for_download(fetch: &mut Vec<(RelPath, FileEntry)>) {
+    // Largest first, path as the tie-break so the order is deterministic.
+    fetch.sort_by(|a, b| b.1.length.cmp(&a.1.length).then_with(|| a.0.cmp(&b.0)));
+    let mut queue: VecDeque<_> = std::mem::take(fetch).into();
+    let mut ordered = Vec::with_capacity(queue.len());
+    // Alternate the largest remaining file and the smallest remaining one, so any
+    // window of the transfer spans the whole size range.
+    while let Some(large) = queue.pop_front() {
+        ordered.push(large);
+        if let Some(small) = queue.pop_back() {
+            ordered.push(small);
+        }
+    }
+    *fetch = ordered;
+}
+
 /// The version file the install points at: `Zwift_ver_cur_filename.txt` (NUL padded)
 /// names it, else `Zwift_ver_cur.xml`. Mirrors [`crate::version::current_version`].
 fn local_ver_cur_file(install_dir: &Path) -> String {
@@ -204,7 +233,10 @@ pub fn sync_version(
     let local = local_manifest(config.install_dir);
     let (server, manifest_bytes) =
         fetcher.fetch_manifest(&ver_cur.manifest, ver_cur.manifest_checksum)?;
-    let plan = diff(&local, &server);
+    let mut plan = diff(&local, &server);
+    // Interleave by size so the throughput the adaptive transfer count reads is the
+    // link, not the plan's ordering; see [`order_for_download`].
+    order_for_download(&mut plan.fetch);
     logger.info(&format!(
         "Zwift {} has {} files: {} to download, {} to delete",
         ver_cur.version,
@@ -477,6 +509,19 @@ mod tests {
         }
     }
 
+    /// A plan entry of an arbitrary length, for ordering tests where only the size
+    /// matters.
+    fn sized(path: &str, length: u64) -> (RelPath, FileEntry) {
+        (
+            RelPath::parse(path).unwrap(),
+            FileEntry {
+                length,
+                checksum: None,
+                modified: None,
+            },
+        )
+    }
+
     fn manifest(pairs: &[(&str, &[u8], Option<u32>)]) -> Manifest {
         Manifest::new(
             Version::parse("1.0.1").unwrap(),
@@ -528,6 +573,58 @@ mod tests {
         let plan = diff(&Manifest::empty(), &server);
         assert_eq!(plan.fetch.len(), 2);
         assert!(plan.delete.is_empty());
+    }
+
+    #[test]
+    fn the_fetch_plan_interleaves_large_and_small_files() {
+        // Sizes chosen so the ordering is unambiguous, and given in an order
+        // unrelated to size to prove the sort, not the input, decides.
+        let mut fetch = vec![
+            sized("tiny.bin", 10),
+            sized("huge.bin", 10_000),
+            sized("small.bin", 100),
+            sized("large.bin", 1_000),
+            sized("medium.bin", 500),
+        ];
+        order_for_download(&mut fetch);
+        let order: Vec<&str> = fetch.iter().map(|(path, _)| path.as_str()).collect();
+        // Largest, smallest, second largest, second smallest, then the middle.
+        assert_eq!(
+            order,
+            [
+                "huge.bin",
+                "tiny.bin",
+                "large.bin",
+                "small.bin",
+                "medium.bin"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_fetch_plan_ordering_handles_empty_and_single_file_plans() {
+        let mut empty: Vec<(RelPath, FileEntry)> = Vec::new();
+        order_for_download(&mut empty);
+        assert!(empty.is_empty());
+
+        let mut single = vec![sized("only.bin", 42)];
+        order_for_download(&mut single);
+        assert_eq!(single, vec![sized("only.bin", 42)]);
+    }
+
+    #[test]
+    fn the_fetch_plan_breaks_size_ties_by_path() {
+        // Equal sizes fall back to the path, so the order is deterministic rather
+        // than dependent on the manifest's iteration order.
+        let mut fetch = vec![
+            sized("b.bin", 100),
+            sized("a.bin", 100),
+            sized("c.bin", 100),
+        ];
+        order_for_download(&mut fetch);
+        let order: Vec<&str> = fetch.iter().map(|(path, _)| path.as_str()).collect();
+        // Sorted by path (a, b, c), then interleaved from the ends (a, c, b).
+        assert_eq!(order, ["a.bin", "c.bin", "b.bin"]);
     }
 
     #[test]
