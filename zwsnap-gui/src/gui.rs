@@ -866,7 +866,7 @@ fn build_window(
                         login_panel.start_login(decision);
                         continue;
                     }
-                    refresh_accounts(&store, &accounts_panel);
+                    refresh_accounts(&store, &accounts_panel, logger.as_ref());
                     accounts_panel.refresh();
                     *grid_decision.borrow_mut() = Some(decision);
                     title.set_text("Choose a rider");
@@ -916,17 +916,80 @@ fn build_window(
     window
 }
 
-/// Refresh the remembered accounts' cards from the Zwift API in the background.
-///
-/// The picker opens with the stats cached when each account was added and then
-/// quietly updates itself. Every step is best-effort: the launcher is routinely
-/// used offline, so a failed fetch keeps the cached values and the account is
-/// left untouched.
+fn avatar_to_fetch(
+    profile_url: Option<&str>,
+    cached_url: Option<&str>,
+    has_avatar: bool,
+) -> Option<String> {
+    let url = profile_url.filter(|url| !url.is_empty()).or(cached_url)?;
+    (!has_avatar || Some(url) != cached_url).then(|| url.to_owned())
+}
+
+struct RefreshedAccount {
+    id: String,
+    access: String,
+    cached_url: Option<String>,
+    had_avatar: bool,
+    profile: Option<profile::Profile>,
+    image: Option<(String, Vec<u8>)>,
+}
+
+fn apply_account_refresh(store: &mut Store, mut result: RefreshedAccount) -> io::Result<()> {
+    let Some(account) = store.find(&result.id) else {
+        return Ok(());
+    };
+    if account.avatar_url != result.cached_url
+        || store.avatar_path(account).is_some() != result.had_avatar
+        || store
+            .account_token(&result.id)
+            .ok()
+            .and_then(|token| token.get("access_token")?.as_str().map(str::to_owned))
+            .as_deref()
+            != Some(result.access.as_str())
+    {
+        return Ok(());
+    }
+
+    let image_result = if let Some((url, bytes)) = result.image {
+        store
+            .write_avatar(&result.id, &bytes, image_extension(&url))
+            .map(|()| Some(url))
+    } else {
+        Ok(None)
+    };
+    if let Some(ref mut profile) = result.profile {
+        if result.had_avatar
+            && avatar_to_fetch(
+                profile.large_avatar_url.as_deref(),
+                result.cached_url.as_deref(),
+                true,
+            )
+            .is_some()
+            && !matches!(&image_result, Ok(Some(_)))
+        {
+            profile.large_avatar_url = None;
+        }
+        store.refresh(&result.id, profile);
+    }
+    if let Ok(Some(url)) = &image_result {
+        if let Some(account) = store
+            .accounts
+            .iter_mut()
+            .find(|account| account.id == result.id)
+        {
+            account.avatar_url = Some(url.clone());
+        }
+    }
+    image_result.map(|_| ())
+}
+
+/// Refresh remembered profiles and avatars without blocking the picker.
 fn refresh_accounts(
     store: &std::rc::Rc<std::cell::RefCell<Store>>,
     accounts_panel: &std::rc::Rc<AccountsPanel>,
+    logger: Option<&Arc<Logger>>,
 ) {
-    let jobs: Vec<(String, String)> = {
+    let jobs: Vec<(String, String, Option<String>, bool)> = {
         let store = store.borrow();
         store
             .accounts
@@ -934,7 +997,12 @@ fn refresh_accounts(
             .filter_map(|account| {
                 let token = store.account_token(&account.id).ok()?;
                 let access = token.get("access_token")?.as_str()?.to_owned();
-                Some((account.id.clone(), access))
+                Some((
+                    account.id.clone(),
+                    access,
+                    account.avatar_url.clone(),
+                    store.avatar_path(account).is_some(),
+                ))
             })
             .collect()
     };
@@ -942,10 +1010,52 @@ fn refresh_accounts(
         return;
     }
     let (sender, receiver) = mpsc::channel();
+    let logger = logger.cloned();
+    let worker_logger = logger.clone();
     std::thread::spawn(move || {
         let refreshed = jobs
             .into_iter()
-            .filter_map(|(id, access)| profile::fetch(&access).ok().map(|profile| (id, profile)))
+            .map(|(id, access, cached_url, had_avatar)| {
+                let profile = match profile::fetch(&access) {
+                    Ok(profile) => Some(profile),
+                    Err(error) => {
+                        if let Some(logger) = &worker_logger {
+                            logger
+                                .debug(&format!("Unable to refresh the account profile: {error}"));
+                        }
+                        None
+                    }
+                };
+                let url = avatar_to_fetch(
+                    profile
+                        .as_ref()
+                        .and_then(|profile| profile.large_avatar_url.as_deref()),
+                    cached_url.as_deref(),
+                    had_avatar,
+                );
+                if profile.is_some() && cached_url.is_none() && url.is_none() {
+                    if let Some(logger) = &worker_logger {
+                        logger.debug("Account profile did not include an avatar URL");
+                    }
+                }
+                let image = url.and_then(|url| match profile::fetch_image(&url) {
+                    Ok(bytes) => Some((url, bytes)),
+                    Err(error) => {
+                        if let Some(logger) = &worker_logger {
+                            logger.debug(&format!("Unable to fetch the account avatar: {error}"));
+                        }
+                        None
+                    }
+                });
+                RefreshedAccount {
+                    id,
+                    access,
+                    cached_url,
+                    had_avatar,
+                    profile,
+                    image,
+                }
+            })
             .collect::<Vec<_>>();
         let _ = sender.send(refreshed);
     });
@@ -958,8 +1068,14 @@ fn refresh_accounts(
                 if !refreshed.is_empty() {
                     {
                         let mut store = store.borrow_mut();
-                        for (id, profile) in refreshed {
-                            store.refresh(&id, &profile);
+                        for result in refreshed {
+                            if let Err(error) = apply_account_refresh(&mut store, result) {
+                                if let Some(logger) = &logger {
+                                    logger.warning(&format!(
+                                        "Unable to save the account avatar: {error}"
+                                    ));
+                                }
+                            }
                         }
                         if let Err(error) = store.save() {
                             eprintln!("Unable to save accounts: {error}");
@@ -1002,7 +1118,15 @@ fn finish_add_account(
     let profile = token
         .get("access_token")
         .and_then(serde_json::Value::as_str)
-        .and_then(|access| profile::fetch(access).ok())
+        .and_then(|access| match profile::fetch(access) {
+            Ok(profile) => Some(profile),
+            Err(error) => {
+                if let Some(logger) = logger {
+                    logger.debug(&format!("Unable to fetch the account profile: {error}"));
+                }
+                None
+            }
+        })
         .unwrap_or_default();
     let id = match store.borrow_mut().upsert(&token, &profile, &claims) {
         Ok(id) => id,
@@ -1062,6 +1186,84 @@ fn image_extension(url: &str) -> &str {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn avatar_refresh_retries_missing_and_downloads_changed_urls() {
+        let old = "https://example.com/old.jpg";
+        let new = "https://example.com/new.jpg";
+        assert_eq!(
+            avatar_to_fetch(Some(old), Some(old), false).as_deref(),
+            Some(old)
+        );
+        assert_eq!(
+            avatar_to_fetch(Some(new), Some(old), true).as_deref(),
+            Some(new)
+        );
+        assert_eq!(
+            avatar_to_fetch(None, Some(old), false).as_deref(),
+            Some(old)
+        );
+        assert_eq!(avatar_to_fetch(Some(old), Some(old), true), None);
+        assert_eq!(avatar_to_fetch(None, None, false), None);
+    }
+
+    #[test]
+    fn avatar_refresh_preserves_old_image_on_failure_and_retries() {
+        let dir =
+            std::env::temp_dir().join(format!("zwsnap-avatar-refresh-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = Store::open(&dir);
+        let old = "https://example.com/old.png";
+        let new = "https://example.com/new.jpg";
+        let token = serde_json::json!({"access_token": "access"});
+        let claims = oauth::Claims {
+            sub: Some("avatar-refresh".to_owned()),
+            ..Default::default()
+        };
+        let initial = profile::Profile {
+            large_avatar_url: Some(old.to_owned()),
+            ..Default::default()
+        };
+        let id = store.upsert(&token, &initial, &claims).unwrap();
+        store.write_avatar(&id, b"old", "png").unwrap();
+        let updated = profile::Profile {
+            large_avatar_url: Some(new.to_owned()),
+            first_name: Some("Updated".to_owned()),
+            ..Default::default()
+        };
+        let result = |image| RefreshedAccount {
+            id: id.clone(),
+            access: "access".to_owned(),
+            cached_url: Some(old.to_owned()),
+            had_avatar: true,
+            profile: Some(updated.clone()),
+            image,
+        };
+        apply_account_refresh(&mut store, result(None)).unwrap();
+        let account = store.find(&id).unwrap();
+        assert_eq!(account.first_name.as_deref(), Some("Updated"));
+        assert_eq!(account.avatar_url.as_deref(), Some(old));
+        assert_eq!(
+            std::fs::read(store.avatar_path(account).unwrap()).unwrap(),
+            b"old"
+        );
+        apply_account_refresh(&mut store, result(Some((new.to_owned(), b"new".to_vec())))).unwrap();
+        let account = store.find(&id).unwrap();
+        assert_eq!(account.avatar_url.as_deref(), Some(new));
+        assert_eq!(
+            std::fs::read(store.avatar_path(account).unwrap()).unwrap(),
+            b"new"
+        );
+        assert!(!store.account_dir(&id).join("avatar.png").exists());
+        store.remove(&id).unwrap();
+        apply_account_refresh(
+            &mut store,
+            result(Some((new.to_owned(), b"stale".to_vec()))),
+        )
+        .unwrap();
+        assert!(!store.account_dir(&id).exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn tile_completion_ignores_duplicates_and_invalidates_old_timeouts() {

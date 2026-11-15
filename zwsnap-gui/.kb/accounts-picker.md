@@ -47,6 +47,8 @@ The panel is placed at the top of the window, in the space the install tiles occ
 
 A card is a `gtk::Overlay`: the base layer is a `gtk::Button` (CSS class `account-card`) that *is* the whole card and launches the rider when clicked, so there is no separate Play button. The card's content - a vertical box with a horizontal top row (avatar, or an initials badge, beside a vertical info column with the name row, an optional "Last used" pill, three chips and a `dim-label` meta line) - is set as that button's child, so the box inherits the button's click. The remove control is an icon-only `gtk::Button` (`edit-delete-symbolic`, CSS class `account-remove`) in the overlay's top-right corner (`halign` End, `valign` Start); the info column reserves room for it with `set_margin_end(28)` so text never runs under the icon. Chips format through `stats::distance`, `stats::elevation` and `stats::duration`, with metric or imperial chosen by the account's `use_metric` (default metric). Unset values render as `-`.
 
+Avatars are decoded at up to 72 by 72 pixels and displayed in a 72-pixel square; invalid images fall back to initials. Cards and the grid align to the start instead of filling the available width, and long names and metadata wrap. The compositor-backed `card_bounds_large_avatar_and_wraps_long_name` test checks the image allocation, card width, name wrapping and grid spacing.
+
 The grid's height is pinned by `AccountsPanel::update_height`: a `FlowBox` reports its natural height for its *natural* width, which packs every card onto one line, so the `ScrolledWindow`'s `min_content_height` is set from the grid measured at the width it actually has (capped at `MAX_GRID_HEIGHT`). The width is only known after allocation, so `request_height_update` retries on a short timer until it is.
 
 Remove shows a `gtk::MessageDialog` whose confirm button is labelled **Remove account**, then `Store::remove` deletes the directory, clears `pairing-token.json` when that account was selected, saves and rebuilds the grid. The remove control is icon-only (its tooltip names the rider), so it never competes with the card's name text as an OCR click target; because every card's remove icon is identical, automated suites must identify the *removed* card by position (first match) and the *surviving* card by name.
@@ -59,9 +61,7 @@ The panel is given two callbacks. `select(id)` runs `Store::select` + `save` and
 
 ## Profile refresh
 
-The picker opens with the stats cached when each account was added, then `refresh_accounts` (in `gui.rs`) spawns a thread that calls `profile::fetch` per stored token and posts the results back on a channel polled every 100 ms. `Store::refresh` merges a fetched profile into the existing account by id, keeping any field the profile omits, and returns `false` for an account removed while the fetch was in flight. Nothing is shown when a fetch fails.
-
-Avatars are only fetched when an account is added; a refreshed `avatar_url` therefore does not update the picture.
+The picker opens with cached data, then `refresh_accounts` (in `gui.rs`) fetches each profile on a background thread. It downloads an avatar when the cached file is missing or the profile URL changes, and retries a missing image using the cached URL when the profile cannot be fetched. Results are posted back on a channel polled every 100 ms; stale results for removed or changed accounts are discarded. `Store::refresh` merges profile fields while keeping omitted values. A failed image replacement keeps the old file and URL so the next refresh retries it. Profile and image failures are logged at debug level without blocking launch.
 
 ## Legacy migration
 

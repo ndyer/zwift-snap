@@ -276,6 +276,7 @@ impl Store {
         let dir = self.account_dir(id);
         fs::create_dir_all(&dir)?;
         let name = format!("avatar.{ext}");
+        write_private_atomic(&dir.join(&name), bytes)?;
         // Remove any older avatar with a different extension.
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
@@ -286,7 +287,6 @@ impl Store {
                 }
             }
         }
-        write_private_atomic(&dir.join(&name), bytes)?;
         if let Some(account) = self.accounts.iter_mut().find(|account| account.id == id) {
             account.avatar = Some(name);
         }
@@ -710,6 +710,30 @@ mod tests {
         let path = store.avatar_path(account).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"jpg-bytes");
         assert!(!store.account_dir(&id).join("avatar.png").exists());
+
+        let _ = fs::remove_dir_all(&common);
+    }
+
+    #[test]
+    fn avatar_replacement_keeps_old_file_if_write_fails() {
+        let common = scratch("avatar-failed-write");
+        let mut store = Store::open(&common);
+        let id = store
+            .upsert(
+                &token("a"),
+                &profile("Sara", "Campbell"),
+                &claims("sub-1", "s"),
+            )
+            .unwrap();
+        store.write_avatar(&id, b"png-bytes", "png").unwrap();
+        fs::create_dir(store.account_dir(&id).join("avatar.jpg.tmp")).unwrap();
+        assert!(store.write_avatar(&id, b"jpg-bytes", "jpg").is_err());
+        let account = store.find(&id).unwrap();
+        assert_eq!(account.avatar.as_deref(), Some("avatar.png"));
+        assert_eq!(
+            fs::read(store.avatar_path(account).unwrap()).unwrap(),
+            b"png-bytes"
+        );
 
         let _ = fs::remove_dir_all(&common);
     }

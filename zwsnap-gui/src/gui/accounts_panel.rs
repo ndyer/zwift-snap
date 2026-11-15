@@ -72,7 +72,7 @@ impl AccountsPanel {
             .row_spacing(12)
             .column_spacing(12)
             .valign(gtk::Align::Start)
-            .halign(gtk::Align::Fill)
+            .halign(gtk::Align::Start)
             .build();
         flow.add_css_class("account-grid");
 
@@ -258,6 +258,9 @@ impl AccountsPanel {
         let name_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let name = gtk::Label::new(Some(&account.name));
         name.set_xalign(0.0);
+        name.set_wrap(true);
+        name.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        name.set_max_width_chars(20);
         name.add_css_class("title-3");
         name_row.append(&name);
         if last_used == Some(account.id.as_str()) {
@@ -282,6 +285,9 @@ impl AccountsPanel {
 
         let meta = gtk::Label::new(Some(&meta_line(account, metric)));
         meta.set_xalign(0.0);
+        meta.set_wrap(true);
+        meta.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        meta.set_max_width_chars(28);
         meta.add_css_class("dim-label");
         info.append(&meta);
 
@@ -314,6 +320,7 @@ impl AccountsPanel {
         }
 
         let overlay = gtk::Overlay::new();
+        overlay.set_halign(gtk::Align::Start);
         overlay.set_child(Some(&launch));
         overlay.add_overlay(&self.remove_button(account));
         overlay.upcast()
@@ -321,10 +328,15 @@ impl AccountsPanel {
 
     /// The avatar image, or an initials badge when none is stored.
     fn avatar(&self, store: &Store, account: &Account) -> gtk::Widget {
-        if let Some(path) = store.avatar_path(account) {
-            let picture = gtk::Picture::for_filename(&path);
+        if let Some(pixbuf) = store.avatar_path(account).and_then(|path| {
+            gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(path, AVATAR_SIZE, AVATAR_SIZE, true).ok()
+        }) {
+            let texture = gtk::gdk::Texture::for_pixbuf(&pixbuf);
+            let picture = gtk::Picture::for_paintable(&texture);
             picture.set_size_request(AVATAR_SIZE, AVATAR_SIZE);
             picture.set_can_shrink(true);
+            picture.set_halign(gtk::Align::Start);
+            picture.set_valign(gtk::Align::Center);
             picture.add_css_class("account-avatar");
             return picture.upcast();
         }
@@ -492,3 +504,95 @@ const CSS: &str = "
     padding: 6px;
 }
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires the GTK preview compositor"]
+    fn card_bounds_large_avatar_and_wraps_long_name() {
+        gtk::init().unwrap();
+        let dir = std::env::temp_dir().join(format!("zwsnap-card-layout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let image =
+            gtk::gdk_pixbuf::Pixbuf::new(gtk::gdk_pixbuf::Colorspace::Rgb, true, 8, 1024, 1024)
+                .unwrap();
+        image.fill(0xff8000ff);
+        let image_path = dir.join("source.png");
+        image.savev(&image_path, "png", &[]).unwrap();
+        let mut store = Store::open(&dir);
+        store.accounts.push(Account {
+            id: "rider".to_owned(),
+            name: "A Very Long Rider Name That Should Wrap Instead Of Stretching The Card"
+                .to_owned(),
+            ..Account::default()
+        });
+        store.accounts.push(Account {
+            id: "second".to_owned(),
+            name: "Second Rider".to_owned(),
+            ..Account::default()
+        });
+        store
+            .write_avatar("rider", &std::fs::read(image_path).unwrap(), "png")
+            .unwrap();
+        let store = Rc::new(std::cell::RefCell::new(store));
+        let panel = AccountsPanel::new(
+            store,
+            None,
+            Handlers {
+                select: Box::new(|_| {}),
+                add: Box::new(|| {}),
+            },
+        );
+        panel.refresh();
+        let window = gtk::Window::builder()
+            .default_width(1200)
+            .default_height(600)
+            .build();
+        window.set_child(Some(panel.widget()));
+        window.present();
+        let main_loop = glib::MainLoop::new(None, false);
+        let stop = main_loop.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || stop.quit());
+        main_loop.run();
+
+        let child = panel
+            .flow
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::FlowBoxChild>()
+            .unwrap();
+        let overlay = child.child().unwrap().downcast::<gtk::Overlay>().unwrap();
+        let button = overlay.child().unwrap().downcast::<gtk::Button>().unwrap();
+        let top = button.child().unwrap().downcast::<gtk::Box>().unwrap();
+        let picture = top
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::Picture>()
+            .unwrap();
+        let info = picture
+            .next_sibling()
+            .unwrap()
+            .downcast::<gtk::Box>()
+            .unwrap();
+        let name_row = info.first_child().unwrap().downcast::<gtk::Box>().unwrap();
+        let name = name_row
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::Label>()
+            .unwrap();
+        assert_eq!(
+            (picture.width(), picture.height()),
+            (AVATAR_SIZE, AVATAR_SIZE)
+        );
+        assert!(overlay.width() < 600, "card width was {}", overlay.width());
+        assert!(name.layout().line_count() > 1);
+        let next = child.next_sibling().unwrap();
+        let gap = next.allocation().x() - child.allocation().x() - child.width();
+        assert!(gap <= 24, "gap between grid cells was {gap}");
+
+        window.close();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

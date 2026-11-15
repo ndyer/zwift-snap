@@ -58,6 +58,10 @@ echo "Testing completed progress tile timing"
 cargo test --manifest-path "${root}/zwsnap-gui/Cargo.toml" --features gtk-ui \
     gui::tests::completed_tiles_hide_independently_on_the_gtk_main_loop -- --exact --ignored
 
+echo "Testing account card layout"
+cargo test --manifest-path "${root}/zwsnap-gui/Cargo.toml" --features gtk-ui \
+    gui::accounts_panel::tests::card_bounds_large_avatar_and_wraps_long_name -- --exact --ignored
+
 echo "Testing cancellation of a pending decision"
 mkdir -p "${stage}/out/close" "${stage}/settings/close"
 printf '{"display_mode":"800x600"}' > "${stage}/settings/close/settings.json"
