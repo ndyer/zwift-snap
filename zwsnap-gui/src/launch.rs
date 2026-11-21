@@ -9,6 +9,7 @@
 //! `wine start ... ZwiftLauncher.exe ZwiftApp.exe ...` both supplies that parent
 //! name and forwards the game's exit code.
 
+use crate::auth::TokenSource;
 use crate::logging::Logger;
 use crate::wine_tools::Tools;
 use std::io;
@@ -25,9 +26,10 @@ pub struct LaunchConfig<'a> {
     pub wait_for_window: &'a Path,
     pub tools: &'a Tools,
     pub game_args: &'a [String],
-    /// OAuth token file written by the GUI login; its JSON is passed to the
-    /// game at launch time, after login has completed.
-    pub token_file: Option<&'a Path>,
+    /// The OAuth token source, read at launch time (after login) so a fresh
+    /// token from the login gate reaches the game. `None` launches without a
+    /// token, as in terminal mode and `--skip-login` runs.
+    pub token: Option<&'a dyn TokenSource>,
     pub startup_attempts: u32,
     pub startup_interval: Duration,
     pub game_poll_interval: Duration,
@@ -174,27 +176,20 @@ pub fn ensure_launcher_shim(install_dir: &Path, shim: &Path) -> io::Result<()> {
         .map_err(|error| io::Error::other(format!("Unable to write {}: {error}", target.display())))
 }
 
-/// Read the saved OAuth token and turn it into a `--token=<json>` argument.
+/// Read the OAuth token from the source and turn it into a `--token=<json>`
+/// argument.
 ///
-/// The file is read at launch time (after login) rather than at startup so a
-/// fresh token from the login dialog reaches the game. When a file is required,
-/// a missing or invalid token must not silently launch an unauthenticated game.
-fn token_arguments(token_file: Option<&Path>) -> io::Result<Vec<String>> {
-    let Some(token_file) = token_file else {
+/// The token is read at launch time (after login) rather than at startup so a
+/// fresh token from the login gate reaches the game. When a token is required,
+/// a missing or invalid one must not silently launch an unauthenticated game.
+fn token_arguments(token: Option<&dyn TokenSource>) -> io::Result<Vec<String>> {
+    let Some(token) = token else {
         return Ok(Vec::new());
     };
-    let text = std::fs::read_to_string(token_file).map_err(|error| {
-        io::Error::other(format!(
-            "Unable to read Zwift login token {}: {error}",
-            token_file.display()
-        ))
-    })?;
-    let value: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
-        io::Error::other(format!(
-            "Invalid Zwift login token in {}: {error}",
-            token_file.display()
-        ))
-    })?;
+    let value = token
+        .token()
+        .map_err(io::Error::other)?
+        .ok_or_else(|| io::Error::other("No Zwift login token is available to launch with"))?;
     if value["access_token"].as_str().is_none_or(str::is_empty) {
         return Err(io::Error::other("Zwift login token has no access token"));
     }
@@ -214,7 +209,7 @@ pub fn start(
     wait_for_window: bool,
     progress: &mut impl FnMut(u8, &str),
 ) -> io::Result<WindowOutcome> {
-    let token_args = token_arguments(config.token_file)?;
+    let token_args = token_arguments(config.token)?;
     let directory = wine_directory(config, logger)?;
     ensure_launcher_shim(config.install_dir, config.launcher_shim)?;
     progress(95, "Starting Zwift");
@@ -365,7 +360,7 @@ esac
                 wait_for_window: &self.dir,
                 tools: &self.tools,
                 game_args: &[],
-                token_file: None,
+                token: None,
                 startup_attempts: 1,
                 startup_interval: Duration::ZERO,
                 game_poll_interval: Duration::ZERO,
@@ -494,40 +489,55 @@ esac
         }
     }
 
+    /// A token source returning a fixed result, standing in for the shared
+    /// in-memory token without launching a real login.
+    struct FixedToken(Result<Option<serde_json::Value>, String>);
+
+    impl TokenSource for FixedToken {
+        fn token(&self) -> Result<Option<serde_json::Value>, String> {
+            self.0.clone()
+        }
+    }
+
     #[test]
     fn token_is_read_at_launch_and_forwarded_as_compact_json() {
         let fixture = Fixture::new("token");
         let prefix = fixture.dir.join("prefix");
-        let token_file = fixture.dir.join("token.json");
+        let token = FixedToken(Ok(Some(serde_json::json!({ "access_token": "test-only" }))));
         let config = LaunchConfig {
             wine_prefix: &prefix,
-            token_file: Some(&token_file),
+            token: Some(&token),
             ..fixture.config()
         };
-        // Login writes the file after the launch configuration has been created.
-        fs::write(&token_file, "{\n  \"access_token\": \"test-only\"\n}").unwrap();
         let logger = Logger::new(fixture.dir.join("log"), 0, false);
         logger.init().unwrap();
         start(&config, &logger, false, &mut |_, _| {}).unwrap();
         let calls = fs::read_to_string(fixture.dir.join("calls")).unwrap();
         assert!(calls
             .contains("ZwiftLauncher.exe ZwiftApp.exe --token={\"access_token\":\"test-only\"}"));
-        assert!(!calls.contains(&format!("--token={}", token_file.display())));
+        // The token JSON itself is passed, never a path to it.
+        assert!(!calls.contains("--token=/"));
     }
 
     #[test]
     fn required_token_errors_prevent_game_start() {
         let fixture = Fixture::new("invalid-token");
-        let token_file = fixture.dir.join("token.json");
-        let config = LaunchConfig {
-            token_file: Some(&token_file),
-            ..fixture.config()
-        };
         let logger = Logger::new(fixture.dir.join("log"), 0, false);
         logger.init().unwrap();
-        assert!(start(&config, &logger, false, &mut |_, _| {}).is_err());
-        for contents in ["not JSON", "{}", "{\"access_token\":\"\"}"] {
-            fs::write(&token_file, contents).unwrap();
+        // No token at all, a token-source error, and a token with no access
+        // token must each stop the launch rather than start an unauthenticated
+        // game.
+        let cases = [
+            FixedToken(Ok(None)),
+            FixedToken(Err("no token is available".to_owned())),
+            FixedToken(Ok(Some(serde_json::json!({})))),
+            FixedToken(Ok(Some(serde_json::json!({ "access_token": "" })))),
+        ];
+        for token in &cases {
+            let config = LaunchConfig {
+                token: Some(token),
+                ..fixture.config()
+            };
             assert!(start(&config, &logger, false, &mut |_, _| {}).is_err());
         }
         assert!(!fixture.dir.join("calls").exists());

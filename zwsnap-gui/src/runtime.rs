@@ -1,5 +1,6 @@
 //! Adapter connecting the launcher lifecycle to the Rust Wine implementation.
 
+use crate::auth::AuthToken;
 use crate::display::{configure_file, DisplayMode};
 use crate::graphics::{self, Setting as GraphicsSetting};
 use crate::inhibit::ScreenInhibitor;
@@ -11,6 +12,7 @@ use crate::process::run_output_timeout;
 use crate::update;
 use std::io::{self, ErrorKind};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct Runtime<'a> {
@@ -22,6 +24,10 @@ pub struct Runtime<'a> {
     pub wait_for_window: bool,
     pub disable_egl: bool,
     pub progress: &'a (dyn Fn(InstallProgress) + Sync),
+    /// The shared in-memory token, cleared by the forget-on-exit purge. Taken as
+    /// `Arc` because the worker thread owns this runtime while the GUI holds the
+    /// same token.
+    pub auth: Option<Arc<AuthToken>>,
     /// The screensaver inhibitor for a fullscreen session, taken when the game
     /// starts and released in `cleanup`. It has to outlive `start`, which is why
     /// it lives here rather than in a local.
@@ -199,24 +205,17 @@ impl LauncherBackend for Runtime<'_> {
                                 self.logger
                                     .info("Forget-on-exit flag found, cleaning up session data");
 
-                                // Remove the pairing token file
-                                let token_file =
-                                    self.install.user_common.join("pairing-token.json");
-                                if token_file.exists() {
-                                    if let Err(e) = std::fs::remove_file(&token_file) {
-                                        self.logger.warning(&format!(
-                                            "Failed to remove pairing token: {}",
-                                            e
-                                        ));
-                                    } else {
-                                        self.logger.info("Removed pairing token file");
-                                    }
+                                // Drop the in-memory token: a forgotten login was
+                                // never persisted (NEVER-WRITE). The account's
+                                // directory below holds its WebKit session, so
+                                // removing it forgets the remembered login too.
+                                let last_used_id = json.get("last_used").and_then(|v| v.as_str());
+                                if let Some(auth) = self.auth.as_ref() {
+                                    auth.clear();
                                 }
 
                                 // Remove the current account from the store
-                                if let Some(last_used) =
-                                    json.get("last_used").and_then(|v| v.as_str())
-                                {
+                                if let Some(last_used) = last_used_id {
                                     let account_dir =
                                         self.install.user_common.join("accounts").join(last_used);
                                     if account_dir.exists() {
@@ -497,7 +496,7 @@ mod tests {
             wait_for_window: &window,
             tools: &tools,
             game_args: &[],
-            token_file: None,
+            token: None,
             startup_attempts: 1,
             startup_interval: Duration::ZERO,
             game_poll_interval: Duration::ZERO,
@@ -514,6 +513,7 @@ mod tests {
             wait_for_window: false,
             disable_egl: false,
             inhibitor: None,
+            auth: None,
             progress: &progress,
         };
         #[cfg(not(feature = "gtk-ui"))]

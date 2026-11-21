@@ -1,11 +1,11 @@
 //! GTK frontend and channel bridge for the launcher worker.
 
 use crate::accounts::Store;
+use crate::auth::{AuthToken, TokenSource};
 use crate::cancel::Cancellation;
 use crate::display::DisplayMode;
 use crate::install::{InstallProgress, InstallTask, TaskState};
 use crate::logging::Logger;
-use crate::oauth;
 use crate::orchestration::{self, Failure, LauncherBackend, LauncherUi};
 use crate::profile;
 use crate::stats;
@@ -22,11 +22,13 @@ mod accounts_panel;
 mod icons;
 mod log_panel;
 mod login_panel;
+mod session;
 mod settings;
 
 use accounts_panel::{AccountsPanel, Handlers as AccountHandlers};
 use log_panel::LogPanel;
 use login_panel::LoginPanel;
+use session::LoginOutcome;
 use settings::SettingsDialog;
 
 pub use settings::SettingsContext;
@@ -345,73 +347,6 @@ pub fn launch(
 
 type Completion = std::rc::Rc<std::cell::RefCell<Option<Result<(), String>>>>;
 
-/// Which WebKit session a panel runs on.
-///
-/// The launcher's own gate uses [`SessionMode::Persistent`], so Zwift's "Remember
-/// me" cookie survives a restart. Logging in a *new* account from the picker uses
-/// [`SessionMode::Ephemeral`] instead: an ephemeral session shares no cookie
-/// storage, so the current account's Keycloak SSO cookie cannot silently sign the
-/// new login back into the account already in the store.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionMode {
-    /// Cookies persist in `$SNAP_USER_COMMON/webkit` across launcher runs.
-    Persistent,
-    /// No persistent cookie or cache storage; nothing survives the view.
-    Ephemeral,
-}
-
-/// Build a WebView for `session`, falling back to a default view when the
-/// persistent store cannot be prepared.
-pub(super) fn webview_for(session: SessionMode) -> webkit6::WebView {
-    match session {
-        SessionMode::Persistent => persistent_webview(),
-        SessionMode::Ephemeral => Some(
-            webkit6::WebView::builder()
-                .network_session(&webkit6::NetworkSession::new_ephemeral())
-                .build(),
-        ),
-    }
-    .unwrap_or_default()
-}
-
-/// A WebView whose cookies persist in `$SNAP_USER_COMMON/webkit`, so Zwift's
-/// "Remember me" cookie survives a launcher restart. The directory and cookie
-/// database hold live session cookies, so they are created owner-only (0700/0600),
-/// before WebKit opens them. Returns `None` if the store cannot be prepared; the
-/// caller then falls back to a non-persistent view.
-fn persistent_webview() -> Option<webkit6::WebView> {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-
-    let common = std::env::var("SNAP_USER_COMMON").ok()?;
-    let data_dir = std::path::PathBuf::from(common).join("webkit");
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&data_dir)
-        .ok()?;
-    let db_path = data_dir.join("cookies.sqlite");
-    // Create the empty database owner-only; SQLite keeps the mode when it opens the file.
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .open(&db_path)
-        .ok()?;
-
-    let session = webkit6::NetworkSession::new(data_dir.to_str(), None);
-    if let Some(cookies) = session.cookie_manager() {
-        cookies.set_persistent_storage(
-            &db_path.to_string_lossy(),
-            webkit6::CookiePersistentStorage::Sqlite,
-        );
-    }
-    Some(
-        webkit6::WebView::builder()
-            .network_session(&session)
-            .build(),
-    )
-}
-
 fn run_application(
     mode: DisplayMode,
     cancellation: Cancellation,
@@ -530,29 +465,16 @@ fn build_window(
         .parent()
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
+    // The one ephemeral token, shared with the worker thread (which reads it at
+    // launch time and clears it on a forget-on-exit run).
+    let auth = settings.auth.clone();
     let store = std::rc::Rc::new(std::cell::RefCell::new(Store::open(&common)));
     {
         let mut guard = store.borrow_mut();
         guard.load();
-        // An install from before the picker has a launch token but no account
-        // list: adopt that rider so an upgrade does not ask them to log in
-        // again. Best-effort: a failure just leaves the store empty.
-        if guard.is_empty() {
-            if let Ok(token) = guard.launch_token() {
-                let claims = oauth::token_claims(&token);
-                match guard.import_legacy(&claims) {
-                    Ok(Some(_)) => {
-                        if let Err(error) = guard.save() {
-                            eprintln!("Unable to save accounts: {error}");
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        eprintln!("Unable to adopt the existing login: {error}");
-                    }
-                }
-            }
-        }
+        // Delete any token files left by older launchers; they cannot become a
+        // WebKit session, so the rider simply logs in again.
+        guard.cleanup_legacy();
     }
     // With no account remembered (and not a preview) the launcher opens on
     // Zwift's registration page; a `--preview` run stays reproducible.
@@ -563,6 +485,7 @@ fn build_window(
         registration,
         logger.clone(),
         Some(store.clone()),
+        auth.clone(),
     ));
 
     // The Settings dialog is built while hidden; `present` shows it on demand.
@@ -640,12 +563,12 @@ fn build_window(
             let title = title.clone();
             let launch_spinner = launch_spinner.clone();
             let install_area = install_area.clone();
+            let login_panel = login_panel.clone();
+            let auth = auth.clone();
+            let logger = logger.clone();
+            let cancellation = cancellation.clone();
             Box::new(move |id: String| {
-                // Show "Launching Zwift" immediately
-                install_area.set_visible(false);
-                launch_spinner.start();
-                title.set_text("Launching Zwift");
-
+                // Record the selection so the launch reads this account.
                 {
                     let mut store = store.borrow_mut();
                     match store.select(&id) {
@@ -654,14 +577,52 @@ fn build_window(
                                 eprintln!("Unable to save accounts: {error}");
                             }
                         }
-                        Err(error) => eprintln!("Unable to select account: {error}"),
+                        Err(error) => {
+                            eprintln!("Unable to select account: {error}");
+                            return;
+                        }
                     }
                 }
-                if let Some(reply) = grid_decision.borrow_mut().take() {
-                    if reply.send(true).is_err() {
-                        eprintln!("Unable to confirm account selection: worker stopped");
-                    }
-                }
+                install_area.set_visible(false);
+                launch_spinner.start();
+                title.set_text("Launching Zwift");
+
+                // Re-authenticate silently from the account's stored session; a
+                // rider whose session is gone or expired logs in again instead.
+                let session_dir = store.borrow().session_dir(&id);
+                let Some(network_session) = session::account_session(&session_dir) else {
+                    relogin(&login_panel, &grid_decision, &title, &launch_spinner);
+                    return;
+                };
+                let auth = auth.clone();
+                let grid_decision = grid_decision.clone();
+                let login_panel = login_panel.clone();
+                let title = title.clone();
+                let launch_spinner = launch_spinner.clone();
+                let logger = logger.clone();
+                session::authorize(
+                    network_session,
+                    false,
+                    cancellation.clone(),
+                    move |outcome| match outcome {
+                        LoginOutcome::Token(token) => {
+                            auth.set(token);
+                            if let Some(reply) = grid_decision.borrow_mut().take() {
+                                if reply.send(true).is_err() {
+                                    eprintln!(
+                                        "Unable to confirm account selection: worker stopped"
+                                    );
+                                }
+                            }
+                        }
+                        LoginOutcome::NeedsLogin | LoginOutcome::Failed(_) => {
+                            if let Some(logger) = &logger {
+                                logger.info("Silent login failed; asking to log in again");
+                            }
+                            relogin(&login_panel, &grid_decision, &title, &launch_spinner);
+                        }
+                    },
+                );
             }) as Box<dyn Fn(String)>
         };
         let add = {
@@ -670,7 +631,10 @@ fn build_window(
             Box::new(move || {
                 // A fresh, cookie-less session: the current account's SSO cookie
                 // must not silently sign the new login back into itself.
-                login_panel.set_session(SessionMode::Ephemeral);
+                login_panel.reset_session();
+                // An added account is always remembered (its ephemeral session
+                // has no "Remember me" cookie to consult).
+                login_panel.set_remember_session(false);
                 let (sender, receiver) = mpsc::channel();
                 *add_result.borrow_mut() = Some(receiver);
                 login_panel.start_login(sender);
@@ -805,7 +769,13 @@ fn build_window(
         match add_outcome {
             Some(Ok(true)) => {
                 add_result.borrow_mut().take();
-                finish_add_account(&store, &accounts_panel, &grid_decision, logger.as_ref());
+                finish_add_account(
+                    &store,
+                    &accounts_panel,
+                    &grid_decision,
+                    &auth,
+                    logger.as_ref(),
+                );
                 // The login page was only shown to add the account: put the embed
                 // page back now that the login has succeeded.
                 login_panel.show_embed();
@@ -882,9 +852,11 @@ fn build_window(
                     // The install tiles have served their purpose; the picker or
                     // the WebView login takes over the window from here.
                     install_area.set_visible(false);
-                    // The store was loaded (and a legacy install adopted) at
-                    // startup, so this only decides between the picker and the
-                    // WebView login.
+                    // The store was loaded at startup (and any legacy token files
+                    // removed). With at least one remembered account the picker is
+                    // shown: a rider whose session has expired simply logs in again
+                    // when their card is selected. Only an empty store goes
+                    // straight to the WebView login gate.
                     let remembered = accounts_panel.has_accounts();
                     if !remembered {
                         // No account is remembered: the WebView
@@ -896,10 +868,17 @@ fn build_window(
                         // carries its own prompt.
                         title.set_text("");
                         accounts_panel.set_visible(false);
+                        // The gate honours the "Remember me" cookie.
+                        login_panel.set_remember_session(true);
                         login_panel.start_login(decision);
                         continue;
                     }
-                    refresh_accounts(&store, &accounts_panel, logger.as_ref());
+                    refresh_accounts(
+                        &store,
+                        &accounts_panel,
+                        logger.as_ref(),
+                        cancellation.clone(),
+                    );
                     accounts_panel.clear_selection_highlight();
                     accounts_panel.refresh();
                     *grid_decision.borrow_mut() = Some(decision);
@@ -961,7 +940,6 @@ fn avatar_to_fetch(
 
 struct RefreshedAccount {
     id: String,
-    access: String,
     cached_url: Option<String>,
     had_avatar: bool,
     profile: Option<profile::Profile>,
@@ -972,14 +950,10 @@ fn apply_account_refresh(store: &mut Store, mut result: RefreshedAccount) -> io:
     let Some(account) = store.find(&result.id) else {
         return Ok(());
     };
+    // Discard a result for an account whose cached avatar changed while the
+    // refresh was in flight.
     if account.avatar_url != result.cached_url
         || store.avatar_path(account).is_some() != result.had_avatar
-        || store
-            .account_token(&result.id)
-            .ok()
-            .and_then(|token| token.get("access_token")?.as_str().map(str::to_owned))
-            .as_deref()
-            != Some(result.access.as_str())
     {
         return Ok(());
     }
@@ -1017,107 +991,63 @@ fn apply_account_refresh(store: &mut Store, mut result: RefreshedAccount) -> io:
     image_result.map(|_| ())
 }
 
-/// Refresh remembered profiles and avatars without blocking the picker.
+/// Refresh remembered profiles and avatars in the background.
+///
+/// Each account is silently re-authenticated from its stored session to mint a
+/// throwaway token for the profile API; the token is used once and never kept.
+/// The work is serialized (one hidden WebView and one fetch at a time) and
+/// best-effort throughout: an account that cannot be re-authenticated is simply
+/// skipped, leaving its cached card in place.
 fn refresh_accounts(
     store: &std::rc::Rc<std::cell::RefCell<Store>>,
     accounts_panel: &std::rc::Rc<AccountsPanel>,
     logger: Option<&Arc<Logger>>,
+    cancellation: Cancellation,
 ) {
-    let jobs: Vec<(String, String, Option<String>, bool)> = {
+    // Only accounts with a stored session can be refreshed without a login.
+    let jobs: Rc<Vec<(String, Option<String>, bool)>> = Rc::new({
         let store = store.borrow();
         store
             .accounts
             .iter()
-            .filter_map(|account| {
-                let token = store.account_token(&account.id).ok()?;
-                let access = token.get("access_token")?.as_str()?.to_owned();
-                Some((
+            .filter(|account| store.has_session(&account.id))
+            .map(|account| {
+                (
                     account.id.clone(),
-                    access,
                     account.avatar_url.clone(),
                     store.avatar_path(account).is_some(),
-                ))
+                )
             })
             .collect()
-    };
+    });
     if jobs.is_empty() {
         return;
     }
-    let (sender, receiver) = mpsc::channel();
-    let logger = logger.cloned();
-    let worker_logger = logger.clone();
-    std::thread::spawn(move || {
-        let refreshed = jobs
-            .into_iter()
-            .map(|(id, access, cached_url, had_avatar)| {
-                let profile = match profile::fetch(&access) {
-                    Ok(profile) => Some(profile),
-                    Err(error) => {
-                        if let Some(logger) = &worker_logger {
-                            logger
-                                .debug(&format!("Unable to refresh the account profile: {error}"));
-                        }
-                        None
-                    }
-                };
-                let url = avatar_to_fetch(
-                    profile
-                        .as_ref()
-                        .and_then(|profile| profile.large_avatar_url.as_deref()),
-                    cached_url.as_deref(),
-                    had_avatar,
-                );
-                if profile.is_some() && cached_url.is_none() && url.is_none() {
-                    if let Some(logger) = &worker_logger {
-                        logger.debug("Account profile did not include an avatar URL");
-                    }
-                }
-                let image = url.and_then(|url| match profile::fetch_image(&url) {
-                    Ok(bytes) => Some((url, bytes)),
-                    Err(error) => {
-                        if let Some(logger) = &worker_logger {
-                            logger.debug(&format!("Unable to fetch the account avatar: {error}"));
-                        }
-                        None
-                    }
-                });
-                RefreshedAccount {
-                    id,
-                    access,
-                    cached_url,
-                    had_avatar,
-                    profile,
-                    image,
-                }
-            })
-            .collect::<Vec<_>>();
-        let _ = sender.send(refreshed);
-    });
+    // Profile fetches run on worker threads; results are applied on the main
+    // thread through this channel. It stays open until the whole chain finishes,
+    // when the last sender is dropped.
+    let (sender, receiver) = mpsc::channel::<RefreshedAccount>();
+    refresh_next(&jobs, 0, store, logger.cloned(), cancellation, sender);
 
     let store = store.clone();
     let accounts_panel = accounts_panel.clone();
+    let logger = logger.cloned();
     glib::timeout_add_local(Duration::from_millis(100), move || {
         match receiver.try_recv() {
-            Ok(refreshed) => {
-                if !refreshed.is_empty() {
-                    {
-                        let mut store = store.borrow_mut();
-                        for result in refreshed {
-                            if let Err(error) = apply_account_refresh(&mut store, result) {
-                                if let Some(logger) = &logger {
-                                    logger.warning(&format!(
-                                        "Unable to save the account avatar: {error}"
-                                    ));
-                                }
-                            }
-                        }
-                        if let Err(error) = store.save() {
-                            eprintln!("Unable to save accounts: {error}");
+            Ok(result) => {
+                {
+                    let mut store = store.borrow_mut();
+                    if let Err(error) = apply_account_refresh(&mut store, result) {
+                        if let Some(logger) = &logger {
+                            logger.warning(&format!("Unable to save the account avatar: {error}"));
                         }
                     }
-                    accounts_panel.refresh();
+                    if let Err(error) = store.save() {
+                        eprintln!("Unable to save accounts: {error}");
+                    }
                 }
-                glib::ControlFlow::Break
+                accounts_panel.refresh();
+                glib::ControlFlow::Continue
             }
             Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
             Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
@@ -1125,30 +1055,145 @@ fn refresh_accounts(
     });
 }
 
-/// Record the account that just logged in through the picker's "add another
+/// Silently re-authenticate `jobs[index]`, fetch its profile, then recurse to the
+/// next account. The authorized token is used only to fetch the profile and is
+/// dropped with the callback.
+fn refresh_next(
+    jobs: &Rc<Vec<(String, Option<String>, bool)>>,
+    index: usize,
+    store: &std::rc::Rc<std::cell::RefCell<Store>>,
+    logger: Option<Arc<Logger>>,
+    cancellation: Cancellation,
+    sender: mpsc::Sender<RefreshedAccount>,
+) {
+    if cancellation.is_cancelled() || index >= jobs.len() {
+        return;
+    }
+    let (id, cached_url, had_avatar) = jobs[index].clone();
+    let dir = store.borrow().session_dir(&id);
+    let Some(network_session) = session::account_session(&dir) else {
+        refresh_next(jobs, index + 1, store, logger, cancellation, sender);
+        return;
+    };
+    let jobs = jobs.clone();
+    let store = store.clone();
+    let next_logger = logger.clone();
+    let next_cancellation = cancellation.clone();
+    let next_sender = sender.clone();
+    session::authorize(
+        network_session,
+        false,
+        cancellation.clone(),
+        move |outcome| {
+            if let LoginOutcome::Token(token) = outcome {
+                if let Some(access) = token
+                    .get("access_token")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                {
+                    let sender = sender.clone();
+                    let logger = logger.clone();
+                    std::thread::spawn(move || {
+                        let profile = match profile::fetch(&access) {
+                            Ok(profile) => Some(profile),
+                            Err(error) => {
+                                if let Some(logger) = &logger {
+                                    logger.debug(&format!(
+                                        "Unable to refresh the account profile: {error}"
+                                    ));
+                                }
+                                None
+                            }
+                        };
+                        let url = avatar_to_fetch(
+                            profile
+                                .as_ref()
+                                .and_then(|profile| profile.large_avatar_url.as_deref()),
+                            cached_url.as_deref(),
+                            had_avatar,
+                        );
+                        let image = url.and_then(|url| match profile::fetch_image(&url) {
+                            Ok(bytes) => Some((url, bytes)),
+                            Err(error) => {
+                                if let Some(logger) = &logger {
+                                    logger.debug(&format!(
+                                        "Unable to fetch the account avatar: {error}"
+                                    ));
+                                }
+                                None
+                            }
+                        });
+                        let _ = sender.send(RefreshedAccount {
+                            id,
+                            cached_url,
+                            had_avatar,
+                            profile,
+                            image,
+                        });
+                    });
+                }
+            }
+            // Advance regardless of the outcome so one failure never stalls the rest.
+            refresh_next(
+                &jobs,
+                index + 1,
+                &store,
+                next_logger,
+                next_cancellation,
+                next_sender,
+            );
+        },
+    );
+}
+
+/// Ask a rider to log in again: a silent re-authentication that needs a password,
+/// or a card whose session is gone. Answers the worker's pending decision from
+/// the login panel instead.
+fn relogin(
+    login_panel: &std::rc::Rc<LoginPanel>,
+    grid_decision: &std::rc::Rc<std::cell::RefCell<Option<Sender<bool>>>>,
+    title: &gtk::Label,
+    launch_spinner: &gtk::Spinner,
+) {
+    launch_spinner.stop();
+    title.set_text("Log in again");
+    if let Some(reply) = grid_decision.borrow_mut().take() {
+        login_panel.set_remember_session(true);
+        login_panel.start_login(reply);
+    }
+}
+
+/// Finish the account that just logged in through the picker's "add another
 /// account" flow, then launch with it.
 ///
-/// The login writes its token to the launch token file (`pairing-token.json`),
-/// exactly as the launcher's own gate does, so this reads it back, derives the
-/// identity from its claims, fetches the profile best-effort, stores the account
-/// (token, card fields, avatar) and answers the worker's pending decision so the
-/// game starts as the new rider.
+/// The login panel has already recorded the account's identity, selected it and
+/// held its token in `auth`. This fetches the profile best-effort and merges it
+/// into the card, then answers the worker's pending decision so the game starts
+/// as the new rider.
 fn finish_add_account(
     store: &std::rc::Rc<std::cell::RefCell<Store>>,
     accounts_panel: &std::rc::Rc<AccountsPanel>,
     grid_decision: &std::rc::Rc<std::cell::RefCell<Option<Sender<bool>>>>,
+    auth: &Arc<AuthToken>,
     logger: Option<&Arc<Logger>>,
 ) {
-    let token = match store.borrow().launch_token() {
-        Ok(token) => token,
+    let token = match auth.token() {
+        Ok(Some(token)) => token,
+        Ok(None) => {
+            eprintln!("Unable to finish adding the account: the login produced no token");
+            return;
+        }
         Err(error) => {
             eprintln!("Unable to read the new account's token: {error}");
             return;
         }
     };
-    let claims = oauth::token_claims(&token);
+    let Some(id) = store.borrow().last_used_id().map(str::to_owned) else {
+        eprintln!("Unable to finish adding the account: none was selected");
+        return;
+    };
     // The profile is best-effort: if the API cannot be reached the account is
-    // still remembered (with whatever the token's claims name it).
+    // still remembered (with the name its token's claims gave it).
     let profile = token
         .get("access_token")
         .and_then(serde_json::Value::as_str)
@@ -1162,13 +1207,7 @@ fn finish_add_account(
             }
         })
         .unwrap_or_default();
-    let id = match store.borrow_mut().upsert(&token, &profile, &claims) {
-        Ok(id) => id,
-        Err(error) => {
-            eprintln!("Unable to remember the new account: {error}");
-            return;
-        }
-    };
+    store.borrow_mut().refresh(&id, &profile);
     if let Some(url) = profile.large_avatar_url.as_deref() {
         match profile::fetch_image(url) {
             Ok(bytes) => {
@@ -1189,14 +1228,8 @@ fn finish_add_account(
             }
         }
     }
-    {
-        let mut store = store.borrow_mut();
-        if let Err(error) = store.select(&id) {
-            eprintln!("Unable to select the new account: {error}");
-        }
-        if let Err(error) = store.save() {
-            eprintln!("Unable to save accounts: {error}");
-        }
+    if let Err(error) = store.borrow().save() {
+        eprintln!("Unable to save accounts: {error}");
     }
     accounts_panel.refresh();
     if let Some(reply) = grid_decision.borrow_mut().take() {
@@ -1219,6 +1252,7 @@ fn image_extension(url: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::oauth;
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -1249,7 +1283,6 @@ mod tests {
         let mut store = Store::open(&dir);
         let old = "https://example.com/old.png";
         let new = "https://example.com/new.jpg";
-        let token = serde_json::json!({"access_token": "access"});
         let claims = oauth::Claims {
             sub: Some("avatar-refresh".to_owned()),
             ..Default::default()
@@ -1258,7 +1291,7 @@ mod tests {
             large_avatar_url: Some(old.to_owned()),
             ..Default::default()
         };
-        let id = store.upsert(&token, &initial, &claims).unwrap();
+        let id = store.upsert(&initial, &claims).unwrap();
         store.write_avatar(&id, b"old", "png").unwrap();
         let updated = profile::Profile {
             large_avatar_url: Some(new.to_owned()),
@@ -1267,7 +1300,6 @@ mod tests {
         };
         let result = |image| RefreshedAccount {
             id: id.clone(),
-            access: "access".to_owned(),
             cached_url: Some(old.to_owned()),
             had_avatar: true,
             profile: Some(updated.clone()),

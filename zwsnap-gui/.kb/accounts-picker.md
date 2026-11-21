@@ -9,9 +9,9 @@ IMPORTANT: Read the `.kb/agents.md` file.
 
 # Laws
 
-## §1 - Selection Copies The Launch Token
+## §1 - Selection Records The Active Account
 
-Nothing else in the launcher knows about accounts. `LaunchConfig.token_file` is still `$SNAP_USER_COMMON/pairing-token.json` and `launch.rs` reads that file only, so `Store::select` copies `accounts/<id>/token.json` over it (atomically, 0600) and remembers `last_used`. Never launch from an account directory directly and never make the worker account-aware.
+No token is ever copied or written to disk. `launch.rs` takes a `TokenSource` (see `.kb/account-sessions.md`): the worker reads the ephemeral token from `crate::auth::AuthToken` at launch time. `Store::select` only records `last_used`; the token is produced by a silent re-authentication from the account's session when its card is clicked. Never write a token to a file, and never make the worker read one.
 
 ## §2 - Zero Accounts Falls Back To The WebView Login
 
@@ -29,9 +29,12 @@ Every account feature is best-effort. Profile refresh, avatar download and legac
 `Store::open($SNAP_USER_COMMON)` points at:
 
 - `accounts.json` - `{ "version": 1, "last_used": "<id>", "accounts": [...] }`. Written atomically (temp file + rename) with 0600.
-- `accounts/<hex id>/token.json` - that rider's token, 0600.
 - `accounts/<hex id>/avatar.<ext>` - cached avatar, 0600.
-- `pairing-token.json` - the launch token, shared with the rest of the launcher.
+- `accounts/<hex id>/webkit/` - that rider's WebKit session (the remembered login).
+
+A rider's token is **not** on disk: it is ephemeral. `cleanup_legacy` deletes any
+legacy `accounts/<hex id>/token.json` or `pairing-token.json` left by an older
+launcher; nothing is adopted.
 
 The directory key is the account id hex-encoded, so a hostile `sub` claim can never contain `/` or `..`. `Account` holds only the fields a card draws: `name`, `first_name`, `last_name`, `email`, `avatar_url`, `avatar`, `use_metric`, `distance_meters`, `elevation_meters`, `time_minutes`, `weight_grams`, `ftp`, `level`, `level_progress`, `height_millimeters`. Loading is tolerant: a missing or broken `accounts.json` is an empty store, a single bad entry is skipped, and a `last_used` naming a vanished account is dropped.
 
@@ -55,21 +58,21 @@ Avatars are decoded at up to 72 by 72 pixels and displayed in a 72-pixel square;
 
 The grid's height is pinned by `AccountsPanel::update_height`: a `FlowBox` reports its natural height for its *natural* width, which packs every card onto one line, so the `ScrolledWindow`'s `min_content_height` is set from the grid measured at the width it actually has (capped at `MAX_GRID_HEIGHT`). The width is only known after allocation, so `request_height_update` retries on a short timer until it is.
 
-Remove shows a `gtk::MessageDialog` whose confirm button is labelled **Remove account**, then `Store::remove` deletes the directory, clears `pairing-token.json` when that account was selected or when it was the last account, saves and rebuilds the grid. The remove control is icon-only (its tooltip names the rider), so it never competes with the card's name text as an OCR click target; because every card's remove icon is identical, automated suites must identify the *removed* card by position (first match) and the *surviving* card by name.
+Remove shows a `gtk::MessageDialog` whose confirm button is labelled **Remove account**, then `Store::remove` deletes the whole account directory (its avatar and its WebKit session, so the login goes too), clears the active selection when that account was selected or when it was the last account, saves and rebuilds the grid. The remove control is icon-only (its tooltip names the rider), so it never competes with the card's name text as an OCR click target; because every card's remove icon is identical, automated suites must identify the *removed* card by position (first match) and the *surviving* card by name.
 
 ## Selecting and adding
 
-The panel is given two callbacks. `select(id)` runs `Store::select` + `save` and answers the worker's pending login decision with `true`. `add()` switches the login panel to `SessionMode::Ephemeral` - a cookie-less WebView, so the current rider's SSO cookie cannot silently sign the new login back into itself - and starts a login whose result lands in an `mpsc` channel polled by `glib::timeout_add_local(50ms)`. This is the only case besides the gate's own login where the WebView leaves its embed page; when the login finishes, `LoginPanel::show_embed` rebuilds it on the persistent session and reloads `EMBED_URL`.
+The panel is given two callbacks. `select(id)` runs `Store::select` + `save`, then silently re-authenticates from the account's session (`gui::session::authorize`, `prompt=none`): a token answers the worker's pending decision with `true`, while a `NeedsLogin`/failure falls back to the interactive gate (`gui::relogin`). `add()` resets the panel to a fresh ephemeral view (so the current rider's SSO cookie cannot sign the new login back into itself), sets `set_remember_session(false)` (an added account is always remembered) and starts a login whose result lands in an `mpsc` channel polled by `glib::timeout_add_local(50ms)`. When the login finishes, `LoginPanel::show_embed` rebuilds the ephemeral view and reloads `EMBED_URL`.
 
-`finish_add_account` then reads the launch token back, derives claims, fetches the profile best-effort, upserts the account, downloads the avatar, selects the new account and answers the decision. A profile failure still remembers the account, named from its claims.
+The login panel records the new account at login time (upsert + select) and copies the login's realm cookies into the account's session (see `.kb/account-sessions.md`). `finish_add_account` then reads the ephemeral token from `AuthToken`, fetches the profile best-effort, merges it into the card, downloads the avatar and answers the decision. A profile failure still remembers the account, named from its claims.
 
 ## Profile refresh
 
-The picker opens with cached data, then `refresh_accounts` (in `gui.rs`) fetches each profile on a background thread. It downloads an avatar when the cached file is missing or the profile URL changes, and retries a missing image using the cached URL when the profile cannot be fetched. Results are posted back on a channel polled every 100 ms; stale results for removed or changed accounts are discarded. `Store::refresh` merges profile fields while keeping omitted values. A failed image replacement keeps the old file and URL so the next refresh retries it. Profile and image failures are logged at debug level without blocking launch.
+The picker opens with cached data, then `refresh_accounts` (in `gui.rs`) refreshes each account's profile. It cannot read a stored token (there is none), so for every account with a session it performs a **silent re-authentication** (`gui::session::authorize`, `prompt=none`) to mint a throwaway token for the profile API, then fetches the profile and avatar on a background thread. The work is serialized (one hidden WebView and one fetch at a time) and best-effort: an account that cannot be re-authenticated is skipped, keeping its cached card. It downloads an avatar when the cached file is missing or the profile URL changes, and retries a missing image using the cached URL. Results are posted back on a channel polled every 100 ms; stale results for removed or changed accounts are discarded. `Store::refresh` merges profile fields while keeping omitted values. A failed image replacement keeps the old file and URL so the next refresh retries it. Profile and image failures are logged at debug level without blocking launch.
 
 ## Legacy migration
 
-An install from before the picker has `pairing-token.json` but no `accounts.json`. At startup, before the login panel is built, the launcher loads the store and, when it is empty, derives claims from that token and calls `Store::import_legacy`, which adopts it as the first account (`upsert` with an empty profile) and marks it last used. Without this an upgrading rider would be shown the WebKit login again despite a valid token. Because the store is loaded before the embed page is chosen, an upgraded install is never sent to the registration page. `Store::remove` clears the launch token once the last account is forgotten, so an emptied store is not re-adopted here.
+An install from before the picker has `pairing-token.json` (and possibly per-account `token.json` files). A bearer token cannot seed a WebKit session, so at startup - before the login panel is built - the launcher loads the store and calls `Store::cleanup_legacy`, which simply **deletes** those files; nothing is adopted and the rider logs in again. `Store::remove` clears the selection once the last account is forgotten, so an emptied store is never re-adopted.
 
 ## GTK4 traps
 
@@ -79,6 +82,6 @@ An install from before the picker has `pairing-token.json` but no `accounts.json
 
 ## Testing
 
-`tests/gtk-preview/accounts.robot` (driven by `tests/gtk-preview.sh`, stage `accounts-suite`) seeds a fixture with two accounts and `settings.json`, launches the binary with `ZWIFT_NO_GUI=0 --text-ui`, and asserts the picker text ("Choose a rider", both names, a chip), removes one account by clicking the `Remove` label (the launcher runs in text mode, so the controls carry text labels rather than icons; the two remove controls are identical, so the first match is what goes), confirms the dialog, then launches the survivor by clicking its rider name (the card is the launch target now) - trying "Offline Tester" first and falling back to "Second Rider" with `Run Keyword And Return Status`. The bash side additionally asserts that `window-ready`/`game-running` appear (polled for up to 20 s) and that `pairing-token.json` holds exactly the played account's token.
+`tests/gtk-preview/accounts.robot` (driven by `tests/gtk-preview.sh`, stage `accounts-suite`) seeds a fixture with two accounts and `settings.json`, launches the binary with `ZWIFT_NO_GUI=0 --text-ui`, and asserts the picker text ("Choose a rider", both names, a chip), removes one account by clicking the `Remove` label (the launcher runs in text mode, so the controls carry text labels rather than icons; the two remove controls are identical, so the first match is what goes), confirms the dialog, then launches the survivor by clicking its rider name (the card is the launch target now) - trying "Offline Tester" first and falling back to "Second Rider" with `Run Keyword And Return Status`. The bash side additionally asserts that `window-ready`/`game-running` appear (polled for up to 20 s) and that the surviving account is the one launched. Because the first run has no stored session, clicking a card shows the login gate; the suite drives the **visible** login against the stub IdP once, which writes the account's `accounts/<id>/webkit/` session, and asserts a second launcher run then re-authenticates silently (the login page is never shown). See `tests/.kb/`.`
 
 Useful while debugging: every captured frame lands in `$YARF_FRAME_DIR` with `index.log` mapping frame numbers to wait labels, and `Move Pointer To` costs a full OCR pass (~2.5 s), so a click lands later than the timestamp of the frame it was measured on.

@@ -4,10 +4,12 @@
 //! The identity claims in an access token and the profile behind it are not
 //! enough to launch with: the launcher needs to remember *several* riders and
 //! offer them for selection. This module owns that list. Each account keeps its
-//! own token (`accounts/<key>/token.json`) and avatar (`accounts/<key>/avatar.*`),
-//! and selecting one copies its token over the launch token
-//! (`$SNAP_USER_COMMON/pairing-token.json`) that the rest of the launcher already
-//! understands.
+//! avatar (`accounts/<key>/avatar.*`) and, once it has logged in, its own WebKit
+//! cookie jar (`accounts/<key>/webkit/`) - that jar is the Keycloak SSO session
+//! and the only persisted login state (see `gui::session`). Tokens are never
+//! stored: they are minted from the jar at need and kept in memory only.
+//!
+//! Selecting an account only records which one the launcher will start.
 //!
 //! The directory key is a hex encoding of the account id, so a hostile or odd
 //! `sub` claim can never contain a path separator or `..` and escape the store.
@@ -16,7 +18,7 @@
 //! invalid `accounts.json` yields an empty store, and a single bad entry is
 //! skipped rather than discarding the rest.
 
-use crate::oauth::{save_token, Claims};
+use crate::oauth::Claims;
 use crate::profile::Profile;
 use serde_json::{json, Map, Value};
 use std::fmt::Write as _;
@@ -27,8 +29,18 @@ use std::path::{Path, PathBuf};
 /// The store file, inside `$SNAP_USER_COMMON`.
 pub const FILE_NAME: &str = "accounts.json";
 
-/// The launch token the game itself is given, rewritten when an account is selected.
-pub const LAUNCH_TOKEN: &str = "pairing-token.json";
+/// The launch token of older launchers, imported and removed on first load.
+pub const LEGACY_LAUNCH_TOKEN: &str = "pairing-token.json";
+
+/// An account's own token file from older launchers, removed on first load.
+const LEGACY_ACCOUNT_TOKEN: &str = "token.json";
+
+/// The subdirectory of an account's directory holding its WebKit session (the
+/// cookie jar that remembers the Keycloak login).
+const SESSION_DIR: &str = "webkit";
+
+/// The cookie database inside [`SESSION_DIR`].
+const SESSION_COOKIE_DB: &str = "cookies.sqlite";
 
 /// Bumped if the on-disk layout ever changes shape.
 const VERSION: u32 = 1;
@@ -134,8 +146,6 @@ pub struct Store {
     path: PathBuf,
     /// `$SNAP_USER_COMMON/accounts/`, one sub-directory per account.
     dir: PathBuf,
-    /// `$SNAP_USER_COMMON/pairing-token.json`, the token the game is launched with.
-    token_file: PathBuf,
     /// The account that was used last, by id.
     last_used: Option<String>,
     /// Whether to forget the last used account on exit (when "Remember me" was unchecked).
@@ -151,7 +161,6 @@ impl Store {
         Store {
             path: common.join(FILE_NAME),
             dir: common.join("accounts"),
-            token_file: common.join(LAUNCH_TOKEN),
             last_used: None,
             forget_on_exit: false,
             accounts: Vec::new(),
@@ -257,23 +266,42 @@ impl Store {
         path.is_file().then_some(path)
     }
 
-    /// Add or refresh an account from a freshly exchanged `token`, keyed by the
-    /// identity in `claims` (falling back to the profile's own id). The profile
-    /// may be empty when it could not be fetched; existing card data is kept in
-    /// that case. Returns the account id.
-    pub fn upsert(
-        &mut self,
-        token: &Value,
-        profile: &Profile,
-        claims: &Claims,
-    ) -> Result<String, String> {
+    /// The directory holding an account's WebKit session: the cookie jar that
+    /// remembers its Keycloak login.
+    pub fn session_dir(&self, id: &str) -> PathBuf {
+        self.account_dir(id).join(SESSION_DIR)
+    }
+
+    /// The cookie database of an account's WebKit session.
+    pub fn session_cookie_db(&self, id: &str) -> PathBuf {
+        self.session_dir(id).join(SESSION_COOKIE_DB)
+    }
+
+    /// Whether `id` has a stored WebKit session, i.e. a login the launcher can
+    /// re-authenticate from without asking. False until the account has logged in
+    /// with "Remember me".
+    pub fn has_session(&self, id: &str) -> bool {
+        self.session_cookie_db(id).is_file()
+    }
+
+    /// Whether any remembered account has a usable session.
+    pub fn has_any_session(&self) -> bool {
+        self.accounts
+            .iter()
+            .any(|account| self.has_session(&account.id))
+    }
+
+    /// Add or refresh an account, keyed by the identity in `claims` (falling back
+    /// to the profile's own id). The profile may be empty when it could not be
+    /// fetched; existing card data is kept in that case. No token is stored: the
+    /// caller keeps the freshly exchanged token in memory for the launch.
+    /// Returns the account id.
+    pub fn upsert(&mut self, profile: &Profile, claims: &Claims) -> Result<String, String> {
         let identity =
             identity_of(profile, claims).ok_or_else(|| "token names no rider".to_owned())?;
         let id = encode_key(&identity);
         let dir = self.account_dir(&id);
         fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-        save_token(token, &dir.join("token.json"))
-            .map_err(|e| format!("cannot save account token: {e}"))?;
 
         let name = display_name(profile, claims);
         match self.accounts.iter_mut().find(|account| account.id == id) {
@@ -332,34 +360,18 @@ impl Store {
         self.last_used.as_deref() == Some(id)
     }
 
-    /// Read the launch token (`pairing-token.json`) as written by the launcher's
-    /// own login. Used right after adding an account to learn who just signed in.
-    pub fn launch_token(&self) -> Result<Value, String> {
-        read_json(&self.token_file)
-    }
-
-    /// Read an account's stored token (`accounts/<key>/token.json`), used to
-    /// refresh its profile in the background.
-    pub fn account_token(&self, id: &str) -> Result<Value, String> {
-        read_json(&self.account_dir(id).join("token.json"))
-    }
-
-    /// Make `id` the account the launcher will start: copy its token over the
-    /// launch token and remember it as the last used.
+    /// Make `id` the account the launcher will start.
     pub fn select(&mut self, id: &str) -> Result<(), String> {
-        let token_path = self.account_dir(id).join("token.json");
-        let text = fs::read_to_string(&token_path)
-            .map_err(|e| format!("cannot read {}: {e}", token_path.display()))?;
-        let token: Value = serde_json::from_str(&text)
-            .map_err(|e| format!("{} is not valid JSON: {e}", token_path.display()))?;
-        save_token(&token, &self.token_file)
-            .map_err(|e| format!("cannot update launch token: {e}"))?;
+        if self.find(id).is_none() {
+            return Err(format!("unknown account {id}"));
+        }
         self.last_used = Some(id.to_owned());
         Ok(())
     }
 
-    /// Forget an account: drop it from the list, delete its directory, and clear
-    /// the launch token when it was the selected account.
+    /// Forget an account: drop it from the list and delete its directory (which
+    /// holds its avatar and its WebKit session, so the login is gone too). When
+    /// it was the selected account, the selection is cleared.
     pub fn remove(&mut self, id: &str) -> Result<(), String> {
         self.accounts.retain(|account| account.id != id);
         let dir = self.account_dir(id);
@@ -367,38 +379,27 @@ impl Store {
             fs::remove_dir_all(&dir)
                 .map_err(|e| format!("cannot remove {}: {e}", dir.display()))?;
         }
-        // Clear the launch token when the last account goes away, so an emptied
-        // store is not re-adopted from the token on the next startup (which
-        // would hide the registration page and resurrect a forgotten rider).
+        // Clearing the selection when the last account goes away keeps an emptied
+        // store from being re-adopted on the next startup (which would hide the
+        // registration page and resurrect a forgotten rider).
         if self.accounts.is_empty() || self.last_used.as_deref() == Some(id) {
             self.last_used = None;
-            let _ = fs::remove_file(&self.token_file);
         }
         Ok(())
     }
 
-    /// Migrate a legacy install: when the store is empty but a launch token
-    /// already exists, adopt that token as the first account. Returns the new
-    /// account id, or `None` when there is nothing to migrate.
-    pub fn import_legacy(&mut self, claims: &Claims) -> Result<Option<String>, String> {
-        if !self.accounts.is_empty() || !self.token_file.is_file() {
-            return Ok(None);
+    /// Delete token files left by older launchers. The launcher no longer keeps
+    /// tokens in files, and a token cannot be turned into a WebKit session, so a
+    /// legacy `pairing-token.json` (or `accounts/<id>/token.json`) is simply
+    /// removed: the rider logs in again. Best-effort; runs once at startup.
+    pub fn cleanup_legacy(&mut self) {
+        if let Some(common) = self.dir.parent() {
+            let _ = fs::remove_file(common.join(LEGACY_LAUNCH_TOKEN));
         }
-        let text = fs::read_to_string(&self.token_file)
-            .map_err(|e| format!("cannot read {}: {e}", self.token_file.display()))?;
-        let token: Value = serde_json::from_str(&text)
-            .map_err(|e| format!("{} is not valid JSON: {e}", self.token_file.display()))?;
-        let id = self.upsert(&token, &Profile::default(), claims)?;
-        self.last_used = Some(id.clone());
-        Ok(Some(id))
+        for account in &self.accounts {
+            let _ = fs::remove_file(self.account_dir(&account.id).join(LEGACY_ACCOUNT_TOKEN));
+        }
     }
-}
-
-/// Read a JSON file, mapping IO and parse errors to a message.
-fn read_json(path: &Path) -> Result<Value, String> {
-    let text =
-        fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    serde_json::from_str(&text).map_err(|e| format!("{} is not valid JSON: {e}", path.display()))
 }
 
 /// Hex-encode a raw id, so it is always a safe single path component.
@@ -533,16 +534,16 @@ mod tests {
         dir
     }
 
+    fn open(common: &Path) -> Store {
+        Store::open(common)
+    }
+
     fn claims(sub: &str, username: &str) -> Claims {
         Claims {
             sub: Some(sub.to_owned()),
             preferred_username: Some(username.to_owned()),
             email: None,
         }
-    }
-
-    fn token(access: &str) -> Value {
-        json!({ "access_token": access, "refresh_token": "r" })
     }
 
     fn profile(first: &str, last: &str) -> Profile {
@@ -562,20 +563,22 @@ mod tests {
         }
     }
 
+    /// Give `id` a WebKit session so it counts as launchable.
+    fn with_session(store: &Store, id: &str) {
+        fs::create_dir_all(store.session_dir(id)).unwrap();
+        fs::write(store.session_cookie_db(id), b"sqlite").unwrap();
+    }
+
     #[test]
     fn upsert_then_reload_round_trips() {
         let common = scratch("roundtrip");
-        let mut store = Store::open(&common);
+        let mut store = open(&common);
         let id = store
-            .upsert(
-                &token("abc"),
-                &profile("Sara", "Campbell"),
-                &claims("sub-1", "sara"),
-            )
+            .upsert(&profile("Sara", "Campbell"), &claims("sub-1", "sara"))
             .unwrap();
         store.save().unwrap();
 
-        let mut reloaded = Store::open(&common);
+        let mut reloaded = open(&common);
         reloaded.load();
         assert_eq!(reloaded.accounts.len(), 1);
         let account = reloaded.find(&id).unwrap();
@@ -590,13 +593,9 @@ mod tests {
     #[test]
     fn the_directory_key_encodes_hostile_ids() {
         let common = scratch("hostile");
-        let mut store = Store::open(&common);
+        let mut store = open(&common);
         let id = store
-            .upsert(
-                &token("abc"),
-                &Profile::default(),
-                &claims("../../etc/passwd", "x"),
-            )
+            .upsert(&Profile::default(), &claims("../../etc/passwd", "x"))
             .unwrap();
         // Hex only, so no separators or dots survive.
         assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
@@ -608,84 +607,87 @@ mod tests {
     }
 
     #[test]
-    fn select_writes_the_launch_token_and_remembers_the_account() {
+    fn selecting_remembers_the_active_account() {
         let common = scratch("select");
-        let mut store = Store::open(&common);
+        let mut store = open(&common);
         let id = store
-            .upsert(
-                &token("chosen"),
-                &profile("Sara", "Campbell"),
-                &claims("sub-1", "s"),
-            )
+            .upsert(&profile("Sara", "Campbell"), &claims("sub-1", "s"))
             .unwrap();
         store.select(&id).unwrap();
         assert!(store.is_active(&id));
-
-        let launch = fs::read_to_string(common.join(LAUNCH_TOKEN)).unwrap();
-        assert!(launch.contains("chosen"));
+        assert!(!common.join(LEGACY_LAUNCH_TOKEN).exists());
 
         let _ = fs::remove_dir_all(&common);
     }
 
     #[test]
-    fn remove_deletes_the_account_and_clears_an_active_launch_token() {
-        let common = scratch("remove");
-        let mut store = Store::open(&common);
+    fn session_presence_tracks_the_cookie_database() {
+        let common = scratch("session");
+        let mut store = open(&common);
         let id = store
-            .upsert(
-                &token("abc"),
-                &profile("Sara", "Campbell"),
-                &claims("sub-1", "s"),
-            )
+            .upsert(&profile("Sara", "Campbell"), &claims("sub-1", "s"))
             .unwrap();
+        assert!(!store.has_session(&id));
+        assert!(!store.has_any_session());
+        with_session(&store, &id);
+        assert!(store.has_session(&id));
+        assert!(store.has_any_session());
+
+        let _ = fs::remove_dir_all(&common);
+    }
+
+    #[test]
+    fn removing_the_active_account_deletes_its_session() {
+        let common = scratch("remove");
+        let mut store = open(&common);
+        let id = store
+            .upsert(&profile("Sara", "Campbell"), &claims("sub-1", "s"))
+            .unwrap();
+        with_session(&store, &id);
         store.select(&id).unwrap();
         store.remove(&id).unwrap();
         assert!(store.is_empty());
         assert!(store.last_used_id().is_none());
-        assert!(!common.join(LAUNCH_TOKEN).exists());
         assert!(!store.account_dir(&id).exists());
 
         let _ = fs::remove_dir_all(&common);
     }
 
     #[test]
-    fn removing_an_inactive_account_keeps_the_launch_token() {
+    fn removing_an_inactive_account_keeps_the_active_selection() {
         let common = scratch("removeinactive");
-        let mut store = Store::open(&common);
+        let mut store = open(&common);
         let a = store
-            .upsert(&token("a"), &profile("A", "One"), &claims("sub-a", "a"))
+            .upsert(&profile("A", "One"), &claims("sub-a", "a"))
             .unwrap();
         let b = store
-            .upsert(&token("b"), &profile("B", "Two"), &claims("sub-b", "b"))
+            .upsert(&profile("B", "Two"), &claims("sub-b", "b"))
             .unwrap();
         store.select(&a).unwrap();
         store.remove(&b).unwrap();
         assert_eq!(store.accounts.len(), 1);
         assert!(store.is_active(&a));
-        assert!(common.join(LAUNCH_TOKEN).exists());
 
         let _ = fs::remove_dir_all(&common);
     }
 
     #[test]
-    fn removing_the_last_account_clears_the_launch_token() {
+    fn removing_the_last_account_clears_the_selection() {
         let common = scratch("removelast");
-        let mut store = Store::open(&common);
+        let mut store = open(&common);
         let a = store
-            .upsert(&token("a"), &profile("A", "One"), &claims("sub-a", "a"))
+            .upsert(&profile("A", "One"), &claims("sub-a", "a"))
             .unwrap();
         let b = store
-            .upsert(&token("b"), &profile("B", "Two"), &claims("sub-b", "b"))
+            .upsert(&profile("B", "Two"), &claims("sub-b", "b"))
             .unwrap();
         store.select(&b).unwrap();
-        // Removing the inactive account while another remains keeps the token.
         store.remove(&a).unwrap();
-        assert!(common.join(LAUNCH_TOKEN).exists());
-        // Removing the last one empties the store, so the token goes too.
+        // Removing the inactive account leaves the selection alone.
+        assert!(store.is_active(&b));
         store.remove(&b).unwrap();
         assert!(store.is_empty());
         assert!(store.last_used_id().is_none());
-        assert!(!common.join(LAUNCH_TOKEN).exists());
 
         let _ = fs::remove_dir_all(&common);
     }
@@ -693,21 +695,15 @@ mod tests {
     #[test]
     fn a_second_upsert_merges_rather_than_duplicates() {
         let common = scratch("merge");
-        let mut store = Store::open(&common);
+        let mut store = open(&common);
         let id = store
-            .upsert(
-                &token("v1"),
-                &profile("Sara", "Campbell"),
-                &claims("sub-1", "s"),
-            )
+            .upsert(&profile("Sara", "Campbell"), &claims("sub-1", "s"))
             .unwrap();
         // A later refresh updates one field and omits the rest.
         let mut update = profile("Sara", "Campbell");
         update.total_distance_in_meters = Some(999_999);
         update.ftp = None;
-        let id2 = store
-            .upsert(&token("v2"), &update, &claims("sub-1", "s"))
-            .unwrap();
+        let id2 = store.upsert(&update, &claims("sub-1", "s")).unwrap();
         assert_eq!(id, id2);
         assert_eq!(store.accounts.len(), 1);
         let account = store.find(&id).unwrap();
@@ -720,13 +716,9 @@ mod tests {
     #[test]
     fn a_refresh_updates_the_card_and_keeps_what_it_omits() {
         let common = scratch("refresh");
-        let mut store = Store::open(&common);
+        let mut store = open(&common);
         let id = store
-            .upsert(
-                &token("a"),
-                &profile("Sara", "Campbell"),
-                &claims("sub-1", "s"),
-            )
+            .upsert(&profile("Sara", "Campbell"), &claims("sub-1", "s"))
             .unwrap();
         // A refresh that carries new stats but no name or FTP: the card keeps
         // the name it had and the FTP it knew.
@@ -752,12 +744,10 @@ mod tests {
     #[test]
     fn achievement_level_splits_into_level_and_progress() {
         let common = scratch("levelsplit");
-        let mut store = Store::open(&common);
+        let mut store = open(&common);
         let mut prof = profile("Sara", "Campbell");
         prof.achievement_level = Some(2834); // level 28, 34% to level 29
-        let id = store
-            .upsert(&token("a"), &prof, &claims("sub-1", "s"))
-            .unwrap();
+        let id = store.upsert(&prof, &claims("sub-1", "s")).unwrap();
         let account = store.find(&id).unwrap();
         assert_eq!(account.level, Some(28));
         assert_eq!(account.level_progress, Some(34));
@@ -768,13 +758,9 @@ mod tests {
     #[test]
     fn avatar_replacement_removes_the_older_file() {
         let common = scratch("avatar");
-        let mut store = Store::open(&common);
+        let mut store = open(&common);
         let id = store
-            .upsert(
-                &token("a"),
-                &profile("Sara", "Campbell"),
-                &claims("sub-1", "s"),
-            )
+            .upsert(&profile("Sara", "Campbell"), &claims("sub-1", "s"))
             .unwrap();
         store.write_avatar(&id, b"png-bytes", "png").unwrap();
         store.write_avatar(&id, b"jpg-bytes", "jpg").unwrap();
@@ -790,13 +776,9 @@ mod tests {
     #[test]
     fn avatar_replacement_keeps_old_file_if_write_fails() {
         let common = scratch("avatar-failed-write");
-        let mut store = Store::open(&common);
+        let mut store = open(&common);
         let id = store
-            .upsert(
-                &token("a"),
-                &profile("Sara", "Campbell"),
-                &claims("sub-1", "s"),
-            )
+            .upsert(&profile("Sara", "Campbell"), &claims("sub-1", "s"))
             .unwrap();
         store.write_avatar(&id, b"png-bytes", "png").unwrap();
         fs::create_dir(store.account_dir(&id).join("avatar.jpg.tmp")).unwrap();
@@ -812,21 +794,29 @@ mod tests {
     }
 
     #[test]
-    fn legacy_install_is_adopted_once() {
+    fn legacy_token_files_are_deleted_and_nothing_is_adopted() {
         let common = scratch("legacy");
-        // A pre-picker install: only the launch token exists.
-        save_token(&token("legacy-token"), &common.join(LAUNCH_TOKEN)).unwrap();
-
-        let mut store = Store::open(&common);
+        // A pre-picker install: a launch token and a per-account token file.
+        crate::oauth::save_token(
+            &json!({ "access_token": "legacy" }),
+            &common.join(LEGACY_LAUNCH_TOKEN),
+        )
+        .unwrap();
+        let mut store = open(&common);
         let id = store
-            .import_legacy(&claims("legacy-sub", "old.rider"))
-            .unwrap()
-            .expect("legacy token should be adopted");
-        assert_eq!(store.accounts.len(), 1);
-        assert_eq!(store.find(&id).unwrap().name, "old.rider");
-        assert!(store.is_active(&id));
-        // A second import is a no-op now that the store is not empty.
-        assert_eq!(store.import_legacy(&claims("x", "y")).unwrap(), None);
+            .upsert(&profile("Sara", "Campbell"), &claims("sub-1", "s"))
+            .unwrap();
+        crate::oauth::save_token(
+            &json!({ "access_token": "old" }),
+            &store.account_dir(&id).join(LEGACY_ACCOUNT_TOKEN),
+        )
+        .unwrap();
+
+        store.cleanup_legacy();
+        assert!(!common.join(LEGACY_LAUNCH_TOKEN).exists());
+        assert!(!store.account_dir(&id).join(LEGACY_ACCOUNT_TOKEN).exists());
+        // No account was adopted and no session was invented.
+        assert!(!store.has_session(&id));
 
         let _ = fs::remove_dir_all(&common);
     }
@@ -834,7 +824,7 @@ mod tests {
     #[test]
     fn missing_or_broken_store_loads_empty() {
         let common = scratch("broken");
-        let mut store = Store::open(&common);
+        let mut store = open(&common);
         store.load();
         assert!(store.is_empty());
 
@@ -859,7 +849,7 @@ mod tests {
         })
         .to_string();
         fs::write(common.join(FILE_NAME), text).unwrap();
-        let mut store = Store::open(&common);
+        let mut store = open(&common);
         store.load();
         assert_eq!(store.accounts.len(), 1);
         assert_eq!(store.accounts[0].name, "Kept");
@@ -872,9 +862,9 @@ mod tests {
     #[test]
     fn upsert_requires_an_identity() {
         let common = scratch("noid");
-        let mut store = Store::open(&common);
-        // A token with no claims and a profile with no id cannot be keyed.
-        let result = store.upsert(&token("x"), &Profile::default(), &Claims::default());
+        let mut store = open(&common);
+        // A profile with no id and no claims cannot be keyed.
+        let result = store.upsert(&Profile::default(), &Claims::default());
         assert!(result.is_err());
 
         let _ = fs::remove_dir_all(&common);

@@ -1,5 +1,6 @@
 //! Snap entry point configuration and wiring for the real launcher.
 
+use crate::auth::{AuthToken, TokenSource};
 use crate::cancel::Cancellation;
 use crate::cdn;
 use crate::display::DisplayMode;
@@ -199,6 +200,7 @@ pub fn run(
     graphical: bool,
     progress: &(impl Fn(InstallProgress) + Sync),
     args: &[String],
+    auth: &Arc<AuthToken>,
 ) -> Result<(), orchestration::LauncherError> {
     let install_dir = config.prefix.join("drive_c/Program Files (x86)/Zwift");
     let tools = Tools::default();
@@ -208,10 +210,9 @@ pub fn run(
     // file can be renamed into place instead of copied.
     let staging = config.common.join("download");
     let window = config.snap.join("bin/wait-for-window.exe");
-    // Read this file only when starting the game, after the GUI login gate. With
-    // --skip-login the game prompts for authentication itself, so neither the
-    // token file nor the game's --token argument is used.
-    let token_file = config.common.join("pairing-token.json");
+    // The token is read from the shared store only when starting the game, after
+    // the GUI login gate. With --skip-login the game prompts for authentication
+    // itself, so the game's --token argument is not used.
     let mut runtime = Runtime {
         install: InstallConfig {
             wine_prefix: &config.prefix,
@@ -234,7 +235,7 @@ pub fn run(
             wait_for_window: &window,
             tools: &tools,
             game_args: args,
-            token_file: (graphical && !config.skip_login).then_some(token_file.as_path()),
+            token: (graphical && !config.skip_login).then_some(auth.as_ref() as &dyn TokenSource),
             startup_attempts: 20,
             startup_interval: Duration::from_millis(100),
             game_poll_interval: config.poll_interval,
@@ -246,6 +247,7 @@ pub fn run(
         disable_egl: config.disable_egl
             && std::env::var("XDG_SESSION_TYPE").as_deref() != Ok("wayland"),
         inhibitor: None,
+        auth: Some(Arc::clone(auth)),
         progress,
     };
     orchestration::run_cancellable(&mut runtime, ui, logger.cancellation())
@@ -331,10 +333,14 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
         match gtk::init() {
             Ok(()) => {
                 let panel_logger = logger.clone();
+                // One ephemeral token, shared by the GUI (which sets it on a
+                // login or a silent re-authentication) and the worker (which reads
+                // it at launch and clears it on a forget-on-exit run).
+                let auth = AuthToken::new();
                 let settings = crate::gui::SettingsContext {
                     path: config.common.join(crate::settings::FILE_NAME),
                     prefix: config.prefix.clone(),
-                    token_file: config.common.join("pairing-token.json"),
+                    auth: auth.clone(),
                     settings: Settings {
                         display: config.display.clone(),
                         graphics: config.graphics,
@@ -367,7 +373,7 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
                             log_progress(&logger, &milestone, &event);
                             progress_ui.progress(event);
                         };
-                        let result = run(&config, &logger, &mut ui, true, &progress, &args);
+                        let result = run(&config, &logger, &mut ui, true, &progress, &args, &auth);
                         if let Err(error) = &result {
                             logger.error(&error.to_string());
                         }
@@ -382,6 +388,7 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
     }
     let milestone = AtomicU8::new(0);
     let progress = |event: InstallProgress| log_progress(&logger, &milestone, &event);
+    let auth = AuthToken::new();
     let result = run(
         &config,
         &logger,
@@ -389,6 +396,7 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
         false,
         &progress,
         &args,
+        &auth,
     );
     if let Err(error) = &result {
         logger.error(&error.to_string());

@@ -16,8 +16,10 @@ The launcher logs in through a WebKitGTK WebView in the bottom panel
 embed page until the login gate opens, and the `?registration=true` variant while no
 account is remembered). It does OAuth PKCE against Keycloak
 (`zwsnap-gui/src/oauth.rs`), watches navigation for the `http://zwift/?code=...`
-redirect, checks `state`, exchanges the code and saves `pairing-token.json`, which
-`launch.rs` passes to the game as `--token`.
+redirect, checks `state`, exchanges the code and hands the token to
+`crate::auth::AuthToken`, from which `launch.rs` passes it to the game as
+`--token`. The token is ephemeral; what is remembered is the login's cookies,
+copied into the account's session. See `.kb/account-sessions.md`.
 
 Link clicks and new-window requests in the panel are opened in the system browser
 with `xdg-open`, never in the panel; only the launcher's own navigations (the embed
@@ -39,10 +41,11 @@ the workshop, which has no URL handler.
 - Ticked: `KEYCLOAK_REMEMBER_ME` is present (31 bytes), and `KEYCLOAK_IDENTITY` and
   `KEYCLOAK_SESSION` expire in about a year. Unticked: `KEYCLOAK_REMEMBER_ME` is absent, and
   `KEYCLOAK_IDENTITY` is a session cookie with no expiry.
-- The login WebView keeps its cookies in `~/snap/zwift/common/webkit/cookies.sqlite`
-  (`persistent_webview` in `gui.rs`), so a remember-me cookie survives a launcher restart. The
-  directory is 0700 and the database 0600. Those cookies are live session secrets: never copy, log
-  or commit them.
+- The login panel always runs on an **ephemeral** session. On a remembered login its
+  Keycloak cookies are copied, preserving expiry, into that account's persistent session at
+  `accounts/<hex id>/webkit/cookies.sqlite` (directory 0700, database 0600); a forgotten login
+  copies nothing. That per-account jar is what lets a rider be re-authenticated silently on the
+  next launch. Those cookies are live session secrets: never copy, log or commit them.
 - webkit6 0.4 `CookieManager::all_cookies` needs the `v2_42` feature, which the crate does not enable.
   Use `CookieManager::cookies(uri, cancellable, callback)` instead.
 - When probing cookies, log names, flags, expiry and length, or a hash prefix. Never log values:
@@ -51,11 +54,13 @@ the workshop, which has no URL handler.
 ## Remembered accounts
 
 The launcher remembers several riders itself, because the flow above yields one
-token at a time. Each login is exchanged exactly as described, then stored as an
-account under `$SNAP_USER_COMMON/accounts/<hex id>/` along with its avatar and
-the profile fields a picker card needs. Selecting an account copies its token
-over `$SNAP_USER_COMMON/pairing-token.json`, which stays the only token the rest
-of the launcher reads, so nothing downstream knows about accounts at all.
+token at a time. Each login is exchanged exactly as described, then recorded as
+an account under `$SNAP_USER_COMMON/accounts/<hex id>/` along with its avatar,
+the profile fields a picker card needs and - on a remembered login - its own
+Keycloak cookie jar. Selecting an account silently re-authenticates from that jar
+(`prompt=none`) to mint an ephemeral token for the launch, so no token is ever
+stored and no rider is prompted unless their session has expired. See
+`.kb/account-sessions.md`.
 
 Two consequences matter here. Adding another account runs the same OAuth flow in
 a cookie-less ephemeral WebView, so the current rider's remember-me cookies

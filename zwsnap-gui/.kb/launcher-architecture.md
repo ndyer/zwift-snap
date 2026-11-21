@@ -117,10 +117,10 @@ and `LoginPanel::show_embed` puts it back once the login succeeds. With no
 accounts at all the gate behaves exactly as described above. The launcher decides
 which embed page to load from the store, not from a marker: with no account
 remembered (and not a `--preview` run) it opens on the `?registration=true`
-variant, otherwise on the plain page. The same startup step also adopts a
-pre-picker install (a launch token but no account list) as the first account, so
-an upgrade is not sent to the registration page. See `.kb/accounts-picker.md` for
-the store, the cards and the GTK4 traps in that code.
+variant, otherwise on the plain page. The same startup step also removes any
+token files left by a pre-picker install (they cannot seed a session, so the
+rider logs in again). See `.kb/accounts-picker.md` for the store, the cards and
+the GTK4 traps in that code.
 
 Link clicks and new-window requests in the panel are handed to the system browser
 with `xdg-open` rather than followed in the panel; the launcher's own login flow is
@@ -144,8 +144,10 @@ links: no `WebKit requested` line at all means the click never reached
 means the snap did its part and the *host* has no registered URL handler. The latter
 is expected on a headless host: the workshop container ships no browser, so link
 clicks there always end in that warning even though the same snap works on a desktop.
-The token file in `$SNAP_USER_COMMON/pairing-token.json` has owner-only permissions,
-and its compact JSON is read at launch time and forwarded as `--token=<json>`.
+The launcher keeps the OAuth token in memory only (never a file): it is minted at
+need and read from `crate::auth::AuthToken` at launch time, then forwarded as
+`--token=<json>`. Logins are remembered as one WebKit cookie jar per account
+(`accounts/<id>/webkit/`); see `.kb/account-sessions.md`.
 `ZWIFT_NO_GUI=1`, no display, or failed GTK initialization selects terminal mode. It has
 no embedded-browser login gate and retains the game's own login flow (or accepts
 explicitly supplied game arguments), and its failure handling differs from the GUI's:

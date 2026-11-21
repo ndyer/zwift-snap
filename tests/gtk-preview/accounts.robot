@@ -6,7 +6,7 @@ Library          yarf_ocr.py
 Library          yarf_frames.py
 
 *** Test Cases ***
-Picker Shows Remembered Accounts, Removes One And Launches The Rest
+Picker Shows Remembered Accounts, Removes One And Asks To Log In
     # Two seeded accounts: the first is the last used one and shows imperial
     # stats, the second is metric. Both cards must be on screen.
     Match Text    Choose a rider    45
@@ -23,10 +23,11 @@ Picker Shows Remembered Accounts, Removes One And Launches The Rest
     # The grid is rebuilt once the account is gone; let it repaint before the
     # next click is measured against it.
     Sleep    1s
-    # The whole card is the launch target now, so click whichever rider survived
-    # the removal (they are not identical, so the launch takes the remaining one).
+    # The surviving card has no stored session, so clicking it (the whole card is
+    # the launch target) asks the rider to log in instead of launching.
     ${tester}=    Run Keyword And Return Status    Click Target    Offline Tester
     IF    not ${tester}    Click Target    Second Rider
+    Match Text    Log in again    45
 
 *** Keywords ***
 Click Target

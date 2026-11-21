@@ -31,5 +31,6 @@ IMPORTANT: Read the `.kb/agents.md` file.
 - [zwsnap-gui/.kb/login-and-remember-me.md](zwsnap-gui/.kb/login-and-remember-me.md) - Login flow and the remember-me cookie.
 - [zwsnap-gui/.kb/graphics-profile.md](zwsnap-gui/.kb/graphics-profile.md) - The GPU profile override and GPU benchmark.
 - [zwsnap-gui/.kb/settings.md](zwsnap-gui/.kb/settings.md) - The settings file, its keys and the Settings dialog.
+- [zwsnap-gui/.kb/account-sessions.md](zwsnap-gui/.kb/account-sessions.md) - Per-account cookie jars (remembered logins) and ephemeral tokens.
 - [zwsnap-helpers/.kb/windows-helpers.md](zwsnap-helpers/.kb/windows-helpers.md) - The Windows binaries the snap ships.
 - [zwsnap-runtime/.kb/wine-env-bootstrap.md](zwsnap-runtime/.kb/wine-env-bootstrap.md) - The shared wine-env.sh bootstrap.

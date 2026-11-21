@@ -152,7 +152,9 @@ cat > "${fixture}/bin/wine" <<'STUB'
 set -eu
 case "$1" in
 start)
-    echo 'stub launch output';;
+    echo 'stub launch output'
+    # Record the full command line so the tests can assert the launch token.
+    printf '%s\n' "$*" >> "$TEST_ROOT/game-args";;
 tasklist)
     case "$5" in
     *ZwiftLauncher.exe) printf 'PID: 41\n';;
@@ -211,14 +213,14 @@ mkdir -p "${stage}/out/accounts"
 # same launch path the login gate does.
 cp -a "${fixture}" "${accounts}"
 rm -f "${accounts}/cleanup" "${accounts}/window-ready" "${accounts}/game-running" \
-    "${accounts}/release" "${accounts}/common/zwift.log"
-# Two remembered accounts. The first is the last used one and keeps imperial
+    "${accounts}/release" "${accounts}/game-args" "${accounts}/common/zwift.log"
+# Two remembered accounts, with no stored session: a click cannot launch (there
+# is no session to re-authenticate from and no token), so the launcher must ask
+# the rider to log in instead. The first is the last used one and keeps imperial
 # units, so its card is unmistakable: 2444 m of climbing is 8,018 ft and
 # 834 minutes is 13h. It also carries a level (42) with 34% progress, which
 # draws the level bar. The second is metric.
 mkdir -p "${accounts}/common/accounts/first" "${accounts}/common/accounts/second"
-printf '{"access_token":"first-token"}' > "${accounts}/common/accounts/first/token.json"
-printf '{"access_token":"second-token"}' > "${accounts}/common/accounts/second/token.json"
 cat > "${accounts}/common/accounts.json" <<'JSON'
 {
   "version": 1,
@@ -264,18 +266,16 @@ PATH="${accounts}/bin:${PATH}" SNAP="${accounts}" SNAP_USER_COMMON="${accounts}/
 gui_pid=$!
 yarf --platform Mir "${stage}/accounts-suite" --outdir "${stage}/out/accounts" \
     2>&1 | tee "${stage}/yarf-accounts.log"
-# A rider card was clicked, so the chosen account's token became the launch
-# token and the game was started with it.
-started() { [[ -f ${accounts}/window-ready && -f ${accounts}/game-running ]]; }
-for ((i = 0; i < 200; i++)); do
-    started && break
-    sleep 0.1
-done
-started || { echo "Account picker did not launch the game" >&2; exit 1; }
-[[ -f ${accounts}/common/pairing-token.json ]] \
-    || { echo "Account picker did not write the launch token" >&2; exit 1; }
-# Exactly one account was removed, and the one still stored is the one launched.
-python3 - "${accounts}/common/accounts.json" "${accounts}/common/pairing-token.json" <<'PY'
+# No session is stored, so clicking a card asked the rider to log in rather than
+# launching: the game must not have started, and no token file may exist.
+[[ ! -f ${accounts}/window-ready && ! -f ${accounts}/game-running ]] \
+    || { echo "Account picker launched without a stored session" >&2; exit 1; }
+[[ ! -e ${accounts}/common/pairing-token.json ]] \
+    || { echo "A token file was left behind" >&2; exit 1; }
+grep -q 'asking to log in again' "${accounts}/common/zwift.log" \
+    || { echo "Account picker did not ask to log in again" >&2; exit 1; }
+# Exactly one account was removed by the suite.
+python3 - "${accounts}/common/accounts.json" <<'PY'
 import json
 import sys
 
@@ -283,9 +283,6 @@ with open(sys.argv[1], encoding="utf-8") as source:
     store = json.load(source)
 accounts = store["accounts"]
 assert len(accounts) == 1, f"expected one account left, got {len(accounts)}"
-with open(sys.argv[2], encoding="utf-8") as source:
-    token = json.load(source)
-assert token["access_token"] == f"{accounts[0]['id']}-token", token
 PY
 touch "${accounts}/release"
 kill "${gui_pid}" 2>/dev/null || true

@@ -2,6 +2,7 @@
 
 pub mod accounts;
 pub mod application;
+pub mod auth;
 pub mod bt_tuning;
 pub mod cancel;
 pub mod cdn;

@@ -5,7 +5,7 @@
 //! can be passed to ZwiftApp.exe via `--token=<json>`.
 
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 const AUTH_URL: &str = "https://secure.zwift.com/auth/realms/zwift/protocol/openid-connect/auth";
@@ -42,8 +42,13 @@ pub fn generate_random_state() -> String {
 }
 
 /// Build the OAuth authorization URL.
-pub fn build_authorization_url(challenge: &str, state: &str) -> String {
-    format!(
+///
+/// `prompt` is appended as the OIDC `prompt` parameter when set: `prompt=none`
+/// asks Keycloak to authenticate silently from the session's cookies (used to
+/// re-authenticate a remembered rider without showing a form), while `None`
+/// leaves the interactive flow as it was.
+pub fn build_authorization_url(challenge: &str, state: &str, prompt: Option<&str>) -> String {
+    let mut url = format!(
         "{}?client_id={}&response_type=code&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
         AUTH_URL,
         urlencoding::encode(CLIENT_ID),
@@ -51,7 +56,12 @@ pub fn build_authorization_url(challenge: &str, state: &str) -> String {
         urlencoding::encode(SCOPE),
         urlencoding::encode(state),
         urlencoding::encode(challenge),
-    )
+    );
+    if let Some(prompt) = prompt {
+        url.push_str("&prompt=");
+        url.push_str(&urlencoding::encode(prompt));
+    }
+    url
 }
 
 /// Build a readable message from a failed token response. Only the `error` and
@@ -104,6 +114,9 @@ pub fn exchange_code_for_token(code: &str, verifier: &str) -> Result<Value, Stri
 }
 
 /// Save the token JSON to a file accessible only by its owner.
+///
+/// Tests and fixtures only: the launcher never writes a live token to disk (see
+/// `crate::auth`).
 pub fn save_token(token: &Value, path: &Path) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -164,15 +177,6 @@ fn jwt_payload(jwt: &str) -> Option<Value> {
     let payload = jwt.split('.').nth(1)?.trim_end_matches('=');
     let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
     serde_json::from_slice(&bytes).ok()
-}
-
-/// Exchange an authorization code for a token and save it to the standard token path.
-pub fn exchange_and_save(code: &str, verifier: &str) -> Result<(), String> {
-    let token = exchange_code_for_token(code, verifier)?;
-    let token_path = std::env::var("SNAP_USER_COMMON")
-        .map(|common| PathBuf::from(common).join("pairing-token.json"))
-        .map_err(|_| "SNAP_USER_COMMON is not set".to_owned())?;
-    save_token(&token, &token_path)
 }
 
 #[cfg(test)]

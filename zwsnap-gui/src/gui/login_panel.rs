@@ -1,28 +1,38 @@
-//! Persistent WebKitGTK panel pinned to the bottom of the launcher window.
+//! WebKitGTK panel pinned to the bottom of the launcher window.
 //!
 //! The panel always shows Zwift's launcher embed page: the registration variant
-//! when no account is remembered, the plain page otherwise. When the
-//! launcher reaches its login gate it asks the panel to start the OAuth login;
-//! the panel loads the Keycloak authorization URL and, once WebKit navigates to
-//! the `http://zwift/?code=...` redirect, exchanges the code for a token and
-//! unblocks the worker. The login page is only ever shown *in place of* the embed
-//! while a login is in progress; once it succeeds the embed page is put back (see
-//! [`LoginPanel::show_embed`]).
+//! when no account is remembered, the plain page otherwise. When the launcher
+//! reaches its login gate it asks the panel to start the OAuth login; the panel
+//! loads the Keycloak authorization URL and, once WebKit navigates to the
+//! `http://zwift/?code=...` redirect, exchanges the code for a token. The login
+//! page is only ever shown *in place of* the embed while a login is in progress;
+//! once it succeeds the embed page is put back (see [`LoginPanel::show_embed`]).
+//!
+//! The panel always runs on an **ephemeral** (RAM-only) session. A successful
+//! login's Keycloak cookies are copied into the account's persistent session
+//! (`accounts/<id>/webkit/`), which is the remembered login; the token itself is
+//! handed to `crate::auth` and never written anywhere.
 //!
 //! Links in the page are handed to the system browser with `xdg-open` rather than
 //! followed inside the panel, which is far too small for a web page.
 
+use crate::auth::AuthToken;
 use crate::cancel::Cancellation;
 use crate::logging::Logger;
 use crate::oauth;
+use crate::profile;
 use gtk::glib;
 use gtk::prelude::*;
-use std::cell::RefCell;
+use serde_json::Value;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 use webkit6::prelude::*;
+
+use super::session;
+use crate::accounts::Store;
 
 /// Page shown before Zwift is installed, and until the login gate opens.
 pub const EMBED_URL: &str = "https://cdn.zwift.com/static/web/launcher/embed.html";
@@ -153,34 +163,54 @@ struct LoginState {
     pending: Option<mpsc::Sender<bool>>,
 }
 
-/// The bottom panel: a WebKit view plus the login bookkeeping around it.
+/// The bottom panel: a WebKit view plus the login bookkeeping around it. The
+/// panel always runs on an ephemeral (RAM-only) session; a login's cookies are
+/// copied into the account's persistent session on success (see `gui::session`).
 pub struct LoginPanel {
     webview: RefCell<webkit6::WebView>,
     container: gtk::ScrolledWindow,
     state: Rc<RefCell<LoginState>>,
     cancellation: Cancellation,
     logger: Option<Arc<Logger>>,
-    store: RefCell<Option<Rc<RefCell<crate::accounts::Store>>>>,
+    store: RefCell<Option<Rc<RefCell<Store>>>>,
+    /// The ephemeral token the launcher launches with; the panel sets it on a
+    /// successful login.
+    auth: Arc<AuthToken>,
+    /// Whether a login through this panel consults the "Remember me" cookie to
+    /// decide persistence. The launcher's own gate does; an "add another account"
+    /// login from the picker does not (its ephemeral session has no cookie) and is
+    /// always remembered.
+    remember_session: Rc<Cell<bool>>,
 }
 
 impl LoginPanel {
-    /// Build the panel on a persistent session and immediately load the Zwift
-    /// launcher embed page, or its registration variant when `registration` is
-    /// set. `logger` is the launcher's own log, used to record link handling.
+    /// Build the panel on a fresh ephemeral session and immediately load the
+    /// Zwift launcher embed page, or its registration variant when `registration`
+    /// is set. `logger` is the launcher's own log, used to record link handling.
     pub fn new(
         cancellation: Cancellation,
         registration: bool,
         logger: Option<Arc<Logger>>,
-        store: Option<Rc<RefCell<crate::accounts::Store>>>,
+        store: Option<Rc<RefCell<Store>>>,
+        auth: Arc<AuthToken>,
     ) -> Self {
-        let webview = super::webview_for(super::SessionMode::Persistent);
+        let store = RefCell::new(store);
+        let webview = session::ephemeral_webview();
         let state = Rc::new(RefCell::new(LoginState {
             verifier: String::new(),
             state: String::new(),
             pending: None,
         }));
-        let store = RefCell::new(store);
-        wire_webview(&webview, &state, &cancellation, &logger, &store);
+        let remember_session = Rc::new(Cell::new(true));
+        wire_webview(
+            &webview,
+            &state,
+            &cancellation,
+            &logger,
+            &store,
+            &auth,
+            &remember_session,
+        );
         webview.load_uri(embed_url(registration));
 
         let container = gtk::ScrolledWindow::builder()
@@ -197,7 +227,17 @@ impl LoginPanel {
             cancellation,
             logger,
             store,
+            auth,
+            remember_session,
         }
+    }
+
+    /// Whether a login through this panel is remembered. The launcher's gate
+    /// leaves this `true` (it consults the "Remember me" cookie); the picker's
+    /// "add another account" sets it `false`, so the added rider is always
+    /// remembered.
+    pub fn set_remember_session(&self, remember: bool) {
+        self.remember_session.set(remember);
     }
 
     /// The widget to append to the window layout.
@@ -210,19 +250,21 @@ impl LoginPanel {
         self.state.borrow().pending.is_some()
     }
 
-    /// Rebuild the WebView on `session`, discarding whatever the previous view
-    /// held. The persistent session is the launcher's own; an ephemeral one is
-    /// used to log in an additional account, which must not inherit the current
-    /// account's SSO cookie. Pending-decision state is left untouched, so the
-    /// caller follows this with [`LoginPanel::start_login`].
-    pub fn set_session(&self, session: super::SessionMode) {
-        let webview = super::webview_for(session);
+    /// Rebuild the panel's WebView on a fresh ephemeral session, dropping any
+    /// cookies the previous view held. Used before a fresh login (the picker's
+    /// "add another account") so an in-flight SSO cookie cannot sign the new
+    /// login into the account already shown. Pending-decision state is left
+    /// untouched, so the caller follows this with [`LoginPanel::start_login`].
+    pub fn reset_session(&self) {
+        let webview = session::ephemeral_webview();
         wire_webview(
             &webview,
             &self.state,
             &self.cancellation,
             &self.logger,
             &self.store,
+            &self.auth,
+            &self.remember_session,
         );
         self.container.set_child(Some(&webview));
         *self.webview.borrow_mut() = webview;
@@ -237,11 +279,10 @@ impl LoginPanel {
         load_login_page(&self.webview.borrow(), &self.state);
     }
 
-    /// Put the launcher's embed page back after a login replaced it. The WebView
-    /// is rebuilt on the persistent session first, so an embed restored after an
-    /// "add another account" login no longer carries that login's cookies.
+    /// Put the launcher's embed page back after a login replaced it, on a fresh
+    /// ephemeral session so the completed login's cookies are dropped.
     pub fn show_embed(&self) {
-        self.set_session(super::SessionMode::Persistent);
+        self.reset_session();
         self.webview.borrow().load_uri(EMBED_URL);
     }
 
@@ -261,7 +302,9 @@ fn wire_webview(
     state: &Rc<RefCell<LoginState>>,
     cancellation: &Cancellation,
     logger: &Option<Arc<Logger>>,
-    store: &RefCell<Option<Rc<RefCell<crate::accounts::Store>>>>,
+    store: &RefCell<Option<Rc<RefCell<Store>>>>,
+    auth: &Arc<AuthToken>,
+    remember_session: &Rc<Cell<bool>>,
 ) {
     use webkit6::PolicyDecisionType;
 
@@ -269,6 +312,8 @@ fn wire_webview(
     let cancellation = cancellation.clone();
     let logger = logger.clone();
     let store = store.borrow().clone();
+    let auth = auth.clone();
+    let remember_session = remember_session.clone();
     webview.connect_decide_policy(move |webview, decision, decision_type| {
         let navigating = decision_type == PolicyDecisionType::NavigationAction;
         // A link click arrives as a navigation action and a page asking for a
@@ -321,6 +366,9 @@ fn wire_webview(
                                 code,
                                 cancellation.clone(),
                                 store.clone(),
+                                auth.clone(),
+                                remember_session.get(),
+                                logger.clone(),
                             );
                         }
                     }
@@ -354,7 +402,7 @@ fn load_login_page(webview: &webkit6::WebView, state: &Rc<RefCell<LoginState>>) 
     let verifier = oauth::generate_pkce_verifier();
     let challenge = oauth::compute_pkce_challenge(&verifier);
     let state_value = oauth::generate_random_state();
-    let uri = oauth::build_authorization_url(&challenge, &state_value);
+    let uri = oauth::build_authorization_url(&challenge, &state_value, None);
     {
         let mut state = state.borrow_mut();
         state.verifier = verifier;
@@ -363,19 +411,29 @@ fn load_login_page(webview: &webkit6::WebView, state: &Rc<RefCell<LoginState>>) 
     webview.load_uri(&uri);
 }
 
-/// Exchange the authorization code for a token off-thread, then answer the
-/// pending decision (or reload the login page on failure so the user can retry).
+/// Exchange the authorization code for a token off-thread, then record the
+/// account, hold the token and answer the pending decision (or reload the login
+/// page on failure so the user can retry).
+///
+/// The account is recorded at login time so the picker lists the rider next
+/// launch. Whether the login is *remembered* depends on the "Remember me"
+/// cookie: a remembered login's Keycloak cookies are copied into the account's
+/// persistent session; a forgotten one copies nothing (NEVER-WRITE).
+#[allow(clippy::too_many_arguments)] // One call site; the arguments are distinct collaborators.
 fn start_exchange(
     webview: webkit6::WebView,
     state: Rc<RefCell<LoginState>>,
     code: String,
     cancellation: Cancellation,
-    store: Option<Rc<RefCell<crate::accounts::Store>>>,
+    store: Option<Rc<RefCell<Store>>>,
+    auth: Arc<AuthToken>,
+    remember_session: bool,
+    logger: Option<Arc<Logger>>,
 ) {
     let verifier = state.borrow().verifier.clone();
     let (result_sender, result_receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = oauth::exchange_and_save(&code, &verifier);
+        let result = oauth::exchange_code_for_token(&code, &verifier);
         let _ = result_sender.send(result);
     });
     glib::timeout_add_local(Duration::from_millis(100), move || {
@@ -388,16 +446,27 @@ fn start_exchange(
             Err(mpsc::TryRecvError::Disconnected) => Err("exchange worker stopped".to_owned()),
         };
         match result {
-            Ok(()) => {
+            Ok(token) => {
+                // Hold the token so the launch can read it, then record the
+                // account so the picker lists the rider.
+                auth.set(token.clone());
+                let id = store
+                    .as_ref()
+                    .and_then(|store| record_account(store, &token, logger.as_ref()));
+                // Answer the decision so the game may launch with the token.
                 if let Some(reply) = state.borrow_mut().pending.take() {
                     let _ = reply.send(true);
                 }
-                // Check if "Remember me" was unchecked
-                if let Some(store_ref) = &store {
-                    check_remember_me_cookie(&webview, store_ref.clone());
+                // Persist the login: the gate honours the "Remember me" cookie,
+                // an added account is always remembered.
+                if let (Some(store), Some(id)) = (store.clone(), id) {
+                    if remember_session {
+                        check_remember_me_cookie(&webview, &store, &id, logger.clone());
+                    } else {
+                        apply_remember(&webview, &store, &id, true, logger.as_ref());
+                    }
                 }
-                // The login succeeded: put the embed page back in place of the
-                // login page. The caller swaps in a persistent view afterwards.
+                // Put the embed page back in place of the login page.
                 webview.load_uri(EMBED_URL);
             }
             Err(error) => {
@@ -410,52 +479,114 @@ fn start_exchange(
     });
 }
 
-/// Check if the "Remember me" cookie is present and update the accounts store if it's absent.
-/// This indicates that the user has unchecked "Remember me" during login.
-fn check_remember_me_cookie(
-    webview: &webkit6::WebView,
-    store: Rc<RefCell<crate::accounts::Store>>,
-) {
-    // Get the network session from the webview
-    let session = webview.network_session();
-    let cookie_manager = match session.and_then(|s| s.cookie_manager()) {
-        Some(manager) => manager,
-        None => {
-            eprintln!("Warning: Unable to access cookie manager");
-            return;
-        }
-    };
-
-    // Check for cookies at the Zwift auth realm path
-    let uri = "https://secure.zwift.com/auth/realms/zwift/";
-
-    // Use the cookie manager to get cookies for this URI
-    // This is an async operation, so we need to handle it appropriately
-    let cancellable = gtk::gio::Cancellable::new();
-    cookie_manager.cookies(uri, Some(&cancellable), move |result| {
-        if let Ok(cookies) = result {
-            // Check if the KEYCLOAK_REMEMBER_ME cookie is present.
-            let remember_me_present = cookies
-                .into_iter()
-                .any(|mut cookie| cookie.name().as_deref() == Some("KEYCLOAK_REMEMBER_ME"));
-
-            // Update the store with the forget-on-exit flag.
-            let should_forget = !remember_me_present;
-            let mut store = store.borrow_mut();
-            store.set_forget_on_exit(should_forget);
-
-            // Save the store to persist the flag.
-            if let Err(e) = store.save() {
-                eprintln!(
-                    "Warning: Unable to save store with forget-on-exit flag: {}",
-                    e
-                );
-            } else if should_forget {
-                eprintln!(
-                    "Marked session to be forgotten on exit because 'Remember me' was unchecked"
+/// Record the just-logged-in account (identity and card fields) and select it.
+/// Returns its id, or `None` when no identity could be derived.
+fn record_account(
+    store: &Rc<RefCell<Store>>,
+    token: &Value,
+    logger: Option<&Arc<Logger>>,
+) -> Option<String> {
+    let claims = oauth::token_claims(token);
+    let mut store = store.borrow_mut();
+    match store.upsert(&profile::Profile::default(), &claims) {
+        Ok(id) => {
+            if let Err(error) = store.select(&id) {
+                warn(
+                    logger,
+                    &format!("Unable to select the new account: {error}"),
                 );
             }
+            if let Err(error) = store.save() {
+                warn(logger, &format!("Unable to save accounts: {error}"));
+            }
+            Some(id)
         }
+        Err(error) => {
+            warn(
+                logger,
+                &format!("Unable to remember the new account: {error}"),
+            );
+            None
+        }
+    }
+}
+
+/// Persist, or drop, the login. On "remember", the fresh Keycloak cookies are
+/// copied into the account's persistent session, which becomes the remembered
+/// login; on "forget", nothing is copied and the session is marked to be
+/// forgotten at exit (NEVER-WRITE).
+fn apply_remember(
+    webview: &webkit6::WebView,
+    store: &Rc<RefCell<Store>>,
+    id: &str,
+    remember: bool,
+    logger: Option<&Arc<Logger>>,
+) {
+    if remember {
+        let dir = store.borrow().session_dir(id);
+        match session::account_session(&dir) {
+            Some(target) => {
+                if let Some(source) = webview.network_session() {
+                    // Ownership of `target` moves into the copy, keeping the
+                    // session alive until WebKit has written the cookies.
+                    session::copy_realm_cookies(&source, target);
+                }
+            }
+            None => warn(
+                logger,
+                &format!("Unable to prepare the session store for {id}"),
+            ),
+        }
+    }
+    {
+        let mut store = store.borrow_mut();
+        store.set_forget_on_exit(!remember);
+        if let Err(error) = store.save() {
+            warn(logger, &format!("Unable to save accounts: {error}"));
+        }
+    }
+}
+
+fn warn(logger: Option<&Arc<Logger>>, message: &str) {
+    match logger {
+        Some(logger) => logger.warning(message),
+        None => eprintln!("{message}"),
+    }
+}
+
+/// Read the "Remember me" cookie from the panel's session, then persist or drop
+/// the login accordingly. An absent cookie means the user unchecked "Remember
+/// me", so the login is not persisted (NEVER-WRITE). When the cookie cannot be
+/// read at all the login is kept, so a remembered rider is never left
+/// unlaunchable.
+fn check_remember_me_cookie(
+    webview: &webkit6::WebView,
+    store: &Rc<RefCell<Store>>,
+    id: &str,
+    logger: Option<Arc<Logger>>,
+) {
+    let Some(cookie_manager) = webview.network_session().and_then(|s| s.cookie_manager()) else {
+        eprintln!("Warning: unable to read the session cookies; keeping the login");
+        apply_remember(webview, store, id, true, logger.as_ref());
+        return;
+    };
+    let cancellable = gtk::gio::Cancellable::new();
+    let webview = webview.clone();
+    let store = store.clone();
+    let id = id.to_owned();
+    cookie_manager.cookies(session::COOKIE_URI, Some(&cancellable), move |result| {
+        let remember = match result {
+            Ok(cookies) => cookies
+                .into_iter()
+                .any(|mut cookie| cookie.name().as_deref() == Some("KEYCLOAK_REMEMBER_ME")),
+            Err(error) => {
+                eprintln!(
+                    "Warning: unable to read the session cookies ({error}); keeping the login"
+                );
+                true
+            }
+        };
+        apply_remember(&webview, &store, &id, remember, logger.as_ref());
     });
 }
 

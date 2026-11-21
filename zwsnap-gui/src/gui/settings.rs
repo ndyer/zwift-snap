@@ -7,6 +7,7 @@
 //! section is read-only and reports what the launcher can observe right now.
 
 use crate::accounts::Store;
+use crate::auth::AuthToken;
 use crate::display::DisplayMode;
 use crate::graphics::Setting as GraphicsSetting;
 use crate::settings::{self as store, GpuProbe, Settings};
@@ -14,6 +15,7 @@ use gtk::glib;
 use gtk::prelude::*;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// The graphics profiles offered in the dialog, in `Setting::to_string` order.
@@ -40,8 +42,8 @@ pub struct SettingsContext {
     pub path: PathBuf,
     /// The Wine prefix, purged by "Reset Wine prefix".
     pub prefix: PathBuf,
-    /// The saved OAuth token, whose presence is reported.
-    pub token_file: PathBuf,
+    /// The shared ephemeral token, threaded to the worker for the launch.
+    pub auth: Arc<AuthToken>,
     /// The settings as they were loaded at startup; the dialog edits a copy.
     pub settings: Settings,
 }
@@ -61,7 +63,7 @@ impl SettingsContext {
         Self {
             path: common.join(store::FILE_NAME),
             prefix: common.join(".wine"),
-            token_file: common.join("pairing-token.json"),
+            auth: AuthToken::new(),
             settings,
         }
     }
@@ -271,10 +273,13 @@ impl SettingsDialog {
         self.window.present();
     }
 
-    /// Fills the read-only status block: token presence, the Bluetooth plug, and
-    /// where the settings and game files live.
+    /// Fills the read-only status block: where credentials are kept, the
+    /// Bluetooth plug, and where the settings and game files live.
     fn fill_status(&self, status: &gtk::Label) {
-        let token = present(&self.context.token_file);
+        // Logins are remembered as one WebKit session (cookie jar) per account;
+        // the OAuth token itself is ephemeral.
+        let credentials =
+            "per-account session cookies (accounts/<id>/webkit); tokens are ephemeral".to_owned();
         let bluez = match store::snap_is_connected("bluez") {
             Some(true) => "connected",
             Some(false) => "not connected (Bluetooth will not work)",
@@ -282,7 +287,7 @@ impl SettingsDialog {
         };
         let accounts = self.accounts_summary();
         status.set_text(&format!(
-            "Zwift account token: {token}\n\
+            "Credential storage: {credentials}\n\
              Saved accounts: {accounts}\n\
              Bluetooth (bluez) plug: {bluez}\n\
              Settings file: {}\n\
@@ -504,14 +509,6 @@ fn row_label(text: &str) -> gtk::Label {
     label
 }
 
-fn present(path: &std::path::Path) -> &'static str {
-    if path.is_file() {
-        "present"
-    } else {
-        "not found"
-    }
-}
-
 /// The dropdown position of a probed profile, so a successful probe can select
 /// the recommended profile. `None` if the profile is not one of the listed words.
 fn profile_index(profile: crate::graphics::Profile) -> Option<u32> {
@@ -584,17 +581,6 @@ mod tests {
         assert_eq!(profile_index(Profile::Medium), Some(2));
         assert_eq!(profile_index(Profile::High), Some(3));
         assert_eq!(profile_index(Profile::Ultra), Some(4));
-    }
-
-    #[test]
-    fn presence_reports_file_state() {
-        let dir = std::env::temp_dir().join(format!("zwsnap-gui-presence-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(present(&dir.join("missing")), "not found");
-        std::fs::write(dir.join("there"), "").unwrap();
-        assert_eq!(present(&dir.join("there")), "present");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
