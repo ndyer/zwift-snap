@@ -2,7 +2,9 @@
 """Run this project's Workshop actions from inside its workshop.
 
 The SDK's setup-project hook installs this runner at /usr/local/bin/workshop.
-Use workshop run <action> [arguments...] or workshop run zwift-snap <action>.
+Use workshop run <action> [arguments...], optionally naming the workshop and
+separating it from the action with "--" as the host CLI does, so both
+workshop run -- <action> and workshop run zwift-snap -- <action> work.
 Each invocation reads /project/.workshop/zwift-snap.yaml and runs the action
 from /project with bash errexit/pipefail. workshop --help lists actions.
 This is not the host Workshop CLI: lifecycle and management commands can only
@@ -41,12 +43,16 @@ def main() -> int:
         raise ValueError("workshop actions must map names to shell scripts")
 
     if not args or args in (["--help"], ["-h"]):
-        print("Usage: workshop run [zwift-snap] <action> [arguments...]")
+        print("Usage: workshop run [--] [zwift-snap] <action> [arguments...]")
         print("In-workshop action runner only; use the host CLI for lifecycle commands.")
         print("Actions: " + ", ".join(actions))
         return 0
     args = args[1:]
-    if args and args[0] == "zwift-snap":
+    # Drop the optional workshop name and the optional "--" separator in either
+    # order, so workshop run -- build (the form the definition documents),
+    # workshop run zwift-snap -- build and workshop run build all work. Neither
+    # token can be an action name, so this never eats into the arguments.
+    while args and args[0] in ("zwift-snap", "--"):
         args = args[1:]
     if not args:
         raise ValueError("missing action; use --help to list actions")
