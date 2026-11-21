@@ -134,6 +134,8 @@ pub struct Store {
     token_file: PathBuf,
     /// The account that was used last, by id.
     last_used: Option<String>,
+    /// Whether to forget the last used account on exit (when "Remember me" was unchecked).
+    forget_on_exit: bool,
     /// The remembered accounts, most recently added last.
     pub accounts: Vec<Account>,
 }
@@ -147,6 +149,7 @@ impl Store {
             dir: common.join("accounts"),
             token_file: common.join(LAUNCH_TOKEN),
             last_used: None,
+            forget_on_exit: false,
             accounts: Vec::new(),
         }
     }
@@ -178,6 +181,10 @@ impl Store {
             .get("last_used")
             .and_then(Value::as_str)
             .map(str::to_owned);
+        self.forget_on_exit = value
+            .get("forget_on_exit")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         if let Some(accounts) = value.get("accounts").and_then(Value::as_array) {
             self.accounts = accounts.iter().filter_map(Account::from_value).collect();
         }
@@ -196,6 +203,7 @@ impl Store {
         let value = json!({
             "version": VERSION,
             "last_used": self.last_used,
+            "forget_on_exit": self.forget_on_exit,
             "accounts": self.accounts.iter().map(Account::to_value).collect::<Vec<_>>(),
         });
         let text = serde_json::to_string_pretty(&value)
@@ -206,6 +214,16 @@ impl Store {
     /// Whether the store knows about any account.
     pub fn is_empty(&self) -> bool {
         self.accounts.is_empty()
+    }
+
+    /// Whether to forget the last used account on exit.
+    pub fn forget_on_exit(&self) -> bool {
+        self.forget_on_exit
+    }
+
+    /// Set whether to forget the last used account on exit.
+    pub fn set_forget_on_exit(&mut self, forget: bool) {
+        self.forget_on_exit = forget;
     }
 
     /// The account with `id`, if any.

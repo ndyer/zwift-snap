@@ -513,6 +513,7 @@ fn build_window(
         cancellation.clone(),
         preview,
         logger.clone(),
+        None, // Store will be set later when accounts_panel is created
     ));
 
     // The Settings dialog is built while hidden; `present` shows it on demand.
@@ -567,6 +568,8 @@ fn build_window(
         let add = {
             let login_panel = login_panel.clone();
             let add_result = add_result.clone();
+            // Set the store reference in the login panel
+            login_panel.borrow_mut().set_store(store.clone());
             Box::new(move || {
                 // A fresh, cookie-less session: the current account's SSO cookie
                 // must not silently sign the new login back into itself.

@@ -98,8 +98,15 @@ impl ScreenInhibitor {
     /// is ordered ahead of the game's own cleanup; dropping the value releases the
     /// cookie as well, without a log line.
     pub fn release(&mut self, logger: &Logger) {
-        if let Backend::Held { service, .. } = self.backend {
-            logger.debug(&format!("Releasing the {service} screensaver inhibitor"));
+        #[cfg(feature = "gtk-ui")]
+        {
+            if let Backend::Held { service, .. } = &self.backend {
+                logger.debug(&format!("Releasing the {service} screensaver inhibitor"));
+            }
+        }
+        #[cfg(not(feature = "gtk-ui"))]
+        {
+            let _logger = logger; // Silence unused variable warning
         }
         self.backend = Backend::Inactive;
     }

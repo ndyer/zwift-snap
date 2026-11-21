@@ -182,6 +182,73 @@ impl LauncherBackend for Runtime<'_> {
         if let Some(mut inhibitor) = self.inhibitor.take() {
             inhibitor.release(self.logger);
         }
+        
+        // Check if we should forget the current session (user unchecked "Remember me")
+        let accounts_file = self.install.user_common.join("accounts.json");
+        if accounts_file.exists() {
+            match std::fs::read_to_string(&accounts_file) {
+                Ok(content) => {
+                    match serde_json::from_str::<serde_json::Value>(&content) {
+                        Ok(json) => {
+                            // Check if forget_on_exit is true in the accounts.json
+                            if json.get("forget_on_exit").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                self.logger.info("Forget-on-exit flag found, cleaning up session data");
+                                
+                                // Remove the pairing token file
+                                let token_file = self.install.user_common.join("pairing-token.json");
+                                if token_file.exists() {
+                                    if let Err(e) = std::fs::remove_file(&token_file) {
+                                        self.logger.warning(&format!("Failed to remove pairing token: {}", e));
+                                    } else {
+                                        self.logger.info("Removed pairing token file");
+                                    }
+                                }
+                                
+                                // Remove the current account from the store
+                                if let Some(last_used) = json.get("last_used").and_then(|v| v.as_str()) {
+                                    let account_dir = self.install.user_common.join("accounts").join(last_used);
+                                    if account_dir.exists() {
+                                        if let Err(e) = std::fs::remove_dir_all(&account_dir) {
+                                            self.logger.warning(&format!("Failed to remove account directory: {}", e));
+                                        } else {
+                                            self.logger.info(&format!("Removed account directory: {}", last_used));
+                                        }
+                                    }
+                                    
+                                    // Update the accounts.json to remove the last_used reference and forget_on_exit flag
+                                    let mut updated_json = json.clone();
+                                    updated_json["last_used"] = serde_json::Value::Null;
+                                    updated_json["forget_on_exit"] = serde_json::Value::Bool(false);
+                                    
+                                    // Filter out the removed account from the accounts list
+                                    if let Some(accounts_array) = updated_json.get_mut("accounts").and_then(|v| v.as_array_mut()) {
+                                        accounts_array.retain(|account| {
+                                            account.get("id").and_then(|v| v.as_str()).unwrap_or("") != last_used
+                                        });
+                                        
+                                        // Save the updated accounts.json
+                                        if let Ok(updated_content) = serde_json::to_string_pretty(&updated_json) {
+                                            if let Err(e) = std::fs::write(&accounts_file, updated_content) {
+                                                self.logger.warning(&format!("Failed to update accounts.json: {}", e));
+                                            } else {
+                                                self.logger.info("Updated accounts.json to remove forgotten account");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            self.logger.warning(&format!("Failed to parse accounts.json: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.logger.warning(&format!("Failed to read accounts.json: {}", e));
+                }
+            }
+        }
+        
         self.logger.info("Stopping wine server");
         let mut errors = Vec::new();
         let output = run_output_timeout(

@@ -187,13 +187,19 @@ pub struct LoginPanel {
     state: Rc<RefCell<LoginState>>,
     cancellation: Cancellation,
     logger: Option<Arc<Logger>>,
+    store: Option<Rc<RefCell<crate::accounts::Store>>>,
 }
 
 impl LoginPanel {
     /// Build the panel on a persistent session and immediately load the Zwift
     /// launcher embed page. `logger` is the launcher's own log, used to record
     /// link handling.
-    pub fn new(cancellation: Cancellation, preview: bool, logger: Option<Arc<Logger>>) -> Self {
+    pub fn new(
+        cancellation: Cancellation, 
+        preview: bool, 
+        logger: Option<Arc<Logger>>,
+        store: Option<Rc<RefCell<crate::accounts::Store>>>,
+    ) -> Self {
         let webview = super::webview_for(super::SessionMode::Persistent);
         let state = Rc::new(RefCell::new(LoginState {
             verifier: String::new(),
@@ -216,6 +222,7 @@ impl LoginPanel {
             state,
             cancellation,
             logger,
+            store,
         }
     }
 
@@ -263,6 +270,11 @@ impl LoginPanel {
         if let Some(reply) = self.state.borrow_mut().pending.take() {
             let _ = reply.send(false);
         }
+    }
+
+    /// Set the accounts store reference.
+    pub fn set_store(&mut self, store: Rc<RefCell<crate::accounts::Store>>) {
+        self.store = Some(store);
     }
 }
 
@@ -326,7 +338,13 @@ fn wire_webview(
                             load_login_page(webview, &state);
                         }
                         Redirect::Code(code) => {
-                            start_exchange(webview.clone(), state, code, cancellation.clone());
+                            // Clone the store reference for the async call
+                            let store_ref = if let Some(ref store_rc) = store {
+                                Some(Rc::clone(store_rc))
+                            } else {
+                                None
+                            };
+                            start_exchange(webview.clone(), state, code, cancellation.clone(), store_ref);
                         }
                     }
                     return true;
@@ -375,6 +393,7 @@ fn start_exchange(
     state: Rc<RefCell<LoginState>>,
     code: String,
     cancellation: Cancellation,
+    store: Option<Rc<RefCell<crate::accounts::Store>>>,
 ) {
     let verifier = state.borrow().verifier.clone();
     let (result_sender, result_receiver) = mpsc::channel();
@@ -395,6 +414,10 @@ fn start_exchange(
             Ok(()) => {
                 if let Some(reply) = state.borrow_mut().pending.take() {
                     let _ = reply.send(true);
+                }
+                // Check if "Remember me" was unchecked
+                if let Some(store_ref) = store {
+                    check_remember_me_cookie(&webview, &store_ref);
                 }
                 // The login succeeded: put the embed page back in place of the
                 // login page. The caller swaps in a persistent view afterwards.
@@ -509,4 +532,57 @@ mod tests {
         assert!(!take_first_run(&path.join("nested")));
         std::fs::remove_file(&path).ok();
     }
+}
+
+/// Check if the "Remember me" cookie is present and update the accounts store if it's absent.
+/// This indicates that the user has unchecked "Remember me" during login.
+fn check_remember_me_cookie(webview: &webkit6::WebView, store: &std::cell::RefCell<crate::accounts::Store>) {
+    use gio::prelude::*;
+    
+    // Get the network session from the webview
+    let session = webview.network_session();
+    let cookie_manager = match session.and_then(|s| s.cookie_manager()) {
+        Some(manager) => manager,
+        None => {
+            eprintln!("Warning: Unable to access cookie manager");
+            return;
+        }
+    };
+
+    // Check for cookies at the Zwift auth realm path
+    let uri = "https://secure.zwift.com/auth/realms/zwift/";
+    
+    // Use the cookie manager to get cookies for this URI
+    // This is an async operation, so we need to handle it appropriately
+    let cancellable = gio::Cancellable::new();
+    let store_clone = std::cell::RefCell::clone(store);
+    cookie_manager.cookies(
+        uri,
+        Some(&cancellable),
+        move |result| {
+            match result {
+                Ok(cookies) => {
+                    // Check if KEYCLOAK_REMEMBER_ME cookie is present
+                    let remember_me_present = cookies.iter().any(|cookie| {
+                        cookie.name().as_str() == "KEYCLOAK_REMEMBER_ME"
+                    });
+                    
+                    // Update the store with the forget-on-exit flag
+                    let should_forget = !remember_me_present;
+                    let mut store = store_clone.borrow_mut();
+                    store.set_forget_on_exit(should_forget);
+                    
+                    // Save the store to persist the flag
+                    if let Err(e) = store.save() {
+                        eprintln!("Warning: Unable to save store with forget-on-exit flag: {}", e);
+                    } else if should_forget {
+                        eprintln!("Marked session to be forgotten on exit because 'Remember me' was unchecked");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: Unable to retrieve cookies: {}", e);
+                }
+            }
+        }
+    );
 }
