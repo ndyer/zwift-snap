@@ -1,9 +1,9 @@
 # Preface
 
 The snap packaging details that are easy to break: pruning and its guards, build
-ordering, stage-package auditing, the local Wine source, Wine prerequisite
-installation, and the confinement/layout decisions. Read the relevant subsection
-before editing `snap/snapcraft.yaml` or `snap/prune-closure.sh`.
+ordering, the version part, stage-package auditing, the local Wine source, Wine
+prerequisite installation, and the confinement/layout decisions. Read the relevant
+subsection before editing `snap/snapcraft.yaml` or `snap/prune-closure.sh`.
 
 IMPORTANT: Read the `.kb/agents.md` file.
 
@@ -25,6 +25,37 @@ re-run the prime step.
 Nothing reads them — the launcher is English-only, calls no gettext, and wine's
 own translations are build-time-only (`opt/wine-devel/share/wine/nls` is NOT
 pruned; it is wine's runtime NLS data).
+
+The walk is the slowest step of the build, so `prune-closure.sh` caches three
+things: the `readelf -d` output per file (`needed_cache`), the existence probe per
+`directory/name` pair (`exists_cache`) and the `readlink -f` target per symlink
+(`resolve_cache`). The caches matter because a library imported by hundreds of
+files is offered to `add_root` hundreds of times: without the symlink cache every
+repeat forked `readlink`, which alone was most of the runtime. Keep the caches when
+editing the walk — the per-call work is cheap but the repetition is not. The
+removal total (`prune-closure: removed N files, M bytes`) is a good regression
+check: it should be ~430 files / ~324 MB.
+
+## Version part
+
+`version-generator` (`plugin: nil`) sets the snap version from
+`git describe --tags --always --dirty`, run against `${CRAFT_PROJECT_DIR}`. Its
+`source` is the `snap/version-generator/` directory, which holds only a `README.md`
+marker and no content the part uses.
+
+The part needs a source that is *dirty on every build*: craft-parts re-runs a step
+only when the part is dirty, and a local source is the only thing that can be
+dirtied on demand (a git source is never re-pulled). The `build` action in
+`.workshop/zwift-snap.yaml` therefore runs `touch snap/version-generator/README.md`
+before `snapcraft pack`. Do not delete that file or the `touch` line, or the snap
+version silently stops tracking the tags.
+
+The source used to be `.` (the whole project). craft-parts' local-source handler
+walks the source and `os.lstat`s every entry to decide whether to re-pull, skipping
+only the lifecycle directories (`parts`, `stage`, `prime`, `overlay`), so every
+build walked and re-hardlinked all of `/project` — `wine-src/`, `.ccache/` and the
+cargo `target/` trees included. Nothing in the version comes from the source
+contents, so shrinking it to one marker file changes no behaviour.
 
 ## Stale prime after removing a part
 

@@ -1091,7 +1091,7 @@ parts:
       # snap/prune-closure.sh for the closure walk. Bump this comment after
       # editing that script or Wine's prime filters, craft-parts only
       # re-runs the prime step when the script text tracked in the part state
-      # changes: v17
+      # changes: v18
       # The gschemas.compiled that Debian creates in a trigger is not part of the staged
       # packages. Without it GTK programs abort with "No GSettings schemas are installed".
       glib-compile-schemas "${CRAFT_PRIME}/usr/share/glib-2.0/schemas"
@@ -1233,14 +1233,22 @@ parts:
       settings.json: etc/zwift/settings.json
 
   version-generator:
+    # The part only runs `git describe`; it needs no source contents, but it does need a
+    # source that can be made dirty on every build, because craft-parts only re-runs a step
+    # when the part is dirty and a local source is the only thing that can be dirtied on
+    # demand (a git source is never re-pulled). The workshop `build` action touches the
+    # marker file in this directory before `snapcraft pack` to keep the version current.
+    #
+    # The source used to be the whole project (`source: .`), which made craft-parts walk
+    # every entry under /project on each build and re-hardlink the changed ones into
+    # parts/version-generator/src - including wine-src/, .ccache/ and the cargo target/
+    # trees, several GiB unrelated to the version. Touching one marker file costs a stat.
     plugin: nil
-    source: .
-    # A local source is checked for changes on every run, so this part is rebuilt each time and
-    # the version stays current. A git source would never be rebuilt.
+    source: snap/version-generator
     source-type: local
     # Set the snap version from the latest git tag, for example v0.9 gives 0.9 and v0.9-3-g1a2b3c4
     # means 3 commits after that tag. "-dirty" is added when there are uncommitted changes. Without
-    # tags the commit hash is used. The local source has no git data, so ask the project directory.
+    # tags the commit hash is used. The source has no git data, so ask the project directory.
     override-build: |
       craftctl default
       version="$(git -C "${CRAFT_PROJECT_DIR}" describe --tags --always --dirty)" || version="unknown"

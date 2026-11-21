@@ -21,6 +21,9 @@
 set -euo pipefail
 
 prime="${1:?usage: prune-closure.sh <prime-dir>}"
+# Canonicalise once. Every path this script builds is derived from it and compared
+# against the keep set, so resolving it here keeps the per-file paths stable.
+prime="$(readlink -f -- "${prime}")"
 
 # gstreamer plugins whose only users are codecs Zwift never plays. Removing
 # the plugin frees its exclusive dependencies in the closure walk below:
@@ -96,39 +99,100 @@ dlopen_dirs=(
 )
 
 declare -A keep=()
+declare -A needed_cache=()
+# Resolution cache for the closure walk. The same (directory, library name) pair is
+# probed once per importer, so without this the walk repeats the identical stat
+# thousands of times; caching turns that into an associative-array lookup.
+declare -A exists_cache=()
+# Symlink target cache. add_root is offered one library once per importer, and most
+# staged libraries are symlinks (libfoo.so.1 -> libfoo.so.1.2.3), so without this
+# every repeat forked readlink to resolve a target it had already resolved.
+declare -A resolve_cache=()
 queue=()
 qhead=0
 needs=""
+needed_lines=""
 removed=0
 removed_bytes=0
 
+# ELF magic, read with a shell builtin. This runs once per candidate file and the
+# root scan below offers thousands, so the old head|od|tr pipeline (three forked
+# processes per call) was a large part of the script's runtime.
 is_elf() {
-    [[ $(head -c 4 -- "$1" | od -An -tx1 | tr -d ' \n') == "7f454c46" ]]
+    local magic
+    IFS= read -rN4 magic < "$1" 2>/dev/null || return 1
+    [[ ${magic} == $'\x7fELF' ]]
+}
+
+# Whether a path exists, memoised. $1 is always an absolute path this script built
+# itself, so it is a stable cache key.
+have_file() {
+    local cached=${exists_cache[${1}]+x}
+    if [[ -n ${cached} ]]; then
+        return "${exists_cache[${1}]}"
+    fi
+    if [[ -e ${1} ]]; then
+        exists_cache["${1}"]=0
+        return 0
+    fi
+    exists_cache["${1}"]=1
+    return 1
 }
 
 # Map a directory from an ELF runpath into the prime directory.
 map_dir() {
-    local dir="$1"
-    dir="${dir/\$ORIGIN/$(dirname -- "$2")}"
+    local dir="$1" base="${2%/*}"
+    dir="${dir/\$ORIGIN/${base}}"
     if [[ ${dir} == /* ]]; then
         dir="${prime}${dir}"
     else
-        dir="$(dirname -- "$2")/${dir}"
+        dir="${base}/${dir}"
     fi
     if [[ -d ${dir} ]]; then
         printf '%s' "${dir}"
     fi
 }
 
-# Parse DT_NEEDED and DT_RUNPATH/RPATH of an ELF file.
-needed_of() {
-    readelf -d -- "$1" 2>/dev/null \
-        | sed -n 's/.*(\(NEEDED\|RPATH\|RUNPATH\)).*\[\(.*\)\].*/\1 \2/p'
+# Parse DT_NEEDED and DT_RUNPATH/RPATH of an ELF file into $needed_lines, caching
+# the result: the gstreamer denylist loop and the closure walk both read the same
+# plugins, and readelf is the most expensive program this script runs. The output
+# is parsed with the shell rather than piped through sed, which saves a process
+# per library.
+load_needed() {
+    if [[ -n ${needed_cache[${1}]+x} ]]; then
+        needed_lines="${needed_cache[${1}]}"
+        return 0
+    fi
+    local raw line kind value out=""
+    raw="$(readelf -d -- "$1" 2>/dev/null)" || raw=""
+    while IFS= read -r line; do
+        case ${line} in
+            *"(NEEDED)"*) kind=NEEDED ;;
+            *"(RPATH)"* | *"(RUNPATH)"*) kind=RUNPATH ;;
+            *) continue ;;
+        esac
+        value="${line##*[}"
+        value="${value%%]*}"
+        out+="${kind} ${value}"$'\n'
+    done <<< "${raw}"
+    needed_lines="${out}"
+    needed_cache["${1}"]="${out}"
 }
 
 add_root() {
-    local f resolved
-    f="$(readlink -f -- "$1" 2>/dev/null)" || return 0
+    local f="$1" resolved
+    # Resolve symlinks only. Every other path the script builds is already
+    # canonical - prime is resolved above and no runpath in the tree uses ".." -
+    # so forking readlink for each regular file was wasted work.
+    if [[ -L ${f} ]]; then
+        if [[ -n ${resolve_cache[${f}]+x} ]]; then
+            f="${resolve_cache[${f}]}"
+        else
+            resolved="$(readlink -f -- "${f}" 2>/dev/null)" || return 0
+            resolve_cache["${f}"]="${resolved}"
+            f="${resolved}"
+        fi
+    fi
     [[ -f ${f} && -z ${keep[${f}]+x} ]] || return 0
     is_elf "${f}" || return 0
     keep["${f}"]=1
@@ -136,8 +200,13 @@ add_root() {
 }
 
 remove_file() {
-    local bytes
-    bytes="$(du -b -- "$1" 2>/dev/null | cut -f1)" || bytes=0
+    local bytes="${2:-}"
+    if [[ -z ${bytes} ]]; then
+        # stat reports the same size as `du -b` (both are lstat-based) without
+        # the extra cut process. Callers that already know the size pass it as
+        # the second argument, which avoids the process entirely.
+        bytes="$(stat -c %s -- "$1" 2>/dev/null)" || bytes=0
+    fi
     printf 'prune-closure: removing %s\n' "${1#"${prime}"/}"
     rm -f -- "$1"
     removed=$((removed + 1))
@@ -186,17 +255,23 @@ rm -rf -- "${prime}/usr/lib/gnupg" \
 # libraries only they need become unreachable.
 for plugin in "${prime}"/usr/lib/x86_64-linux-gnu/gstreamer-1.0/*.so; do
     [[ -e ${plugin} ]] || continue
-    if needed_of "${plugin}" | grep -qE "${gst_deny_re}"; then
+    load_needed "${plugin}"
+    if [[ ${needed_lines} =~ ${gst_deny_re} ]]; then
         remove_file "${plugin}"
     fi
 done
 
 # --- collect roots ----------------------------------------------------------
 
-# wine itself and every helper it installs
+# wine itself and every helper it installs. Its ELF files are the Unix libraries
+# and the programs in bin/; the rest of the tree is PE (.dll/.exe), headers
+# (.h/.idl), static archives (.a) and data, which is_elf would reject anyway.
+# Filtering by name here keeps is_elf off the ~2100 non-ELF files.
 while IFS= read -r -d '' f; do
     add_root "${f}"
-done < <(find "${prime}/opt/wine-devel" -type f -print0 2>/dev/null)
+done < <(find "${prime}/opt/wine-devel" -type f \
+    \( -name '*.so' -o -path '*/bin/*' -o -name 'wine' -o -name 'wine-preloader' \) \
+    -print0 2>/dev/null)
 
 # helper binaries the launcher and wine call through PATH
 add_root "${prime}/bin/zwsnap-gui"
@@ -251,42 +326,60 @@ done < <(find "${prime}/usr/lib/x86_64-linux-gnu" -maxdepth 1 \
 while [[ ${qhead} -lt ${#queue[@]} ]]; do
     f="${queue[${qhead}]}"
     qhead=$((qhead + 1))
-    # candidate directories: the file's runpath first, then the default set
+    load_needed "${f}"
+    # candidate directories: the file's runpath first, then the default set,
+    # deduplicated (a runpath often repeats a default search directory)
     candidates=()
+    declare -A seen_cand=()
+    needs=""
     while IFS= read -r line; do
+        [[ -n ${line} ]] || continue
         kind="${line%% *}"
         value="${line#* }"
         if [[ ${kind} == NEEDED ]]; then
             needs="${needs:+${needs} }${value}"
         else
             mapped="$(map_dir "${value}" "${f}")"
-            [[ -n ${mapped} ]] && candidates+=("${mapped}")
+            if [[ -n ${mapped} && -z ${seen_cand[${mapped}]+x} ]]; then
+                seen_cand["${mapped}"]=1
+                candidates+=("${mapped}")
+            fi
         fi
-    done < <(needed_of "${f}")
+    done <<< "${needed_lines}"
     for dir in "${search_dirs[@]}"; do
-        candidates+=("${prime}/${dir}")
+        dir="${prime}/${dir}"
+        if [[ -z ${seen_cand[${dir}]+x} ]]; then
+            seen_cand["${dir}"]=1
+            candidates+=("${dir}")
+        fi
     done
 
     for needed in ${needs}; do
         for dir in "${candidates[@]}"; do
-            if [[ -e "${dir}/${needed}" ]]; then
+            if have_file "${dir}/${needed}"; then
                 add_root "${dir}/${needed}"
                 break
             fi
         done
     done
-    needs=""
+    unset seen_cand
 done
 
 # --- delete unreachable files from the pool ---------------------------------
 
-while IFS= read -r -d '' f; do
-    resolved="$(readlink -f -- "${f}")"
+while IFS= read -r -d '' size && IFS= read -r -d '' f; do
+    # A symlink is compared through its target (add_root keyed it that way); a
+    # regular file's path is already canonical, so readlink is skipped for it.
+    if [[ -L ${f} ]]; then
+        resolved="$(readlink -f -- "${f}")"
+    else
+        resolved="${f}"
+    fi
     if [[ -z ${keep[${resolved}]+x} ]]; then
-        remove_file "${f}"
+        remove_file "${f}" "${size}"
     fi
 done < <(find "${prime}/usr/lib/x86_64-linux-gnu" "${prime}/usr/lib" -maxdepth 1 \
-    \( -name '*.so*' -o -name '*.a' \) \( -type f -o -type l \) -print0 2>/dev/null)
+    \( -name '*.so*' -o -name '*.a' \) \( -type f -o -type l \) -printf '%s\0%p\0' 2>/dev/null)
 
 # dangling symlinks left behind by the deletions above
 find "${prime}/usr/lib/x86_64-linux-gnu" "${prime}/usr/lib" -maxdepth 1 -xtype l -delete 2>/dev/null || true

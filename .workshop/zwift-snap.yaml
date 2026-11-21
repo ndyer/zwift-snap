@@ -44,6 +44,13 @@ actions:
       echo "No default rust toolchain for root; installing stable."
       sudo "${rustup_bin}" default stable
     fi
+    # The version-generator part has no content of its own, it only runs `git describe`.
+    # craft-parts re-runs a step only when the part is dirty, and a local source is
+    # checked for changes on every run, so touching this marker is what keeps the snap
+    # version current on every build (see the part's comment in snap/snapcraft.yaml).
+    # Touching one file is far cheaper than the old `source: .`, which made craft-parts
+    # walk and re-hardlink all of /project (wine-src/, .ccache/, the target/ trees).
+    touch snap/version-generator/README.md
     sudo snapcraft pack --destructive-mode "$@"
   clean: |
     cd /project
