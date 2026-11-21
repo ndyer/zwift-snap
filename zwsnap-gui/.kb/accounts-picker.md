@@ -33,11 +33,15 @@ Every account feature is best-effort. Profile refresh, avatar download and legac
 - `accounts/<hex id>/avatar.<ext>` - cached avatar, 0600.
 - `pairing-token.json` - the launch token, shared with the rest of the launcher.
 
-The directory key is the account id hex-encoded, so a hostile `sub` claim can never contain `/` or `..`. `Account` holds only the fields a card draws: `name`, `first_name`, `last_name`, `email`, `avatar_url`, `avatar`, `use_metric`, `distance_meters`, `elevation_meters`, `time_minutes`, `weight_grams`, `ftp`, `level`, `height_millimeters`. Loading is tolerant: a missing or broken `accounts.json` is an empty store, a single bad entry is skipped, and a `last_used` naming a vanished account is dropped.
+The directory key is the account id hex-encoded, so a hostile `sub` claim can never contain `/` or `..`. `Account` holds only the fields a card draws: `name`, `first_name`, `last_name`, `email`, `avatar_url`, `avatar`, `use_metric`, `distance_meters`, `elevation_meters`, `time_minutes`, `weight_grams`, `ftp`, `level`, `level_progress`, `height_millimeters`. Loading is tolerant: a missing or broken `accounts.json` is an empty store, a single bad entry is skipped, and a `last_used` naming a vanished account is dropped.
 
 ## Identity and naming
 
 `identity_of` prefers the token's `sub` claim, then the profile's `public_id`, then its numeric `id`, then the email. Claims win because they survive a profile that could not be fetched. `display_name` prefers `"First Last"` from the profile and falls back to `preferred_username` and then to `Zwift rider`.
+
+## Levels
+
+The profile's `achievement_level` (protobuf field 49) packs the level as `level * 100 + progress`; zwift-offline's `api_users_login` derives the level with `achievement_level // 100`. `merge_profile` therefore stores `level = raw / 100` and `level_progress = raw % 100` (0-99). The remainder is *assumed* to be percent toward the next level (which is what the card's bar draws), but that has not been verified against a live profile. A raw stored `level` (from an older build) self-heals on the next profile refresh.
 
 ## The picker
 
@@ -45,7 +49,7 @@ The directory key is the account id hex-encoded, so a hostile `sub` claim can ne
 
 The panel is placed at the top of the window, in the space the install tiles occupied, with the WebView kept below it: the picker appears *above* the WebView rather than replacing it. `refresh()` clears the grid and rebuilds one card per account; the store is the only state.
 
-A card is a `gtk::Overlay`: the base layer is a `gtk::Button` (CSS class `account-card`) that *is* the whole card and launches the rider when clicked, so there is no separate Play button. The card's content - a vertical box with a horizontal top row (avatar, or an initials badge, beside a vertical info column with the name row, an optional "Last used" pill, three chips and a `dim-label` meta line) - is set as that button's child, so the box inherits the button's click. The remove control is an icon-only `gtk::Button` (`edit-delete-symbolic`, CSS class `account-remove`) in the overlay's top-right corner (`halign` End, `valign` Start); the info column reserves room for it with `set_margin_end(28)` so text never runs under the icon. Chips format through `stats::distance`, `stats::elevation` and `stats::duration`, with metric or imperial chosen by the account's `use_metric` (default metric). Unset values render as `-`.
+A card is a `gtk::Overlay`: the base layer is a `gtk::Button` (CSS class `account-card`) that *is* the whole card and launches the rider when clicked, so there is no separate Play button. The card's content - a vertical box with a horizontal top row (avatar, or an initials badge, beside a vertical info column with the name row, an optional "Last used" pill, three chips and a `dim-label` meta line) - is set as that button's child, so the box inherits the button's click. The remove control is an icon-only `gtk::Button` (`edit-delete-symbolic`, CSS class `account-remove`) in the overlay's top-right corner (`halign` End, `valign` Start); the info column reserves room for it with `set_margin_end(28)` so text never runs under the icon. Chips format through `stats::distance`, `stats::elevation` and `stats::duration`, with metric or imperial chosen by the account's `use_metric` (default metric): labelled and grouped strings like `Distance 1,000 km`, `Elevation 10,000 m` and `Time 2d 15h` (under a day, `Time 13h`). Unset values render as `-`. When the account carries a `level` and `level_progress`, a slim `gtk::ProgressBar` (CSS `account-level-bar`, no visible text, tooltip naming the next level) is appended under the meta line, its fraction from `stats::level_fraction(progress)`.
 
 Avatars are decoded at up to 72 by 72 pixels and displayed in a 72-pixel square; invalid images fall back to initials. Cards and the grid align to the start instead of filling the available width, and long names and metadata wrap. The compositor-backed `card_bounds_large_avatar_and_wraps_long_name` test checks the image allocation, card width, name wrapping and grid spacing.
 

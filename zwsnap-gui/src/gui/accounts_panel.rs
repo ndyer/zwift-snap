@@ -2,8 +2,10 @@
 //! account, mirroring the Zwift app's user-selection screen.
 //!
 //! Each card shows the rider's avatar (or an initials badge), their name, the
-//! three stat chips the app shows (total distance, elevation gain, total ride
-//! time) and a muted line with level, FTP and weight. The whole card is a single
+//! three labelled stat chips the app shows (distance, elevation gain, ride time)
+//! and a muted line with level, FTP and weight. A slim bar under that line fills
+//! with progress toward the rider's next level when the profile carries it. The
+//! whole card is a single
 //! button: clicking anywhere on it launches that account. A small remove icon
 //! floats over the card's top-right corner and forgets the account. The card
 //! used last gets a "Last used" pill and is focused, so Enter relaunches it. An
@@ -249,7 +251,8 @@ impl AccountsPanel {
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         top.append(&self.avatar(store, account));
 
-        // Name, the three stat chips, and the muted level/FTP/weight line.
+        // Name, the three stat chips, the muted level/FTP/weight line, and the
+        // optional level-progress bar.
         let info = gtk::Box::new(gtk::Orientation::Vertical, 4);
         info.set_valign(gtk::Align::Center);
         info.set_hexpand(true);
@@ -292,6 +295,24 @@ impl AccountsPanel {
         meta.set_max_width_chars(28);
         meta.add_css_class("dim-label");
         info.append(&meta);
+
+        // A slim bar under the meta line showing progress toward the next level.
+        // Only drawn when the profile carried a level and its remainder; the
+        // remainder is treated as a percentage (see `stats::level_fraction`).
+        if let (Some(level), Some(progress)) = (account.level, account.level_progress) {
+            let bar = gtk::ProgressBar::new();
+            bar.set_fraction(stats::level_fraction(progress));
+            bar.set_show_text(false);
+            bar.set_hexpand(true);
+            bar.set_valign(gtk::Align::Center);
+            bar.set_margin_top(4);
+            bar.add_css_class("account-level-bar");
+            bar.set_tooltip_text(Some(&format!(
+                "Level {level} — {progress}% to level {}",
+                level + 1
+            )));
+            info.append(&bar);
+        }
 
         top.append(&info);
 
@@ -532,6 +553,20 @@ const CSS: &str = "
     border-radius: 6px;
     padding: 1px 8px;
     font-size: 0.8em;
+}
+.account-level-bar {
+    min-height: 6px;
+    border-radius: 3px;
+}
+.account-level-bar > trough {
+    min-height: 6px;
+    border-radius: 3px;
+    background-color: alpha(black, 0.35);
+}
+.account-level-bar > progress {
+    min-height: 6px;
+    border-radius: 3px;
+    background-color: #4A90D9;
 }
 .account-grid {
     padding: 6px;

@@ -13,8 +13,8 @@ Picker Shows Remembered Accounts, Removes One And Launches The Rest
     Match Text    Offline Tester    20
     Match Text    Second Rider    20
     # The first account's chips: 2444 m of climbing and 834 minutes ridden.
-    Match Text    8018 ft    20
-    Match Text    013:54:00    20
+    Match Text    Elevation 8,018 ft    20
+    Match Text    Time 13h    20
     # Remove a card via its top-right remove icon and confirm the dialog. Both
     # cards carry identical remove icons, so the first match is what gets removed.
     Click Target    ${CURDIR}/remove.png

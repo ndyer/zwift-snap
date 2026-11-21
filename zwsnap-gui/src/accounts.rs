@@ -58,6 +58,8 @@ pub struct Account {
     pub weight_grams: Option<i64>,
     pub ftp: Option<i64>,
     pub level: Option<i64>,
+    /// Progress toward the next level, 0-99 percent (from `achievement_level % 100`).
+    pub level_progress: Option<i64>,
     pub height_millimeters: Option<i64>,
 }
 
@@ -86,6 +88,7 @@ impl Account {
             weight_grams: number("weight_grams"),
             ftp: number("ftp"),
             level: number("level"),
+            level_progress: number("level_progress"),
             height_millimeters: number("height_millimeters"),
         })
     }
@@ -116,6 +119,7 @@ impl Account {
         put_int("weight_grams", self.weight_grams);
         put_int("ftp", self.ftp);
         put_int("level", self.level);
+        put_int("level_progress", self.level_progress);
         put_int("height_millimeters", self.height_millimeters);
         if let Some(use_metric) = self.use_metric {
             object.insert("use_metric".into(), json!(use_metric));
@@ -475,7 +479,15 @@ fn merge_profile(account: &mut Account, profile: &Profile, name: &str) {
         &mut account.height_millimeters,
         profile.height_in_millimeters,
     );
-    set(&mut account.level, profile.achievement_level);
+    // `achievement_level` packs the level as `level * 100 + progress`: zwift-offline's
+    // `api_users_login` derives the level with `achievement_level // 100`, so the
+    // quotient is the rider's real level and the remainder is progress toward the
+    // next one (the card's level bar). A raw stored level self-heals on the next
+    // profile refresh.
+    if let Some(raw) = profile.achievement_level {
+        account.level = Some(raw / 100);
+        account.level_progress = Some(raw % 100);
+    }
     if profile.use_metric.is_some() {
         account.use_metric = profile.use_metric;
     }
@@ -543,7 +555,7 @@ mod tests {
             total_distance_in_meters: Some(233_400),
             elevation_gain_in_meters: Some(2444),
             time_ridden_in_minutes: Some(834),
-            achievement_level: Some(42),
+            achievement_level: Some(4200),
             use_metric: Some(true),
             large_avatar_url: Some("https://cdn.zwift.com/a.jpg".to_owned()),
             ..Profile::default()
@@ -722,16 +734,33 @@ mod tests {
         update.first_name = None;
         update.last_name = None;
         update.ftp = None;
-        update.achievement_level = Some(51);
+        update.achievement_level = Some(5100);
         update.total_distance_in_meters = Some(500_000);
         assert!(store.refresh(&id, &update));
         let account = store.find(&id).unwrap();
         assert_eq!(account.name, "Sara Campbell");
         assert_eq!(account.ftp, Some(233));
         assert_eq!(account.level, Some(51));
+        assert_eq!(account.level_progress, Some(0));
         assert_eq!(account.distance_meters, Some(500_000));
         // Refreshing an account that was removed meanwhile is not an error.
         assert!(!store.refresh("nope", &update));
+
+        let _ = fs::remove_dir_all(&common);
+    }
+
+    #[test]
+    fn achievement_level_splits_into_level_and_progress() {
+        let common = scratch("levelsplit");
+        let mut store = Store::open(&common);
+        let mut prof = profile("Sara", "Campbell");
+        prof.achievement_level = Some(2834); // level 28, 34% to level 29
+        let id = store
+            .upsert(&token("a"), &prof, &claims("sub-1", "s"))
+            .unwrap();
+        let account = store.find(&id).unwrap();
+        assert_eq!(account.level, Some(28));
+        assert_eq!(account.level_progress, Some(34));
 
         let _ = fs::remove_dir_all(&common);
     }

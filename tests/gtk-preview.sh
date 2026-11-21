@@ -204,8 +204,9 @@ cp -a "${fixture}" "${accounts}"
 rm -f "${accounts}/cleanup" "${accounts}/window-ready" "${accounts}/game-running" \
     "${accounts}/release" "${accounts}/common/zwift.log"
 # Two remembered accounts. The first is the last used one and keeps imperial
-# units, so its card is unmistakable: 2444 m of climbing is 8018 ft and
-# 834 minutes is 013:54:00. The second is metric.
+# units, so its card is unmistakable: 2444 m of climbing is 8,018 ft and
+# 834 minutes is 13h. It also carries a level (42) with 34% progress, which
+# draws the level bar. The second is metric.
 mkdir -p "${accounts}/common/accounts/first" "${accounts}/common/accounts/second"
 printf '{"access_token":"first-token"}' > "${accounts}/common/accounts/first/token.json"
 printf '{"access_token":"second-token"}' > "${accounts}/common/accounts/second/token.json"
@@ -225,7 +226,8 @@ cat > "${accounts}/common/accounts.json" <<'JSON'
       "time_minutes": 834,
       "weight_grams": 70000,
       "ftp": 200,
-      "level": 42
+      "level": 42,
+      "level_progress": 34
     },
     {
       "id": "second",

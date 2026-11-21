@@ -5,32 +5,46 @@
 //! follow the rider's own `use_metric` setting, so two accounts can show different
 //! units side by side, exactly as the app does.
 
-/// The rider's total distance, in kilometres (one decimal) or miles (one decimal).
+/// The rider's total distance, labelled and grouped: `Distance 1,000 km` (metric)
+/// or `Distance 621 mi` (imperial), rounded to the nearest whole unit.
 pub fn distance(meters: i64, use_metric: bool) -> String {
     if use_metric {
-        format!("{:.1} km", meters as f64 / 1000.0)
+        format!(
+            "Distance {} km",
+            group_thousands((meters as f64 / 1000.0).round() as i64)
+        )
     } else {
-        format!("{:.1} mi", meters as f64 / METERS_PER_MILE)
+        format!(
+            "Distance {} mi",
+            group_thousands((meters as f64 / METERS_PER_MILE).round() as i64)
+        )
     }
 }
 
-/// The rider's total elevation gain, in metres or feet, both as whole numbers.
+/// The rider's total elevation gain, labelled and grouped: `Elevation 10,000 m`
+/// (metric) or `Elevation 8,018 ft` (imperial), both whole.
 pub fn elevation(meters: i64, use_metric: bool) -> String {
     if use_metric {
-        format!("{meters} m")
+        format!("Elevation {} m", group_thousands(meters))
     } else {
-        format!("{} ft", (meters as f64 / METERS_PER_FOOT).round() as i64)
+        format!(
+            "Elevation {} ft",
+            group_thousands((meters as f64 / METERS_PER_FOOT).round() as i64)
+        )
     }
 }
 
-/// Total time ridden, as a zero-padded `HH:MM:SS`.
-///
-/// The profile only records whole minutes, so the seconds field is always `00`;
-/// the `HH:MM:SS` shape is kept anyway so the card matches the app's chip.
+/// Total time ridden, labelled as whole days and hours: `Time 2d 15h`, or
+/// `Time 13h` under a day. Minutes and seconds are dropped; the profile only
+/// records whole minutes anyway.
 pub fn duration(minutes: i64) -> String {
     let minutes = minutes.max(0);
-    let (hours, minutes) = (minutes / 60, minutes % 60);
-    format!("{hours:03}:{minutes:02}:00")
+    let hours = minutes / 60;
+    if hours >= 24 {
+        format!("Time {}d {}h", hours / 24, hours % 24)
+    } else {
+        format!("Time {hours}h")
+    }
 }
 
 /// The rider's weight, in kilograms (one decimal) or pounds (whole).
@@ -85,6 +99,37 @@ pub fn transfer_progress(percent: u8, rate: Option<f64>) -> String {
     }
 }
 
+/// The level-progress fraction for a card's bar: the profile's `achievement_level`
+/// remainder (`achievement_level % 100`) as a 0.0-0.99 value. Clamped so a bad
+/// value cannot draw outside the bar.
+///
+/// ASSUMPTION: the remainder is a percentage toward the next level. It is what
+/// zwift-offline's `achievement_level // 100` split leaves over and Zwift's HUD
+/// draws a level bar, but it is unverified against a live profile.
+pub fn level_fraction(progress: i64) -> f64 {
+    progress.clamp(0, 99) as f64 / 100.0
+}
+
+/// Group a number with thousands separators: `10000` -> `10,000`. The sign is kept
+/// so the helper is total (the card's stats are never negative, but a bad value
+/// must not produce separator soup).
+fn group_thousands(value: i64) -> String {
+    let negative = value < 0;
+    let digits = value.unsigned_abs().to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3 + 1);
+    if negative {
+        out.push('-');
+    }
+    let len = digits.len();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (len - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// Metres in a statute mile.
 const METERS_PER_MILE: f64 = 1609.344;
 
@@ -99,27 +144,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn distance_follows_the_riders_units() {
-        assert_eq!(distance(233_400, true), "233.4 km");
-        assert_eq!(distance(233_400, false), "145.0 mi");
-        assert_eq!(distance(0, true), "0.0 km");
+    fn distance_is_labelled_grouped_and_follows_the_riders_units() {
+        assert_eq!(distance(233_400, true), "Distance 233 km");
+        assert_eq!(distance(233_400, false), "Distance 145 mi");
+        assert_eq!(distance(0, true), "Distance 0 km");
+        assert_eq!(distance(1_234_567, true), "Distance 1,235 km");
     }
 
     #[test]
-    fn elevation_follows_the_riders_units() {
-        assert_eq!(elevation(2444, true), "2444 m");
-        assert_eq!(elevation(2444, false), "8018 ft");
+    fn elevation_is_labelled_grouped_and_follows_the_riders_units() {
+        assert_eq!(elevation(2444, true), "Elevation 2,444 m");
+        assert_eq!(elevation(2444, false), "Elevation 8,018 ft");
+        assert_eq!(elevation(10_000, true), "Elevation 10,000 m");
     }
 
     #[test]
-    fn duration_is_zero_padded_hours_minutes_seconds() {
-        assert_eq!(duration(834), "013:54:00");
-        assert_eq!(duration(0), "000:00:00");
-        assert_eq!(duration(59), "000:59:00");
-        assert_eq!(duration(60), "001:00:00");
-        assert_eq!(duration(6000), "100:00:00");
+    fn duration_is_whole_days_and_hours() {
+        assert_eq!(duration(834), "Time 13h");
+        assert_eq!(duration(0), "Time 0h");
+        assert_eq!(duration(59), "Time 0h");
+        assert_eq!(duration(60), "Time 1h");
+        assert_eq!(duration(6000), "Time 4d 4h");
         // A negative total (which the API should never send) clamps to zero.
-        assert_eq!(duration(-5), "000:00:00");
+        assert_eq!(duration(-5), "Time 0h");
+    }
+
+    #[test]
+    fn group_thousands_separates_every_three_digits() {
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(999), "999");
+        assert_eq!(group_thousands(1000), "1,000");
+        assert_eq!(group_thousands(10_000), "10,000");
+        assert_eq!(group_thousands(1_000_000), "1,000,000");
+        assert_eq!(group_thousands(-1234), "-1,234");
+    }
+
+    #[test]
+    fn level_fraction_is_a_clamped_percentage() {
+        assert_eq!(level_fraction(0), 0.0);
+        assert_eq!(level_fraction(34), 0.34);
+        assert_eq!(level_fraction(99), 0.99);
+        assert_eq!(level_fraction(150), 0.99);
+        assert_eq!(level_fraction(-5), 0.0);
     }
 
     #[test]
