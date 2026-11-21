@@ -521,6 +521,22 @@ fn install_css() {
 /// The picker's styles. Deliberately small: a clickable card surface, a round
 /// avatar, the chips, the last-used pill and the floating remove icon.
 const CSS: &str = "
+/* The built-in theme paints a selected `flowboxchild` with the accent-blue
+   `background-color` (and white text) and adds a 2px focus `outline` when it is
+   focus-visible. Because the card's own background is translucent, that fill
+   bleeds through the whole card. Neutralise the child node so the only highlight
+   is the card border below. */
+flowbox > flowboxchild {
+    background-color: transparent;
+    color: inherit;
+    outline: none;
+    box-shadow: none;
+}
+flowbox > flowboxchild:selected {
+    background-color: transparent;
+    color: inherit;
+    outline: none;
+}
 .account-card {
     background-image: none;
     background-color: rgba(0, 0, 0, 0.10);
@@ -540,7 +556,9 @@ flowboxchild:selected .account-card {
 .account-remove {
     min-width: 0;
     min-height: 0;
-    margin: 4px;
+    /* Anchored to the card's top-right corner, so the top/right margins are the
+       gap from that corner; nudge it inward a little so it does not crowd it. */
+    margin: 8px;
     padding: 2px;
     border-radius: 6px;
     background-image: none;
