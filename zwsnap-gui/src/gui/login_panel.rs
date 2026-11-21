@@ -187,7 +187,7 @@ pub struct LoginPanel {
     state: Rc<RefCell<LoginState>>,
     cancellation: Cancellation,
     logger: Option<Arc<Logger>>,
-    store: Option<Rc<RefCell<crate::accounts::Store>>>,
+    store: RefCell<Option<Rc<RefCell<crate::accounts::Store>>>>,
 }
 
 impl LoginPanel {
@@ -206,7 +206,8 @@ impl LoginPanel {
             state: String::new(),
             pending: None,
         }));
-        wire_webview(&webview, &state, &cancellation, &logger);
+        let store = RefCell::new(store);
+        wire_webview(&webview, &state, &cancellation, &logger, &store);
         webview.load_uri(embed_url(is_first_run(preview)));
 
         let container = gtk::ScrolledWindow::builder()
@@ -243,7 +244,13 @@ impl LoginPanel {
     /// caller follows this with [`LoginPanel::start_login`].
     pub fn set_session(&self, session: super::SessionMode) {
         let webview = super::webview_for(session);
-        wire_webview(&webview, &self.state, &self.cancellation, &self.logger);
+        wire_webview(
+            &webview,
+            &self.state,
+            &self.cancellation,
+            &self.logger,
+            &self.store,
+        );
         self.container.set_child(Some(&webview));
         *self.webview.borrow_mut() = webview;
     }
@@ -273,8 +280,8 @@ impl LoginPanel {
     }
 
     /// Set the accounts store reference.
-    pub fn set_store(&mut self, store: Rc<RefCell<crate::accounts::Store>>) {
-        self.store = Some(store);
+    pub fn set_store(&self, store: Rc<RefCell<crate::accounts::Store>>) {
+        *self.store.borrow_mut() = Some(store);
     }
 }
 
@@ -286,12 +293,14 @@ fn wire_webview(
     state: &Rc<RefCell<LoginState>>,
     cancellation: &Cancellation,
     logger: &Option<Arc<Logger>>,
+    store: &RefCell<Option<Rc<RefCell<crate::accounts::Store>>>>,
 ) {
     use webkit6::PolicyDecisionType;
 
     let weak_state = Rc::downgrade(state);
     let cancellation = cancellation.clone();
     let logger = logger.clone();
+    let store = store.borrow().clone();
     webview.connect_decide_policy(move |webview, decision, decision_type| {
         let navigating = decision_type == PolicyDecisionType::NavigationAction;
         // A link click arrives as a navigation action and a page asking for a
@@ -338,13 +347,13 @@ fn wire_webview(
                             load_login_page(webview, &state);
                         }
                         Redirect::Code(code) => {
-                            // Clone the store reference for the async call
-                            let store_ref = if let Some(ref store_rc) = store {
-                                Some(Rc::clone(store_rc))
-                            } else {
-                                None
-                            };
-                            start_exchange(webview.clone(), state, code, cancellation.clone(), store_ref);
+                            start_exchange(
+                                webview.clone(),
+                                state,
+                                code,
+                                cancellation.clone(),
+                                store.clone(),
+                            );
                         }
                     }
                     return true;
@@ -416,8 +425,8 @@ fn start_exchange(
                     let _ = reply.send(true);
                 }
                 // Check if "Remember me" was unchecked
-                if let Some(store_ref) = store {
-                    check_remember_me_cookie(&webview, &store_ref);
+                if let Some(store_ref) = &store {
+                    check_remember_me_cookie(&webview, store_ref.clone());
                 }
                 // The login succeeded: put the embed page back in place of the
                 // login page. The caller swaps in a persistent view afterwards.
@@ -430,6 +439,55 @@ fn start_exchange(
             }
         }
         glib::ControlFlow::Break
+    });
+}
+
+/// Check if the "Remember me" cookie is present and update the accounts store if it's absent.
+/// This indicates that the user has unchecked "Remember me" during login.
+fn check_remember_me_cookie(
+    webview: &webkit6::WebView,
+    store: Rc<RefCell<crate::accounts::Store>>,
+) {
+    // Get the network session from the webview
+    let session = webview.network_session();
+    let cookie_manager = match session.and_then(|s| s.cookie_manager()) {
+        Some(manager) => manager,
+        None => {
+            eprintln!("Warning: Unable to access cookie manager");
+            return;
+        }
+    };
+
+    // Check for cookies at the Zwift auth realm path
+    let uri = "https://secure.zwift.com/auth/realms/zwift/";
+
+    // Use the cookie manager to get cookies for this URI
+    // This is an async operation, so we need to handle it appropriately
+    let cancellable = gtk::gio::Cancellable::new();
+    cookie_manager.cookies(uri, Some(&cancellable), move |result| {
+        if let Ok(cookies) = result {
+            // Check if the KEYCLOAK_REMEMBER_ME cookie is present.
+            let remember_me_present = cookies
+                .into_iter()
+                .any(|mut cookie| cookie.name().as_deref() == Some("KEYCLOAK_REMEMBER_ME"));
+
+            // Update the store with the forget-on-exit flag.
+            let should_forget = !remember_me_present;
+            let mut store = store.borrow_mut();
+            store.set_forget_on_exit(should_forget);
+
+            // Save the store to persist the flag.
+            if let Err(e) = store.save() {
+                eprintln!(
+                    "Warning: Unable to save store with forget-on-exit flag: {}",
+                    e
+                );
+            } else if should_forget {
+                eprintln!(
+                    "Marked session to be forgotten on exit because 'Remember me' was unchecked"
+                );
+            }
+        }
     });
 }
 
@@ -532,57 +590,4 @@ mod tests {
         assert!(!take_first_run(&path.join("nested")));
         std::fs::remove_file(&path).ok();
     }
-}
-
-/// Check if the "Remember me" cookie is present and update the accounts store if it's absent.
-/// This indicates that the user has unchecked "Remember me" during login.
-fn check_remember_me_cookie(webview: &webkit6::WebView, store: &std::cell::RefCell<crate::accounts::Store>) {
-    use gio::prelude::*;
-    
-    // Get the network session from the webview
-    let session = webview.network_session();
-    let cookie_manager = match session.and_then(|s| s.cookie_manager()) {
-        Some(manager) => manager,
-        None => {
-            eprintln!("Warning: Unable to access cookie manager");
-            return;
-        }
-    };
-
-    // Check for cookies at the Zwift auth realm path
-    let uri = "https://secure.zwift.com/auth/realms/zwift/";
-    
-    // Use the cookie manager to get cookies for this URI
-    // This is an async operation, so we need to handle it appropriately
-    let cancellable = gio::Cancellable::new();
-    let store_clone = std::cell::RefCell::clone(store);
-    cookie_manager.cookies(
-        uri,
-        Some(&cancellable),
-        move |result| {
-            match result {
-                Ok(cookies) => {
-                    // Check if KEYCLOAK_REMEMBER_ME cookie is present
-                    let remember_me_present = cookies.iter().any(|cookie| {
-                        cookie.name().as_str() == "KEYCLOAK_REMEMBER_ME"
-                    });
-                    
-                    // Update the store with the forget-on-exit flag
-                    let should_forget = !remember_me_present;
-                    let mut store = store_clone.borrow_mut();
-                    store.set_forget_on_exit(should_forget);
-                    
-                    // Save the store to persist the flag
-                    if let Err(e) = store.save() {
-                        eprintln!("Warning: Unable to save store with forget-on-exit flag: {}", e);
-                    } else if should_forget {
-                        eprintln!("Marked session to be forgotten on exit because 'Remember me' was unchecked");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Warning: Unable to retrieve cookies: {}", e);
-                }
-            }
-        }
-    );
 }

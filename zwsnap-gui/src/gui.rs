@@ -534,58 +534,6 @@ fn build_window(
     let grid_decision: std::rc::Rc<std::cell::RefCell<Option<Sender<bool>>>> = Default::default();
     let add_result: std::rc::Rc<std::cell::RefCell<Option<Receiver<bool>>>> = Default::default();
 
-    let accounts_panel = {
-        let select = {
-            let store = store.clone();
-            let grid_decision = grid_decision.clone();
-            let title = title.clone();
-            let launch_spinner = launch_spinner.clone();
-            let install_area = install_area.clone();
-            Box::new(move |id: String| {
-                // Show "Launching Zwift" immediately
-                install_area.set_visible(false);
-                launch_spinner.start();
-                title.set_text("Launching Zwift");
-                
-                {
-                    let mut store = store.borrow_mut();
-                    match store.select(&id) {
-                        Ok(()) => {
-                            if let Err(error) = store.save() {
-                                eprintln!("Unable to save accounts: {error}");
-                            }
-                        }
-                        Err(error) => eprintln!("Unable to select account: {error}"),
-                    }
-                }
-                if let Some(reply) = grid_decision.borrow_mut().take() {
-                    if reply.send(true).is_err() {
-                        eprintln!("Unable to confirm account selection: worker stopped");
-                    }
-                }
-            }) as Box<dyn Fn(String)>
-        };
-        let add = {
-            let login_panel = login_panel.clone();
-            let add_result = add_result.clone();
-            // Set the store reference in the login panel
-            login_panel.borrow_mut().set_store(store.clone());
-            Box::new(move || {
-                // A fresh, cookie-less session: the current account's SSO cookie
-                // must not silently sign the new login back into itself.
-                login_panel.set_session(SessionMode::Ephemeral);
-                let (sender, receiver) = mpsc::channel();
-                *add_result.borrow_mut() = Some(receiver);
-                login_panel.start_login(sender);
-            }) as Box<dyn Fn()>
-        };
-        AccountsPanel::new(
-            store.clone(),
-            logger.clone(),
-            AccountHandlers { select, add },
-        )
-    };
-
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.set_margin_top(24);
     content.set_margin_bottom(24);
@@ -639,6 +587,63 @@ fn build_window(
     // the right-hand button group.
     let launch_spinner = gtk::Spinner::new();
     launch_spinner.set_valign(gtk::Align::Center);
+
+    // --- Account picker ---------------------------------------------------
+    // The picker's own callbacks reference the status heading, spinner and
+    // install area (to show "Launching Zwift" the moment a card is clicked), so
+    // it is wired up here, after those widgets exist.
+    let accounts_panel = {
+        let select = {
+            let store = store.clone();
+            let grid_decision = grid_decision.clone();
+            let title = title.clone();
+            let launch_spinner = launch_spinner.clone();
+            let install_area = install_area.clone();
+            Box::new(move |id: String| {
+                // Show "Launching Zwift" immediately
+                install_area.set_visible(false);
+                launch_spinner.start();
+                title.set_text("Launching Zwift");
+
+                {
+                    let mut store = store.borrow_mut();
+                    match store.select(&id) {
+                        Ok(()) => {
+                            if let Err(error) = store.save() {
+                                eprintln!("Unable to save accounts: {error}");
+                            }
+                        }
+                        Err(error) => eprintln!("Unable to select account: {error}"),
+                    }
+                }
+                if let Some(reply) = grid_decision.borrow_mut().take() {
+                    if reply.send(true).is_err() {
+                        eprintln!("Unable to confirm account selection: worker stopped");
+                    }
+                }
+            }) as Box<dyn Fn(String)>
+        };
+        let add = {
+            let login_panel = login_panel.clone();
+            let add_result = add_result.clone();
+            // Hand the login panel the store so a successful "add account"
+            // login records the new rider.
+            login_panel.set_store(store.clone());
+            Box::new(move || {
+                // A fresh, cookie-less session: the current account's SSO cookie
+                // must not silently sign the new login back into itself.
+                login_panel.set_session(SessionMode::Ephemeral);
+                let (sender, receiver) = mpsc::channel();
+                *add_result.borrow_mut() = Some(receiver);
+                login_panel.start_login(sender);
+            }) as Box<dyn Fn()>
+        };
+        AccountsPanel::new(
+            store.clone(),
+            logger.clone(),
+            AccountHandlers { select, add },
+        )
+    };
     let status = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     status.set_hexpand(true);
     status.append(&title);
