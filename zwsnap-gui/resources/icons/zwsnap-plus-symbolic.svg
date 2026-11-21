@@ -1,15 +1,7 @@
-<!-- Tabler Icons "plus" (outline). MIT licensed; see zwsnap-gui/resources/icons/README.md. -->
-<svg
-  xmlns="http://www.w3.org/2000/svg"
-  width="24"
-  height="24"
-  viewBox="0 0 24 24"
-  fill="none"
-  stroke="currentColor"
-  stroke-width="2"
-  stroke-linecap="round"
-  stroke-linejoin="round"
->
-  <path d="M12 5l0 14" />
-  <path d="M5 12l14 0" />
+<!-- Tabler Icons "plus" (outline), strokes expanded to
+     filled outline paths by Inkscape stroke-to-path. MIT licensed; see
+     zwsnap-gui/resources/icons/README.md. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+  <path d="m 12,4 a 1,1 0 0 0 -1,1 v 14 a 1,1 0 0 0 1,1 1,1 0 0 0 1,-1 V 5 A 1,1 0 0 0 12,4 Z" />
+  <path d="m 5,11 a 1,1 0 0 0 -1,1 1,1 0 0 0 1,1 h 14 a 1,1 0 0 0 1,-1 1,1 0 0 0 -1,-1 z" />
 </svg>

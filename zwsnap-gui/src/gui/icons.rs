@@ -19,7 +19,7 @@ use gtk::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The size of the icons drawn inside the buttons, in pixels.
-const ICON_SIZE: i32 = 16;
+const ICON_SIZE: i32 = 19;
 
 /// The resource path GTK looks the bundled icons up under, matching the prefix in
 /// `resources/icons.gresource.xml`.

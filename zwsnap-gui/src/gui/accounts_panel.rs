@@ -33,7 +33,7 @@ const AVATAR_SIZE: i32 = 72;
 
 /// The size of the icon drawn inside a stat chip, in pixels (a little smaller than
 /// the button icons, to sit within the chip's padding).
-const CHIP_ICON_SIZE: i32 = 14;
+const CHIP_ICON_SIZE: i32 = 16;
 
 /// The tallest the grid is allowed to grow before it starts scrolling. Below
 /// this it sizes to its content, so a couple of accounts do not stretch the

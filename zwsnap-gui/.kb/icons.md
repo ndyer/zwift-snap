@@ -22,6 +22,17 @@ snap drops the transitively-staged `adwaita-icon-theme` for this reason. Never
 reintroduce a freedesktop icon name (`edit-delete-symbolic`, ...); add a bundled
 icon and a constant in `gui/icons.rs` instead.
 
+## §1a - Symbolic Icons Must Be Fill-Defined
+
+Since GTK 4.18, symbolic SVGs are parsed by GTK's own tiny SVG engine which
+*ignores* `stroke`/`fill` attributes and **fills** every path with the
+foreground colour (see GTK's `docs/symbolic-icons.md`). Tabler icons are pure
+stroke art, so they must be converted to filled outline paths (Inkscape's
+stroke-to-path) before vendoring - verbatim Tabler SVGs render as blobs
+(curved glyphs) or vanish (straight-line glyphs have zero fill area; the log
+and plus icons disappeared entirely this way). Validate any new icon with
+`gtk4-rendernode-tool convert --recolor icon.svg` before shipping it.
+
 ## §2 - The Resource Layout Is Flat
 
 GTK treats files placed *directly* in a resource path as the hicolor theme's

@@ -15,6 +15,26 @@ Tabler Icons is released under the MIT licence, which permits redistribution, so
 the icons can be shipped in the snap. Each file keeps a one-line comment naming
 the upstream icon.
 
+## Format: filled outline paths, not strokes
+
+GTK (≥ 4.18) parses symbolic icons with its own tiny SVG engine, not librsvg.
+That engine *ignores* `stroke` and `fill` attributes and **fills** every path
+with the foreground colour (GTK's `docs/symbolic-icons.md`). Tabler's outline
+icons are pure stroke art, so vendoring them verbatim renders them wrong:
+
+- curved icons fill into solid blobs (the "missing transparency" look),
+- straight-line icons have zero-area paths and vanish entirely.
+
+The files here therefore carry Tabler's geometry with each stroke expanded into
+its filled outline path (`fill="currentColor"`, no `stroke`): the glyph looks
+the same as Tabler's outline art but is fill-defined, which is the only shape
+language GTK's symbolic engine understands.
+
+To re-vendor an icon: download the Tabler SVG, then run it through
+`inkscape icon.svg --actions="select-all;object-stroke-to-path;export-filename:out.svg;export-plain-svg;export-do"`
+and strip the Inkscape style attributes down to plain `<path d="..."/>` children
+under `fill="currentColor"`.
+
 | file | upstream | used for |
 | ---- | -------- | -------- |
 | `zwsnap-refresh-symbolic.svg` | `refresh` | Retry |

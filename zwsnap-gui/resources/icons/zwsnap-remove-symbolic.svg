@@ -1,18 +1,10 @@
-<!-- Tabler Icons "trash" (outline). MIT licensed; see zwsnap-gui/resources/icons/README.md. -->
-<svg
-  xmlns="http://www.w3.org/2000/svg"
-  width="24"
-  height="24"
-  viewBox="0 0 24 24"
-  fill="none"
-  stroke="currentColor"
-  stroke-width="2"
-  stroke-linecap="round"
-  stroke-linejoin="round"
->
-  <path d="M4 7l16 0" />
-  <path d="M10 11l0 6" />
-  <path d="M14 11l0 6" />
-  <path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12" />
-  <path d="M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3" />
+<!-- Tabler Icons "trash" (outline), strokes expanded to
+     filled outline paths by Inkscape stroke-to-path. MIT licensed; see
+     zwsnap-gui/resources/icons/README.md. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+  <path d="M 4,6 A 1,1 0 0 0 3,7 1,1 0 0 0 4,8 H 20 A 1,1 0 0 0 21,7 1,1 0 0 0 20,6 Z" />
+  <path d="m 10,10 a 1,1 0 0 0 -1,1 v 6 a 1,1 0 0 0 1,1 1,1 0 0 0 1,-1 v -6 a 1,1 0 0 0 -1,-1 z" />
+  <path d="m 14,10 a 1,1 0 0 0 -1,1 v 6 a 1,1 0 0 0 1,1 1,1 0 0 0 1,-1 v -6 a 1,1 0 0 0 -1,-1 z" />
+  <path d="M 4.9160156,6.0039062 A 1,1 0 0 0 4.0039062,7.0839844 l 1,11.9999996 L 5,19 c 0,1.64501 1.3549904,3 3,3 h 8 c 1.64501,0 3,-1.35499 3,-3 l -0.0039,0.08398 1,-11.9999996 a 1,1 0 0 0 -0.91211,-1.0800782 1,1 0 0 0 -1.080078,0.9121094 l -1,12.0000004 A 1.0001,1.0001 0 0 0 17,19 c 0,0.564129 -0.435871,1 -1,1 H 8 C 7.4358706,20 7,19.564129 7,19 a 1.0001,1.0001 0 0 0 -0.00391,-0.08398 l -1,-12.0000004 A 1,1 0 0 0 4.9160156,6.0039062 Z" />
+  <path d="M 10,2 C 8.9072751,2 8,2.9072751 8,4 V 7 A 1,1 0 0 0 9,8 1,1 0 0 0 10,7 V 4 h 4 v 3 a 1,1 0 0 0 1,1 1,1 0 0 0 1,-1 V 4 C 16,2.9072751 15.092725,2 14,2 Z" />
 </svg>
