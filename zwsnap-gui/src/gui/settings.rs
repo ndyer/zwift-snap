@@ -76,6 +76,7 @@ pub struct SettingsDialog {
     disable_egl: gtk::CheckButton,
     bluetooth_debug: gtk::CheckButton,
     download_adapt: gtk::CheckButton,
+    text_ui: gtk::CheckButton,
     verbosity: gtk::SpinButton,
     message: gtk::Label,
     gpu: gtk::Label,
@@ -163,10 +164,18 @@ impl SettingsDialog {
         ));
         grid.attach(&download_adapt, 0, 4, 2, 1);
 
+        let text_ui = gtk::CheckButton::with_label("Show text labels instead of icons");
+        text_ui.set_active(settings.text_ui);
+        text_ui.set_tooltip_text(Some(
+            "Draw the launcher's controls as text rather than icons. Takes effect the \
+             next time the launcher starts.",
+        ));
+        grid.attach(&text_ui, 0, 5, 2, 1);
+
         let verbosity = gtk::SpinButton::with_range(0.0, 3.0, 1.0);
         verbosity.set_value(f64::from(settings.verbosity));
-        grid.attach(&row_label("Log verbosity"), 0, 5, 1, 1);
-        grid.attach(&verbosity, 1, 5, 1, 1);
+        grid.attach(&row_label("Log verbosity"), 0, 6, 1, 1);
+        grid.attach(&verbosity, 1, 6, 1, 1);
 
         content.append(&grid);
 
@@ -238,6 +247,7 @@ impl SettingsDialog {
             disable_egl,
             bluetooth_debug,
             download_adapt,
+            text_ui,
             verbosity,
             message,
             gpu,
@@ -387,6 +397,7 @@ impl SettingsDialog {
             bluetooth_debug: self.bluetooth_debug.is_active(),
             download_adapt: self.download_adapt.is_active(),
             verbosity: self.verbosity.value() as u8,
+            text_ui: self.text_ui.is_active(),
         })
     }
 

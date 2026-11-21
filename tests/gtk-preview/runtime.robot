@@ -12,11 +12,11 @@ Real Lifecycle Shows Output And Waits At The Login Gate
     # its own there, so the gate is proved by its WebView: the embed page is only
     # a marketing slider, and its login form ("Remember me") appears solely on the
     # sign-in page the gate navigates to. The log toggle lives in the window's
-    # top-right corner and is icon-only now; opening it reveals the log pane
-    # beside the WebView.
-    Match    ${CURDIR}/log.png    45
+    # top-right corner and carries the text label "Show log" now (the launcher runs
+    # with --text-ui); opening it reveals the log pane beside the WebView.
+    Match Text    Show log    45
     Match Text    Remember me    60
-    Click Target    ${CURDIR}/log.png
+    Click Target    Show log
     Match Text    already installed    20
     Match Text    Remember me    20
 

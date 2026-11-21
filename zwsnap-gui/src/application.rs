@@ -37,6 +37,9 @@ pub struct Config {
     /// `download_adapt` in `settings.json`.
     pub download_adapt: bool,
     pub verbosity: u8,
+    /// Draw the launcher's controls as text instead of icons, from `text_ui` in
+    /// `settings.json` (or forced on by `--text-ui`).
+    pub text_ui: bool,
     pub color: bool,
     pub poll_interval: Duration,
     /// The CDN root the game is downloaded from; `ZWIFT_CDN_BASE` overrides it,
@@ -120,6 +123,7 @@ impl Config {
             bluetooth_debug: settings.bluetooth_debug,
             download_adapt: settings.download_adapt,
             verbosity: settings.verbosity,
+            text_ui: settings.text_ui,
             color: flag("COLORED_OUTPUT", 0)?,
             poll_interval: Duration::from_secs(number("ZWIFT_POLL_INTERVAL", 5)?),
             cdn_base: match value("ZWIFT_CDN_BASE") {
@@ -338,6 +342,7 @@ fn launch_ui(config: Config, args: Vec<String>, logger: Arc<Logger>) -> io::Resu
                         bluetooth_debug: config.bluetooth_debug,
                         download_adapt: config.download_adapt,
                         verbosity: config.verbosity,
+                        text_ui: config.text_ui,
                     },
                 };
                 return crate::gui::launch(

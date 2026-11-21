@@ -30,6 +30,10 @@ pub struct Settings {
     /// fixed pool. On by default; see [`crate::download::Adaptive`].
     pub download_adapt: bool,
     pub verbosity: u8,
+    /// Draw the launcher's controls as text labels instead of icons. Off by default.
+    /// The `--text-ui` command-line flag forces it on for a run, which is how the
+    /// Robot suites match the controls by OCR rather than by a screenshot.
+    pub text_ui: bool,
 }
 
 impl Default for Settings {
@@ -41,6 +45,7 @@ impl Default for Settings {
             bluetooth_debug: false,
             download_adapt: true,
             verbosity: 1,
+            text_ui: false,
         }
     }
 }
@@ -127,6 +132,15 @@ impl Settings {
                 ),
             }
         }
+        if let Some(text_ui) = object.get("text_ui") {
+            match text_ui.as_bool() {
+                Some(value) => settings.text_ui = value,
+                None => eprintln!(
+                    "warning: ignoring non-boolean text_ui in {}",
+                    path.display()
+                ),
+            }
+        }
         if let Some(verbosity) = object.get("verbosity").and_then(serde_json::Value::as_u64) {
             if verbosity <= u64::from(u8::MAX) {
                 settings.verbosity = verbosity as u8;
@@ -150,6 +164,7 @@ impl Settings {
             "bluetooth_debug": self.bluetooth_debug,
             "download_adapt": self.download_adapt,
             "verbosity": self.verbosity,
+            "text_ui": self.text_ui,
         });
         let text = serde_json::to_string_pretty(&value)
             .map_err(|error| io::Error::other(error.to_string()))?;

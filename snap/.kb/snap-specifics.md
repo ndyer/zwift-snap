@@ -192,13 +192,16 @@ the savings.
 - **No `home` plug**: wine user folders live inside the wine prefix
   (`~/snap/zwift/common/.wine/drive_c/users/<user>/`); the launcher replaces links
   to the real home with private directories at every start.
-- **Adwaita symbolic icons, but no gdk-pixbuf SVG loader / no gecko/mono**: the
-  launcher's window buttons are icon-only and name Adwaita symbolic icons (e.g.
-  `preferences-other-symbolic`, `text-x-generic-symbolic`). `adwaita-icon-theme`
-  and `librsvg2-2` arrive transitively with `libgtk-4-1`, and GTK4 renders the
-  theme's SVGs through librsvg directly, so no gdk-pixbuf SVG loader is staged and
-  gdk-pixbuf itself still cannot load SVG. mshtml/mscoree are disabled at wineboot
-  (`WINEDLLOVERRIDES`).
+- **No system icon theme / bundled icons, and no gdk-pixbuf SVG loader / no
+  gecko/mono**: the launcher's controls carry their own icons, vendored from
+  Tabler (MIT) and compiled into the binary as a GResource
+  (`zwsnap-gui/.kb/icons.md`), so the snap no longer ships an icon theme.
+  `adwaita-icon-theme` arrives transitively with `libgtk-4-1`; `snap/prune-closure.sh`
+  deletes `usr/share/icons/Adwaita` (icons **and** cursors) and the runtime-prune
+  guard fails the build if it survives. `librsvg2-2` stays: GTK4 renders the
+  bundled SVG icons through librsvg directly, so no gdk-pixbuf SVG loader is
+  staged and gdk-pixbuf itself still cannot load SVG. mshtml/mscoree are disabled
+  at wineboot (`WINEDLLOVERRIDES`).
 - **glycin layouts**: `layout:` in snapcraft.yaml bind-mounts the glycin loader
   directories because GTK image loading uses absolute paths from its config.
 - **gtk data at runtime**: `wine-env.sh` generates the gdk-pixbuf loaders cache and

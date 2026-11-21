@@ -38,6 +38,10 @@ glow = "0.18"
 glutin_egl_sys = "0.7"
 libloading = "0.9"
 
+[build-dependencies]
+# Compiles the bundled icon GResource (see build.rs); needs glib-compile-resources.
+glib-build-tools = "0.20"
+
 [features]
 gtk-ui = ["dep:gtk"]
 

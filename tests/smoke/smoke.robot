@@ -12,9 +12,9 @@ ${DIALOG_TIMEOUT}       60
 *** Test Cases ***
 Launcher shows its progress window
     [Documentation]    Require the GTK launcher, not merely a successful game start.
-    # The launcher's header controls are icon-only, so match the settings gear
-    # template (anchored on this file's own copy of it) to prove the GTK window.
-    Match    ${CURDIR}/settings.png    ${DIALOG_TIMEOUT}
+    # The launcher runs with --text-ui, so the header controls carry text labels;
+    # match the Settings label to prove the GTK window is up.
+    Match Text    Settings    ${DIALOG_TIMEOUT}
 
 Zwift install and start completes
     [Documentation]    Require Zwift's sign-up screen; do not enter credentials.

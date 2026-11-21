@@ -2,7 +2,8 @@
 //! account, mirroring the Zwift app's user-selection screen.
 //!
 //! Each card shows the rider's avatar (or an initials badge), their name, the
-//! three labelled stat chips the app shows (distance, elevation gain, ride time)
+//! three stat chips the app shows (distance, elevation gain, ride time) - each an
+//! icon beside the value, or the label and value together in text mode -
 //! and a muted line with level, FTP and weight. A slim bar under that line fills
 //! with progress toward the rider's next level when the profile carries it. The
 //! whole card is a single
@@ -29,6 +30,10 @@ use super::icons;
 
 /// The diameter of a card's avatar, in pixels.
 const AVATAR_SIZE: i32 = 72;
+
+/// The size of the icon drawn inside a stat chip, in pixels (a little smaller than
+/// the button icons, to sit within the chip's padding).
+const CHIP_ICON_SIZE: i32 = 14;
 
 /// The tallest the grid is allowed to grow before it starts scrolling. Below
 /// this it sizes to its content, so a couple of accounts do not stretch the
@@ -94,7 +99,7 @@ impl AccountsPanel {
             .hexpand(true)
             .build();
 
-        let add_button = icons::icon_button("list-add-symbolic", "Add another account");
+        let add_button = icons::icon_button(icons::ADD, icons::LABEL_ADD, "Add another account");
         add_button.add_css_class("add-account");
         // The launcher appends this to the header; it starts hidden and is
         // revealed with the grid by [`AccountsPanel::set_visible`].
@@ -277,15 +282,25 @@ impl AccountsPanel {
 
         let metric = account.use_metric.unwrap_or(true);
         let chips = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        chips.append(&chip(&stat_or_dash(account.distance_meters, |meters| {
-            stats::distance(meters, metric)
-        })));
-        chips.append(&chip(&stat_or_dash(account.elevation_meters, |meters| {
-            stats::elevation(meters, metric)
-        })));
-        chips.append(&chip(&stat_or_dash(account.time_minutes, |minutes| {
-            stats::duration(minutes)
-        })));
+        chips.append(&chip(
+            icons::DISTANCE,
+            stats::DISTANCE_LABEL,
+            &stat_or_dash(account.distance_meters, |meters| {
+                stats::distance(meters, metric)
+            }),
+        ));
+        chips.append(&chip(
+            icons::ELEVATION,
+            stats::ELEVATION_LABEL,
+            &stat_or_dash(account.elevation_meters, |meters| {
+                stats::elevation(meters, metric)
+            }),
+        ));
+        chips.append(&chip(
+            icons::TIME,
+            stats::TIME_LABEL,
+            &stat_or_dash(account.time_minutes, stats::duration),
+        ));
         info.append(&chips);
 
         let meta = gtk::Label::new(Some(&meta_line(account, metric)));
@@ -383,7 +398,7 @@ impl AccountsPanel {
     /// the confirmation dialog, because forgetting an account deletes its saved
     /// login and avatar from this computer.
     fn remove_button(self: &Rc<Self>, account: &Account) -> gtk::Button {
-        let button = icons::icon_button("edit-delete-symbolic", "Remove account");
+        let button = icons::icon_button(icons::REMOVE, icons::LABEL_REMOVE, "Remove account");
         button.add_css_class("account-remove");
         button.set_halign(gtk::Align::End);
         button.set_valign(gtk::Align::Start);
@@ -453,12 +468,20 @@ impl AccountsPanel {
     }
 }
 
-/// A stat chip: a small rounded label. `text` is `None` when the field is
-/// unknown, in which case an em dash is shown.
-fn chip(text: &str) -> gtk::Widget {
-    let label = gtk::Label::new(Some(text));
-    label.add_css_class("account-chip");
-    label.upcast()
+/// A stat chip: an icon beside the stat's value, or - in text mode - the label and
+/// the value as one label. `value` is `—` when the field is unknown. The icon names
+/// the statistic (a route, a mountain, a clock); the label spells it out.
+fn chip(icon_name: &str, label: &str, value: &str) -> gtk::Widget {
+    if icons::text_mode() {
+        let text = gtk::Label::new(Some(&format!("{label} {value}")));
+        text.add_css_class("account-chip");
+        return text.upcast();
+    }
+    let chip = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    chip.add_css_class("account-chip");
+    chip.append(&icons::icon(icon_name, CHIP_ICON_SIZE));
+    chip.append(&gtk::Label::new(Some(value)));
+    chip.upcast()
 }
 
 /// Format a stat from an optional raw value, or an em dash when it is missing.
@@ -547,6 +570,9 @@ const CSS: &str = "
     background-color: alpha(black, 0.35);
     border-radius: 6px;
     padding: 2px 8px;
+}
+.account-chip image {
+    margin-right: 4px;
 }
 .account-pill {
     background-color: alpha(white, 0.2);

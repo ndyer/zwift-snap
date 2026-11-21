@@ -15,9 +15,9 @@ Picker Shows Remembered Accounts, Removes One And Launches The Rest
     # The first account's chips: 2444 m of climbing and 834 minutes ridden.
     Match Text    Elevation 8,018 ft    20
     Match Text    Time 13h    20
-    # Remove a card via its top-right remove icon and confirm the dialog. Both
-    # cards carry identical remove icons, so the first match is what gets removed.
-    Click Target    ${CURDIR}/remove.png
+    # Remove a card via its top-right remove control and confirm the dialog. Both
+    # cards carry identical remove controls, so the first match is what gets removed.
+    Click Target    Remove
     Match Text    Remove this account?    20
     Click Target    Remove account
     # The grid is rebuilt once the account is gone; let it repaint before the

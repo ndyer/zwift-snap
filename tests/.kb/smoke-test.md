@@ -14,8 +14,9 @@ IMPORTANT: Read the `.kb/agents.md` file.
 `tests/smoke.sh` starts a `mir-test-tools` Mir compositor, runs the real launcher
 against it and drives the Robot Framework suite in `tests/smoke/` with
 [yarf](https://documentation.ubuntu.com/yarf): test 1 matches the launcher's
-icon-only settings gear against `settings.png` (the header controls carry no text
-any more), test 2 requires the Zwift SIGN UP screen through OCR. The first run on a fresh wine prefix installs wine prerequisites
+Settings control by its text label (the launcher runs with `--text-ui`, so the
+controls carry text rather than icons), test 2 requires the Zwift SIGN UP screen
+through OCR. The first run on a fresh wine prefix installs wine prerequisites
 and downloads Zwift (tens of minutes), later runs are quick. No login is performed.
 Extra arguments to the `smoke` action are passed to yarf (for example,
 `--variant light`). The harness installs `yarf` and `mir-test-tools` and connects
@@ -34,9 +35,11 @@ Two logfiles show live progress while the suite runs:
 - `~/snap/zwift/common/.wine/drive_c/users/<user>/AppData/Local/Zwift/Logs/Log.txt`
   — Zwift's own log, which only exists once the game has started.
 
-Window decorations and themes differ between machines: when the suite reports a
-missing template, recapture it with the recipe in `tests/smoke/README.md` and commit
-it. `SMOKE_DISPLAY=nested|headless` overrides the auto detection; nested renders on
+The header controls are matched by their text labels, not a PNG template: the
+suites run the launcher with `--text-ui`, which draws each control as its label
+(`Settings`, `Show log`, ...), so a theme or icon change no longer needs a
+template recaptured (`tests/smoke/README.md`). `SMOKE_DISPLAY=nested|headless`
+overrides the auto detection; nested renders on
 the host display through the workshop desktop interface and, with interfaces missing,
 fails instead of rendering elsewhere (see the Mir gotcha below).
 

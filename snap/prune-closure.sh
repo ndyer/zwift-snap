@@ -45,12 +45,16 @@ removed_binaries=(
     testparm ucf ucfq ucfr unzipsfx user-session-migration wbinfo winexe
 )
 
-# Data trees of the removed binaries and other dead weight.
+# Data trees of the removed binaries and other dead weight. The Adwaita icon
+# theme (icons and cursors) arrives transitively with libgtk-4-1; the launcher
+# carries its own bundled icons in the binary (see zwsnap-gui/build.rs) and names
+# no theme icons, so the whole theme is dropped here.
 removed_trees=(
     usr/share/perl
     usr/lib/x86_64-linux-gnu/perl
     usr/share/perl5
     usr/share/sounds
+    usr/share/icons/Adwaita
 )
 
 # Library search path used to resolve DT_NEEDED entries, in ld.so order.

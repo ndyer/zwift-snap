@@ -12,6 +12,8 @@
 
 use gtk::prelude::*;
 
+use super::icons;
+
 /// The maximum number of characters the log view keeps before trimming its
 /// oldest output, matching the limit the launcher used before the pane existed.
 const MAX_CHARS: i32 = 200_000;
@@ -43,14 +45,11 @@ impl LogPanel {
             .visible(false)
             .build();
 
-        // The toggle is icon-only. It keeps its full chrome (deliberately *not*
-        // given the `flat` class) so it reads as a button, and its *checked*
-        // highlight shows whether the log is currently visible.
-        let toggle = gtk::ToggleButton::new();
-        let icon = gtk::Image::from_icon_name("text-x-generic-symbolic");
-        icon.set_pixel_size(16);
-        toggle.set_child(Some(&icon));
-        toggle.set_tooltip_text(Some("Show log"));
+        // The toggle carries either the bundled log icon or, in text mode, its
+        // label. It keeps its full chrome (deliberately *not* given the `flat`
+        // class) so it reads as a button, and its *checked* highlight shows whether
+        // the log is currently visible.
+        let toggle = icons::toggle_button(icons::LOG, icons::LABEL_LOG, "Show log");
         toggle.add_css_class("log-toggle");
 
         let panel = Self {

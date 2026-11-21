@@ -32,7 +32,12 @@ stub CDN's version already installed, live logs, the mandatory login gate (nothi
 launches before it) and the cancellation cleanup. Its last stage seeds two
 remembered accounts and drives the picker: the cards render, one account is
 removed through the confirmation dialog, and playing the other actually starts
-the stub game with that account's token. Rust unit
+the stub game with that account's token. Every stage runs the launcher with
+`--text-ui`, so the header controls are text the suites match by OCR rather than
+PNG templates (`zwsnap-gui/.kb/icons.md`), and the runtime stage runs fullscreen:
+a windowed window is placed off-centre by the compositor and cannot be both narrow
+enough to fit the 1280x1024 output and wide enough to show the log pane's
+"... is already installed" line unwrapped. Rust unit
 tests
 verify that the worker cannot start the game before login confirmation and reads
 fresh token JSON only at launch. Integration tests execute the binary in terminal

@@ -125,6 +125,9 @@ parts:
       - libwebkitgtk-6.0-dev
       - libjavascriptcoregtk-6.0-dev
       - libsoup-3.0-dev
+      # glib-compile-resources, run by zwsnap-gui/build.rs to compile the bundled
+      # icon set into the binary (it no longer uses a system icon theme).
+      - libglib2.0-bin
     stage-packages:
       - libgtk-4-1
       - libwebkitgtk-6.0-4
@@ -347,7 +350,7 @@ parts:
       # snap/prune-closure.sh for the closure walk. Bump this comment after
       # editing that script or Wine's prime filters, craft-parts only
       # re-runs the prime step when the script text tracked in the part state
-      # changes: v15
+      # changes: v16
       # The gschemas.compiled that Debian creates in a trigger is not part of the staged
       # packages. Without it GTK programs abort with "No GSettings schemas are installed".
       glib-compile-schemas "${CRAFT_PRIME}/usr/share/glib-2.0/schemas"
@@ -430,6 +433,7 @@ parts:
           bin/zwift-setup.sh \
           bin/runfromprocess-rs.exe \
           usr/bin/yad \
+          usr/share/icons/Adwaita \
           opt/wine-devel/bin/widl \
           opt/wine-devel/bin/winebuild \
           opt/wine-devel/bin/winegcc \

@@ -307,8 +307,12 @@ impl LauncherBackend for PreviewBackend {
 }
 
 /// Preview the interface with simulated events. Does not launch Wine.
-pub fn preview(mode: DisplayMode) -> io::Result<()> {
-    let settings = SettingsContext::preview();
+///
+/// `text_ui` forces the text UI mode on for this run (the `--text-ui` flag),
+/// independent of the saved setting.
+pub fn preview(mode: DisplayMode, text_ui: bool) -> io::Result<()> {
+    let mut settings = SettingsContext::preview();
+    settings.settings.text_ui |= text_ui;
     run_application(
         mode,
         Cancellation::default(),
@@ -417,6 +421,14 @@ fn run_application(
     worker: impl FnOnce(WorkerUi) -> Result<(), String> + Send + 'static,
 ) -> io::Result<()> {
     gtk::init().map_err(|error| io::Error::other(format!("Unable to initialize GTK: {error}")))?;
+    // Register the bundled icon set and choose the icon-or-text UI mode before any
+    // window (or button) is built. `settings.text_ui` already folds in the
+    // `--text-ui` flag (see `preview` and `application::launch`).
+    icons::init(if settings.settings.text_ui {
+        icons::UiMode::Text
+    } else {
+        icons::UiMode::Icons
+    });
     let app = gtk::Application::builder()
         .application_id(if preview {
             "com.github.ndyer.ZwiftSnap.Preview"
@@ -678,7 +690,7 @@ fn build_window(
     // the header's button group and is revealed only when a failure needs an
     // answer; it does not deserve a row of its own. It is icon-only, so its
     // hover text carries the label.
-    let retry = icons::icon_button("view-refresh-symbolic", "Retry");
+    let retry = icons::icon_button(icons::REFRESH, icons::LABEL_RETRY, "Retry");
     retry.set_visible(false);
 
     // The header row: the launch spinner and status heading on the left, and the
@@ -686,7 +698,7 @@ fn build_window(
     // add-account button, the log toggle, Settings, and, in a fullscreen session,
     // Quit.
     let log_panel = LogPanel::new();
-    let open_settings = icons::icon_button("preferences-other-symbolic", "Settings");
+    let open_settings = icons::icon_button(icons::SETTINGS, icons::LABEL_SETTINGS, "Settings");
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     header.append(&status);
     header.append(&retry);
@@ -697,7 +709,7 @@ fn build_window(
         // A fullscreen window has no decorations to close from, so offer an
         // explicit Quit that takes the same cancellation-and-cleanup path as
         // closing the window.
-        let quit_launcher = icons::icon_button("application-exit-symbolic", "Quit");
+        let quit_launcher = icons::icon_button(icons::QUIT, icons::LABEL_QUIT, "Quit");
         quit_launcher.connect_clicked({
             let window = window.clone();
             move |_| window.close()

@@ -79,14 +79,16 @@ default fullscreen, or `WIDTHxHEIGHT` windowed). The window hides after the
 first game window appears; the launcher stays alive until the game exits.
 Installation failures offer a **Retry** button and update failures offer Launch
 anyway; Retry is revealed in the header's button group rather than on a row of
-its own. The window's top-right corner holds the launcher's controls as
-icon-only buttons built by `gui/icons.rs` (`icon_button(name, tooltip)`: a
-`gtk::Button::from_icon_name`, 16 px, `flat` class, with a tooltip so the
-control is still discoverable): the picker's add-account button, a
-`text-x-generic-symbolic` log toggle, a `preferences-other-symbolic` Settings
-button, and — in a fullscreen session, which has no decorations to close from —
-an `application-exit-symbolic` Quit button that runs the same cancellation and
-cleanup as closing the window. The log toggle is the exception to the `flat`
+its own. The window's top-right corner holds the launcher's controls, built by
+`gui/icons.rs` from the **bundled** icon set (Tabler, MIT; compiled into the
+binary as a GResource and registered by `icons::init`) — the launcher no longer
+uses a system icon theme (`zwsnap-gui/.kb/icons.md`). `icon_button(name, label,
+tooltip)` builds a `flat` 16 px button showing either the icon or, in text mode,
+the label (see `zwsnap-gui/.kb/icons.md`): the picker's add-account button, a
+`zwsnap-log-symbolic` log toggle, a `zwsnap-settings-symbolic` Settings button,
+and — in a fullscreen session, which has no decorations to close from — a
+`zwsnap-quit-symbolic` Quit button that runs the same cancellation and cleanup as
+closing the window. The log toggle is the exception to the `flat`
 rule: it stays full-contrast and accented while checked, so its highlight shows
 whether the log pane is visible. Settings opens a dialog that edits the settings file, shows
 token/`bluez`/GPU status and offers the maintenance actions (see

@@ -4,5 +4,6 @@
   "disable_egl": false,
   "bluetooth_debug": false,
   "download_adapt": true,
-  "verbosity": 1
+  "verbosity": 1,
+  "text_ui": false
 }

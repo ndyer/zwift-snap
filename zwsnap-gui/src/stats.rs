@@ -4,46 +4,55 @@
 //! (and the unit conversion) can be pinned by unit tests. Distances and elevations
 //! follow the rider's own `use_metric` setting, so two accounts can show different
 //! units side by side, exactly as the app does.
+//!
+//! Each chip is an icon (or, in text mode, a label) beside the stat *value*: the
+//! formatters below return the value alone (`233 km`), and the words that name the
+//! statistic live in the [`DISTANCE_LABEL`] and friends constants, so a card can
+//! show `233 km` under a route icon or `Distance 233 km` in text mode.
 
-/// The rider's total distance, labelled and grouped: `Distance 1,000 km` (metric)
-/// or `Distance 621 mi` (imperial), rounded to the nearest whole unit.
+/// The word naming a chip's statistic, used as the label in text mode.
+pub const DISTANCE_LABEL: &str = "Distance";
+pub const ELEVATION_LABEL: &str = "Elevation";
+pub const TIME_LABEL: &str = "Time";
+
+/// The rider's total distance, grouped: `1,000 km` (metric) or `621 mi`
+/// (imperial), rounded to the nearest whole unit.
 pub fn distance(meters: i64, use_metric: bool) -> String {
     if use_metric {
         format!(
-            "Distance {} km",
+            "{} km",
             group_thousands((meters as f64 / 1000.0).round() as i64)
         )
     } else {
         format!(
-            "Distance {} mi",
+            "{} mi",
             group_thousands((meters as f64 / METERS_PER_MILE).round() as i64)
         )
     }
 }
 
-/// The rider's total elevation gain, labelled and grouped: `Elevation 10,000 m`
-/// (metric) or `Elevation 8,018 ft` (imperial), both whole.
+/// The rider's total elevation gain, grouped: `10,000 m` (metric) or `8,018 ft`
+/// (imperial), both whole.
 pub fn elevation(meters: i64, use_metric: bool) -> String {
     if use_metric {
-        format!("Elevation {} m", group_thousands(meters))
+        format!("{} m", group_thousands(meters))
     } else {
         format!(
-            "Elevation {} ft",
+            "{} ft",
             group_thousands((meters as f64 / METERS_PER_FOOT).round() as i64)
         )
     }
 }
 
-/// Total time ridden, labelled as whole days and hours: `Time 2d 15h`, or
-/// `Time 13h` under a day. Minutes and seconds are dropped; the profile only
-/// records whole minutes anyway.
+/// Total time ridden as whole days and hours: `2d 15h`, or `13h` under a day.
+/// Minutes and seconds are dropped; the profile only records whole minutes anyway.
 pub fn duration(minutes: i64) -> String {
     let minutes = minutes.max(0);
     let hours = minutes / 60;
     if hours >= 24 {
-        format!("Time {}d {}h", hours / 24, hours % 24)
+        format!("{}d {}h", hours / 24, hours % 24)
     } else {
-        format!("Time {hours}h")
+        format!("{hours}h")
     }
 }
 
@@ -144,29 +153,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn distance_is_labelled_grouped_and_follows_the_riders_units() {
-        assert_eq!(distance(233_400, true), "Distance 233 km");
-        assert_eq!(distance(233_400, false), "Distance 145 mi");
-        assert_eq!(distance(0, true), "Distance 0 km");
-        assert_eq!(distance(1_234_567, true), "Distance 1,235 km");
+    fn distance_is_grouped_and_follows_the_riders_units() {
+        assert_eq!(distance(233_400, true), "233 km");
+        assert_eq!(distance(233_400, false), "145 mi");
+        assert_eq!(distance(0, true), "0 km");
+        assert_eq!(distance(1_234_567, true), "1,235 km");
     }
 
     #[test]
-    fn elevation_is_labelled_grouped_and_follows_the_riders_units() {
-        assert_eq!(elevation(2444, true), "Elevation 2,444 m");
-        assert_eq!(elevation(2444, false), "Elevation 8,018 ft");
-        assert_eq!(elevation(10_000, true), "Elevation 10,000 m");
+    fn elevation_is_grouped_and_follows_the_riders_units() {
+        assert_eq!(elevation(2444, true), "2,444 m");
+        assert_eq!(elevation(2444, false), "8,018 ft");
+        assert_eq!(elevation(10_000, true), "10,000 m");
     }
 
     #[test]
     fn duration_is_whole_days_and_hours() {
-        assert_eq!(duration(834), "Time 13h");
-        assert_eq!(duration(0), "Time 0h");
-        assert_eq!(duration(59), "Time 0h");
-        assert_eq!(duration(60), "Time 1h");
-        assert_eq!(duration(6000), "Time 4d 4h");
+        assert_eq!(duration(834), "13h");
+        assert_eq!(duration(0), "0h");
+        assert_eq!(duration(59), "0h");
+        assert_eq!(duration(60), "1h");
+        assert_eq!(duration(6000), "4d 4h");
         // A negative total (which the API should never send) clamps to zero.
-        assert_eq!(duration(-5), "Time 0h");
+        assert_eq!(duration(-5), "0h");
     }
 
     #[test]

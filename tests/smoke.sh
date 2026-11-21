@@ -268,8 +268,9 @@ main() {
 
     # the launcher links the compositor socket into the runtime dir of the snap and
     # runs everything (dialogs and wine) on native wayland
-    # Skip login to go straight to the game (enables robot tests)
-    snap run zwift --skip-login > >(tee "${YARF_OUT_DIR}/zwift.out") 2>&1 &
+    # Skip login to go straight to the game; --text-ui draws the header controls as
+    # labels so the suite can match them by OCR (enables robot tests)
+    snap run zwift --skip-login --text-ui > >(tee "${YARF_OUT_DIR}/zwift.out") 2>&1 &
     zwift_pid=$!
 
     # yarf exits 120 with no output when its stdout is a plain file (snap stdio

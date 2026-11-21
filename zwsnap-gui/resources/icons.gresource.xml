@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The icons sit directly at the prefix (no size/category subdirectory): GTK
+     treats files placed directly in a resource path as icons of the hicolor
+     theme's ultimate fallback, which is what a flat symbolic set wants. -->
+<gresources>
+  <gresource prefix="/com/github/ndyer/ZwiftSnap/icons">
+    <file>zwsnap-refresh-symbolic.svg</file>
+    <file>zwsnap-plus-symbolic.svg</file>
+    <file>zwsnap-settings-symbolic.svg</file>
+    <file>zwsnap-quit-symbolic.svg</file>
+    <file>zwsnap-log-symbolic.svg</file>
+    <file>zwsnap-remove-symbolic.svg</file>
+    <file>zwsnap-distance-symbolic.svg</file>
+    <file>zwsnap-elevation-symbolic.svg</file>
+    <file>zwsnap-time-symbolic.svg</file>
+  </gresource>
+</gresources>

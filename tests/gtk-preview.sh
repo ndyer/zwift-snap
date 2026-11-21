@@ -21,12 +21,9 @@ trap cleanup EXIT
 cargo build --manifest-path "${root}/zwsnap-gui/Cargo.toml" --features gtk-ui
 mkdir -p "${stage}/suite" "${stage}/close-suite" "${stage}/runtime-suite" "${stage}/accounts-suite" "${stage}/out" "${runtime}/snap.yarf"
 cp "${root}/tests/gtk-preview/preview.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/suite/"
-cp "${root}"/tests/gtk-preview/*.png "${stage}/suite/"
 cp "${root}/tests/gtk-preview/close.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/close-suite/"
 cp "${root}/tests/gtk-preview/runtime.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/runtime-suite/"
-cp "${root}"/tests/gtk-preview/*.png "${stage}/runtime-suite/"
 cp "${root}/tests/gtk-preview/accounts.robot" "${root}/tests/tools/yarf/yarf_ocr.py" "${root}/tests/tools/yarf/yarf_frames.py" "${stage}/accounts-suite/"
-cp "${root}"/tests/gtk-preview/*.png "${stage}/accounts-suite/"
 cp "${root}/tests/tools/yarf/input.py" "${stage}/"
 
 # every frame the suites capture is kept here, so a failed wait can be replayed with
@@ -62,11 +59,17 @@ echo "Testing account card layout"
 cargo test --manifest-path "${root}/zwsnap-gui/Cargo.toml" --features gtk-ui \
     gui::accounts_panel::tests::card_bounds_large_avatar_and_wraps_long_name -- --exact --ignored
 
+echo "Testing the bundled icon set resolves"
+cargo test --manifest-path "${root}/zwsnap-gui/Cargo.toml" --features gtk-ui \
+    gui::icons::tests::all_bundled_icons_resolve -- --exact --ignored
+cargo test --manifest-path "${root}/zwsnap-gui/Cargo.toml" --features gtk-ui \
+    gui::icons::tests::text_mode_renders_labels -- --exact --ignored
+
 echo "Testing cancellation of a pending decision"
 mkdir -p "${stage}/out/close" "${stage}/settings/close"
 printf '{"display_mode":"800x600"}' > "${stage}/settings/close/settings.json"
 SNAP="${stage}/settings/close" SNAP_USER_COMMON="${stage}/settings/close" \
-    "${root}/zwsnap-gui/target/debug/zwsnap-gui" --preview \
+    "${root}/zwsnap-gui/target/debug/zwsnap-gui" --preview --text-ui \
     > >(tee "${stage}/gui-close.log") 2>&1 &
 gui_pid=$!
 yarf --platform Mir "${stage}/close-suite" --outdir "${stage}/out/close" \
@@ -91,7 +94,7 @@ for mode in fullscreen 800x600; do
     mkdir -p "${stage}/out/${mode}" "${stage}/settings/${mode}"
     printf '{"display_mode":"%s"}' "${mode}" > "${stage}/settings/${mode}/settings.json"
     SNAP="${stage}/settings/${mode}" SNAP_USER_COMMON="${stage}/settings/${mode}" \
-        "${root}/zwsnap-gui/target/debug/zwsnap-gui" --preview \
+        "${root}/zwsnap-gui/target/debug/zwsnap-gui" --preview --text-ui \
         > >(tee "${stage}/gui-${mode}.log") 2>&1 &
     gui_pid=$!
     yarf --platform Mir "${stage}/suite" --outdir "${stage}/out/${mode}" \
@@ -121,8 +124,12 @@ mkdir -p "${fixture}/cdn"
 printf '<Zwift version="1.0.0" sversion="1.0.0 x" manifest="manifest.xml"/>' \
     > "${fixture}/cdn/Zwift_ver_cur.xml"
 printf '<ZWIFT><CONFIG/></ZWIFT>' > "${data}/prefs.xml"
-# The launcher reads its display mode from settings.json, not the environment.
-printf '{"display_mode":"800x600"}' > "${fixture}/common/settings.json"
+# Run the lifecycle fullscreen. A windowed window is placed by the compositor at an
+# offset and cannot be made both narrow enough to fit the 1280x1024 output and wide
+# enough that the log pane (a fixed 560px split) shows the "... is already installed"
+# line unwrapped; fullscreen gives the log pane the full width, like the passing
+# preview suite.
+printf '{"display_mode":"fullscreen"}' > "${fixture}/common/settings.json"
 # Fabricate what the Wine prerequisites leave behind: `installed()` also requires
 # them, otherwise the launcher takes the install path instead. Kept in step with the
 # sentinels in zwsnap-gui/src/install.rs: the proof is the launcher's own
@@ -165,7 +172,7 @@ PATH="${fixture}/bin:${PATH}" SNAP="${fixture}" SNAP_USER_COMMON="${fixture}/com
     WINEPREFIX="${fixture}/common/.wine" ZWIFT_LOG="${fixture}/common/zwift.log" \
     TEST_ROOT="${fixture}" ZWIFT_NO_GUI=0 ZWIFT_POLL_INTERVAL=1 \
     ZWIFT_CDN_BASE="file://${fixture}/cdn" \
-    "${root}/zwsnap-gui/target/debug/zwsnap-gui" \
+    "${root}/zwsnap-gui/target/debug/zwsnap-gui" --text-ui \
     > >(tee "${stage}/gui-runtime.log") 2>&1 &
 gui_pid=$!
 yarf --platform Mir "${stage}/runtime-suite" --outdir "${stage}/out/runtime" \
@@ -191,7 +198,9 @@ if wait "${gui_pid}"; then
 fi
 gui_pid=""
 grep -q 'Launcher cancelled' "${fixture}/common/zwift.log"
-grep -q '<USER_RESOLUTION_PREF>800x600</USER_RESOLUTION_PREF>' "${data}/prefs.xml"
+# The lifecycle runs fullscreen, so the game is told to go fullscreen rather than to
+# a specific resolution.
+grep -q '<FULLSCREEN>1</FULLSCREEN>' "${data}/prefs.xml"
 [[ $(cat "${fixture}/cleanup") == $'-k\n-w' ]] \
     || { echo "Real GTK worker did not clean up Wine" >&2; exit 1; }
 
@@ -250,7 +259,7 @@ PATH="${accounts}/bin:${PATH}" SNAP="${accounts}" SNAP_USER_COMMON="${accounts}/
     WINEPREFIX="${accounts}/common/.wine" ZWIFT_LOG="${accounts}/common/zwift.log" \
     TEST_ROOT="${accounts}" ZWIFT_NO_GUI=0 ZWIFT_POLL_INTERVAL=1 \
     ZWIFT_CDN_BASE="file://${accounts}/cdn" \
-    "${root}/zwsnap-gui/target/debug/zwsnap-gui" \
+    "${root}/zwsnap-gui/target/debug/zwsnap-gui" --text-ui \
     > >(tee "${stage}/gui-accounts.log") 2>&1 &
 gui_pid=$!
 yarf --platform Mir "${stage}/accounts-suite" --outdir "${stage}/out/accounts" \
