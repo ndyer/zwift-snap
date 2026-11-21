@@ -176,6 +176,11 @@ impl Manifest {
 #[derive(Clone, Debug)]
 pub struct VerCur {
     pub version: Version,
+    /// The human-facing game version: the leading token of the `sversion`
+    /// attribute (for example `1.126.0`), or `None` when the ver_cur has none
+    /// (the Windows installer's `0.0.0` seed). This is the value the game shows
+    /// as *Game Version*; `version.build` is its *Build Number*.
+    pub game_version: Option<String>,
     /// Manifest file name, relative to the CDN base.
     pub manifest: String,
     /// CRC-32 of the manifest, or `None` when the ver_cur has no (or a `-1`) checksum.
@@ -189,18 +194,33 @@ impl VerCur {
     pub fn raw(&self) -> &[u8] {
         &self.raw
     }
+
+    /// How the game presents its version: *Game Version* and *Build Number*.
+    ///
+    /// Returns `"<game version> (build <build>)"` (for example
+    /// `"1.126.0 (build 169052)"`) when the ver_cur carries an `sversion`, and the
+    /// bare build key (the [`Version`] string, for example `1.0.169052`) when it
+    /// does not — the seed has no game version to show.
+    pub fn display_version(&self) -> String {
+        match &self.game_version {
+            Some(game_version) => format!("{game_version} (build {})", self.version.build),
+            None => self.version.to_string(),
+        }
+    }
 }
 
 /// Parse `Zwift_ver_cur.xml`.
 ///
 /// Root `Zwift`. Required: `version`, `manifest`. Optional: `manifest_checksum`
-/// (missing = absent) and `mandatory_version`. Ignored: `sversion`, `gbranch`,
-/// `gcommit`, `GAME_URL`, `ver_cur_checksum`.
+/// (missing = absent), `mandatory_version` and `sversion` (its leading token is the
+/// human-facing game version, kept for display). Ignored: `gbranch`, `gcommit`,
+/// `GAME_URL`, `ver_cur_checksum`.
 pub fn parse_ver_cur(bytes: &[u8]) -> Result<VerCur, String> {
     let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
     let doc = Document::parse(text).map_err(|e| e.to_string())?;
     let root = zwift_root(&doc)?;
     let version = Version::parse(attr(root, "version")?)?;
+    let game_version = crate::version::parse_sversion(text);
     let manifest = manifest_name(attr(root, "manifest")?)?;
     let manifest_checksum = match root.attribute("manifest_checksum") {
         Some(text) => parse_checksum(text)?,
@@ -212,6 +232,7 @@ pub fn parse_ver_cur(bytes: &[u8]) -> Result<VerCur, String> {
         .transpose()?;
     Ok(VerCur {
         version,
+        game_version,
         manifest,
         manifest_checksum,
         mandatory_version,
@@ -415,6 +436,9 @@ mod tests {
         let v = parse_ver_cur(VER_CUR.as_bytes()).unwrap();
         assert_eq!(v.raw(), VER_CUR.as_bytes());
         assert_eq!(v.version.to_string(), "1.0.167050");
+        assert_eq!(v.game_version.as_deref(), Some("1.123.0"));
+        // The game shows Game Version 1.123.0 and Build Number 167050.
+        assert_eq!(v.display_version(), "1.123.0 (build 167050)");
         assert_eq!(v.manifest, "Zwift_1.0.167050_ce7420cb_manifest.xml");
         assert_eq!(v.manifest_checksum, Some(667523848));
         assert_eq!(v.mandatory_version, None);
@@ -426,6 +450,9 @@ mod tests {
         let v = parse_ver_cur(seed).unwrap();
         assert_eq!(v.version, Version::ZERO);
         assert_eq!(v.manifest_checksum, None);
+        // No sversion: there is no game version to show, so the build key stands in.
+        assert_eq!(v.game_version, None);
+        assert_eq!(v.display_version(), "0.0.0");
     }
 
     #[test]

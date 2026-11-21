@@ -9,8 +9,9 @@
 //! run that dies partway leaves the previous version recorded and the next run simply
 //! diffs again and finishes the job.
 //!
-//! The version key is the `version` attribute (for example `1.0.168455`), not the
-//! human-facing `sversion`; the latter is kept for display and the smoke test's cache.
+//! The version key is the `version` attribute (for example `1.0.168455`); the
+//! human-facing `sversion` is also kept, and the log lines print it the way the game
+//! presents it (*Game Version* and *Build Number*, for example `1.126.0 (build 168455)`).
 
 use std::collections::VecDeque;
 use std::fs;
@@ -215,17 +216,26 @@ pub fn sync_version(
     logger: &Logger,
     progress: ByteProgress<'_>,
 ) -> Result<Outcome, String> {
-    let installed = local_version(config.install_dir);
-    match assess(installed, ver_cur) {
+    let installed = local_ver_cur(config.install_dir);
+    let installed_version = installed
+        .as_ref()
+        .map_or(Version::ZERO, |ver_cur| ver_cur.version);
+    let installed_display = installed
+        .as_ref()
+        .map_or_else(|| Version::ZERO.to_string(), VerCur::display_version);
+    match assess(installed_version, ver_cur) {
         Assessment::Current => {
-            logger.info(&format!("Zwift {} is already installed", ver_cur.version));
+            logger.info(&format!(
+                "Zwift {} is already installed",
+                ver_cur.display_version()
+            ));
             return Ok(Outcome::Current {
                 version: ver_cur.version,
             });
         }
         Assessment::Update { mandatory } => logger.info(&format!(
-            "Updating Zwift from {installed} to {}{}",
-            ver_cur.version,
+            "Updating Zwift from {installed_display} to {}{}",
+            ver_cur.display_version(),
             if mandatory { " (mandatory)" } else { "" }
         )),
     }
@@ -239,7 +249,7 @@ pub fn sync_version(
     order_for_download(&mut plan.fetch);
     logger.info(&format!(
         "Zwift {} has {} files: {} to download, {} to delete",
-        ver_cur.version,
+        ver_cur.display_version(),
         server.files().len(),
         plan.fetch.len(),
         plan.delete.len()
@@ -275,7 +285,7 @@ pub fn sync_version(
 
     logger.info(&format!(
         "Zwift {} is installed ({} files fetched, {} removed)",
-        ver_cur.version,
+        ver_cur.display_version(),
         plan.fetch.len(),
         plan.delete.len()
     ));
@@ -727,6 +737,31 @@ mod tests {
                 a.len() as u64 + b.len() as u64,
                 a.len() as u64 + b.len() as u64
             ))
+        );
+    }
+
+    #[test]
+    fn sync_logs_the_version_the_way_the_game_presents_it() {
+        let scratch = Scratch::new("display");
+        scratch.logger.init().unwrap();
+        let a = b"alpha".as_slice();
+        // The served sversion is "1.5.0 (5)": Game Version 1.5.0, Build Number 5.
+        let memory = Memory::new(
+            ver_cur_xml("1.0.5", "1.5.0 (5)", "F_manifest.xml"),
+            "F_manifest.xml",
+            manifest_xml("1.0.5", "F", &[("a.bin", a, Some(crc(a)))]),
+            &[("F/a.bin", a)],
+        );
+        let progress = |_, _, _| {};
+        sync(&memory, &scratch.config(), &scratch.logger, &progress).unwrap();
+        let log = fs::read_to_string(scratch.root.join("log")).unwrap();
+        assert!(log.contains("Zwift 1.5.0 (build 5) is installed"), "{log}");
+        // The second sync reports the same aligned version on the "already installed" line.
+        sync(&memory, &scratch.config(), &scratch.logger, &progress).unwrap();
+        let log = fs::read_to_string(scratch.root.join("log")).unwrap();
+        assert!(
+            log.contains("Zwift 1.5.0 (build 5) is already installed"),
+            "{log}"
         );
     }
 

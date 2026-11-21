@@ -15,9 +15,10 @@ The launcher fetches the game itself, straight from Zwift's CDN. Nothing Zwift s
 executed as an installer: `ZwiftSetup.exe` is never downloaded and the patcher never runs.
 Four modules split the work:
 
-- `manifest.rs` — the XML: `Zwift_ver_cur.xml` (the current version, with `sversion` and
-  the manifest name) and the manifest (`<path>`, `<length>`, `<modified>`, `<checksum>`).
-  Checksums are signed 32-bit decimals, where `-1` means "absent".
+- `manifest.rs` — the XML: `Zwift_ver_cur.xml` (the current version, with the sync-key
+  `version`, the human-facing `sversion` and the manifest name) and the manifest
+  (`<path>`, `<length>`, `<modified>`, `<checksum>`). Checksums are signed 32-bit
+  decimals, where `-1` means "absent".
 - `cdn.rs` — the transfer layer: URLs built from the base
   (`DEFAULT_BASE`, `https://cdn.zwift.com/gameassets/Zwift_Updates_Root/`), retries with
   backoff, and the `Fetcher` trait, whose `file://` implementation lets the tests and
@@ -33,6 +34,16 @@ Four modules split the work:
 `install.rs` (fresh prefix) and `update.rs` (existing prefix) drive the sync; the version
 the launcher records is the server's own `Zwift_ver_cur.xml`, written after every sync
 (`version.rs`).
+
+Two version numbers travel together and are easy to confuse. The sync key is the
+`version` attribute (`major.minor.build`, for example `1.0.168455`) — `Version`, the
+counter the CDN uses to decide whether an update exists. The human-facing number is the
+leading token of `sversion` (for example `1.126.0`), which the game shows as *Game
+Version*, with `version.build` as its *Build Number*; `manifest.rs` keeps it on `VerCur`
+and `VerCur::display_version` renders the pair as `1.126.0 (build 168455)` (the bare build
+key when a ver_cur carries no `sversion`, such as the installer's `0.0.0` seed). The sync
+log lines print that form — the same two fields the game shows on its About screen —
+while the version files on disk and the smoke test's cache keep the raw `sversion`.
 
 Two environment variables, both parsed in `application.rs`, configure it:
 `ZWIFT_CDN_BASE` overrides the CDN root (a `file://` directory for tests and offline
