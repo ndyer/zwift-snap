@@ -13,8 +13,8 @@ IMPORTANT: Read the `.kb/agents.md` file.
 
 The launcher logs in through a WebKitGTK WebView in the bottom panel
 (`zwsnap-gui/src/gui/login_panel.rs`, shown at all times; it loads Zwift's launcher
-embed page until the login gate opens, and the `?registration=true` variant on the
-very first run). It does OAuth PKCE against Keycloak
+embed page until the login gate opens, and the `?registration=true` variant while no
+account is remembered). It does OAuth PKCE against Keycloak
 (`zwsnap-gui/src/oauth.rs`), watches navigation for the `http://zwift/?code=...`
 redirect, checks `state`, exchanges the code and saves `pairing-token.json`, which
 `launch.rs` passes to the game as `--token`.

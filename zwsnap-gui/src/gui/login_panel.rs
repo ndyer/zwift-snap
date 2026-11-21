@@ -1,7 +1,7 @@
 //! Persistent WebKitGTK panel pinned to the bottom of the launcher window.
 //!
 //! The panel always shows Zwift's launcher embed page: the registration variant
-//! on the very first run, the plain page on every run after that. When the
+//! when no account is remembered, the plain page otherwise. When the
 //! launcher reaches its login gate it asks the panel to start the OAuth login;
 //! the panel loads the Keycloak authorization URL and, once WebKit navigates to
 //! the `http://zwift/?code=...` redirect, exchanges the code for a token and
@@ -27,45 +27,18 @@ use webkit6::prelude::*;
 /// Page shown before Zwift is installed, and until the login gate opens.
 pub const EMBED_URL: &str = "https://cdn.zwift.com/static/web/launcher/embed.html";
 
-/// The same page in its registration variant, shown on the very first run.
+/// The same page in its registration variant, shown when no account is
+/// remembered.
 pub const REGISTRATION_URL: &str =
     "https://cdn.zwift.com/static/web/launcher/embed.html?registration=true";
 
-/// Marker file under `$SNAP_USER_COMMON` recording that the launcher has run
-/// before. Its absence is what makes a run the first one.
-const FIRST_RUN_MARKER: &str = "first-run";
-
-/// The embed page to load. A first run gets Zwift's registration variant.
-fn embed_url(first_run: bool) -> &'static str {
-    if first_run {
+/// The embed page to load. A run with no remembered account gets Zwift's
+/// registration variant.
+fn embed_url(registration: bool) -> &'static str {
+    if registration {
         REGISTRATION_URL
     } else {
         EMBED_URL
-    }
-}
-
-/// Consume the first-run marker under `base`: this returns true exactly once, on
-/// the call that creates it. A marker that cannot be created reports a returning
-/// user, so a broken store can never turn the registration page into the
-/// permanent landing page.
-fn take_first_run(base: &std::path::Path) -> bool {
-    let marker = base.join(FIRST_RUN_MARKER);
-    if marker.exists() {
-        return false;
-    }
-    std::fs::create_dir_all(base).is_ok() && std::fs::File::create(&marker).is_ok()
-}
-
-/// Whether this is the launcher's first run, and so whether it should show the
-/// registration page. A preview never consumes the marker, so preview runs stay
-/// reproducible, and a missing store is treated as a returning user.
-fn is_first_run(preview: bool) -> bool {
-    if preview {
-        return false;
-    }
-    match std::env::var_os("SNAP_USER_COMMON") {
-        Some(base) => take_first_run(std::path::Path::new(&base)),
-        None => false,
     }
 }
 
@@ -192,11 +165,11 @@ pub struct LoginPanel {
 
 impl LoginPanel {
     /// Build the panel on a persistent session and immediately load the Zwift
-    /// launcher embed page. `logger` is the launcher's own log, used to record
-    /// link handling.
+    /// launcher embed page, or its registration variant when `registration` is
+    /// set. `logger` is the launcher's own log, used to record link handling.
     pub fn new(
         cancellation: Cancellation,
-        preview: bool,
+        registration: bool,
         logger: Option<Arc<Logger>>,
         store: Option<Rc<RefCell<crate::accounts::Store>>>,
     ) -> Self {
@@ -208,7 +181,7 @@ impl LoginPanel {
         }));
         let store = RefCell::new(store);
         wire_webview(&webview, &state, &cancellation, &logger, &store);
-        webview.load_uri(embed_url(is_first_run(preview)));
+        webview.load_uri(embed_url(registration));
 
         let container = gtk::ScrolledWindow::builder()
             .child(&webview)
@@ -277,11 +250,6 @@ impl LoginPanel {
         if let Some(reply) = self.state.borrow_mut().pending.take() {
             let _ = reply.send(false);
         }
-    }
-
-    /// Set the accounts store reference.
-    pub fn set_store(&self, store: Rc<RefCell<crate::accounts::Store>>) {
-        *self.store.borrow_mut() = Some(store);
     }
 }
 
@@ -541,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn first_run_selects_the_registration_page() {
+    fn registration_flag_selects_the_registration_page() {
         assert_eq!(embed_url(true), REGISTRATION_URL);
         assert_eq!(embed_url(false), EMBED_URL);
     }
@@ -565,29 +533,5 @@ mod tests {
         ] {
             assert_eq!(external_url(uri), None, "{uri} should stay with WebKit");
         }
-    }
-
-    #[test]
-    fn first_run_marker_is_consumed_once() {
-        let base = std::env::temp_dir().join(format!("zwsnap-first-run-{}", std::process::id()));
-        std::fs::remove_dir_all(&base).ok();
-        assert!(
-            take_first_run(&base),
-            "the first run should report a first run"
-        );
-        assert!(base.join(FIRST_RUN_MARKER).exists());
-        assert!(!take_first_run(&base), "the second run should not");
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn unwritable_marker_reports_a_returning_user() {
-        // A file where the marker's directory should be makes the marker
-        // impossible to create, so the registration page must not be promised.
-        let path =
-            std::env::temp_dir().join(format!("zwsnap-first-run-file-{}", std::process::id()));
-        std::fs::write(&path, b"not a directory").ok();
-        assert!(!take_first_run(&path.join("nested")));
-        std::fs::remove_file(&path).ok();
     }
 }

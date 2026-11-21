@@ -106,15 +106,13 @@ picker instead: a grid of rider cards appears at the top of the window, where th
 install tiles were, above the WebView, which keeps showing its embed page. The
 WebView leaves that page only for the gate's own login or "Add another account",
 and `LoginPanel::show_embed` puts it back once the login succeeds. With no
-accounts at all the gate behaves exactly as described above, so first runs are
-unchanged. The same gate also adopts a pre-picker install (a launch token but no
-account list) as the first account. See `.kb/accounts-picker.md` for the store,
-the cards and the GTK4 traps in that code.
-
-The very first run loads the `?registration=true` variant of the embed page instead:
-the panel writes a marker at `$SNAP_USER_COMMON/first-run` on its first construction
-and treats a later run as returning. The marker is independent of login state, and a
-`--preview` run never consumes it, so preview runs stay reproducible.
+accounts at all the gate behaves exactly as described above. The launcher decides
+which embed page to load from the store, not from a marker: with no account
+remembered (and not a `--preview` run) it opens on the `?registration=true`
+variant, otherwise on the plain page. The same startup step also adopts a
+pre-picker install (a launch token but no account list) as the first account, so
+an upgrade is not sent to the registration page. See `.kb/accounts-picker.md` for
+the store, the cards and the GTK4 traps in that code.
 
 Link clicks and new-window requests in the panel are handed to the system browser
 with `xdg-open` rather than followed in the panel; the launcher's own login flow is

@@ -15,7 +15,7 @@ Nothing else in the launcher knows about accounts. `LaunchConfig.token_file` is 
 
 ## §2 - Zero Accounts Falls Back To The WebView Login
 
-The picker is only shown when the store holds at least one account. With none, `Event::LoginRequired` starts the WebView login and leaves the picker hidden, so first runs and fully-forgotten stores behave as before. The runtime/preview/close GTK suites cover that path.
+The picker is only shown when the store holds at least one account. With none, `Event::LoginRequired` starts the WebView login and leaves the picker hidden, so a fresh install (and a store whose accounts were all forgotten) logs in through the WebView. The runtime/preview/close GTK suites cover that path.
 
 ## §3 - Nothing Here May Block A Launch
 
@@ -51,7 +51,7 @@ Avatars are decoded at up to 72 by 72 pixels and displayed in a 72-pixel square;
 
 The grid's height is pinned by `AccountsPanel::update_height`: a `FlowBox` reports its natural height for its *natural* width, which packs every card onto one line, so the `ScrolledWindow`'s `min_content_height` is set from the grid measured at the width it actually has (capped at `MAX_GRID_HEIGHT`). The width is only known after allocation, so `request_height_update` retries on a short timer until it is.
 
-Remove shows a `gtk::MessageDialog` whose confirm button is labelled **Remove account**, then `Store::remove` deletes the directory, clears `pairing-token.json` when that account was selected, saves and rebuilds the grid. The remove control is icon-only (its tooltip names the rider), so it never competes with the card's name text as an OCR click target; because every card's remove icon is identical, automated suites must identify the *removed* card by position (first match) and the *surviving* card by name.
+Remove shows a `gtk::MessageDialog` whose confirm button is labelled **Remove account**, then `Store::remove` deletes the directory, clears `pairing-token.json` when that account was selected or when it was the last account, saves and rebuilds the grid. The remove control is icon-only (its tooltip names the rider), so it never competes with the card's name text as an OCR click target; because every card's remove icon is identical, automated suites must identify the *removed* card by position (first match) and the *surviving* card by name.
 
 ## Selecting and adding
 
@@ -65,7 +65,7 @@ The picker opens with cached data, then `refresh_accounts` (in `gui.rs`) fetches
 
 ## Legacy migration
 
-An install from before the picker has `pairing-token.json` but no `accounts.json`. On `LoginRequired`, when the store loads empty, the launcher derives claims from that token and calls `Store::import_legacy`, which adopts it as the first account (`upsert` with an empty profile) and marks it last used. Without this an upgrading rider would be shown the WebKit login again despite a valid token.
+An install from before the picker has `pairing-token.json` but no `accounts.json`. At startup, before the login panel is built, the launcher loads the store and, when it is empty, derives claims from that token and calls `Store::import_legacy`, which adopts it as the first account (`upsert` with an empty profile) and marks it last used. Without this an upgrading rider would be shown the WebKit login again despite a valid token. Because the store is loaded before the embed page is chosen, an upgraded install is never sent to the registration page. `Store::remove` clears the launch token once the last account is forgotten, so an emptied store is not re-adopted here.
 
 ## GTK4 traps
 

@@ -363,7 +363,10 @@ impl Store {
             fs::remove_dir_all(&dir)
                 .map_err(|e| format!("cannot remove {}: {e}", dir.display()))?;
         }
-        if self.last_used.as_deref() == Some(id) {
+        // Clear the launch token when the last account goes away, so an emptied
+        // store is not re-adopted from the token on the next startup (which
+        // would hide the registration page and resurrect a forgotten rider).
+        if self.accounts.is_empty() || self.last_used.as_deref() == Some(id) {
             self.last_used = None;
             let _ = fs::remove_file(&self.token_file);
         }
@@ -648,6 +651,29 @@ mod tests {
         assert_eq!(store.accounts.len(), 1);
         assert!(store.is_active(&a));
         assert!(common.join(LAUNCH_TOKEN).exists());
+
+        let _ = fs::remove_dir_all(&common);
+    }
+
+    #[test]
+    fn removing_the_last_account_clears_the_launch_token() {
+        let common = scratch("removelast");
+        let mut store = Store::open(&common);
+        let a = store
+            .upsert(&token("a"), &profile("A", "One"), &claims("sub-a", "a"))
+            .unwrap();
+        let b = store
+            .upsert(&token("b"), &profile("B", "Two"), &claims("sub-b", "b"))
+            .unwrap();
+        store.select(&b).unwrap();
+        // Removing the inactive account while another remains keeps the token.
+        store.remove(&a).unwrap();
+        assert!(common.join(LAUNCH_TOKEN).exists());
+        // Removing the last one empties the store, so the token goes too.
+        store.remove(&b).unwrap();
+        assert!(store.is_empty());
+        assert!(store.last_used_id().is_none());
+        assert!(!common.join(LAUNCH_TOKEN).exists());
 
         let _ = fs::remove_dir_all(&common);
     }

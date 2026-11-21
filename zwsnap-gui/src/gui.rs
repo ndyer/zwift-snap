@@ -509,28 +509,57 @@ fn build_window(
         }
     }
 
-    let login_panel = std::rc::Rc::new(LoginPanel::new(
-        cancellation.clone(),
-        preview,
-        logger.clone(),
-        None, // Store will be set later when accounts_panel is created
-    ));
-
-    // The Settings dialog is built while hidden; `present` shows it on demand.
-    let dialog = SettingsDialog::new(&window, settings.clone());
-
-    // --- Account picker ---------------------------------------------------
-    // The picker sits above the launcher's own login panel: once at least one
-    // account is remembered the grid appears at the top (where the install
-    // tiles were) and the WebView keeps showing its embed page below. With no
-    // account remembered the WebView shows the login page and the grid stays
-    // hidden.
+    // --- Accounts ---------------------------------------------------------
+    // The store lives for the whole session: the picker reads and writes it,
+    // and the login panel records a successful "add another account" login in
+    // it.
     let common = settings
         .path
         .parent()
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let store = std::rc::Rc::new(std::cell::RefCell::new(Store::open(&common)));
+    {
+        let mut guard = store.borrow_mut();
+        guard.load();
+        // An install from before the picker has a launch token but no account
+        // list: adopt that rider so an upgrade does not ask them to log in
+        // again. Best-effort: a failure just leaves the store empty.
+        if guard.is_empty() {
+            if let Ok(token) = guard.launch_token() {
+                let claims = oauth::token_claims(&token);
+                match guard.import_legacy(&claims) {
+                    Ok(Some(_)) => {
+                        if let Err(error) = guard.save() {
+                            eprintln!("Unable to save accounts: {error}");
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        eprintln!("Unable to adopt the existing login: {error}");
+                    }
+                }
+            }
+        }
+    }
+    // With no account remembered (and not a preview) the launcher opens on
+    // Zwift's registration page; a `--preview` run stays reproducible.
+    let registration = !preview && store.borrow().is_empty();
+
+    let login_panel = std::rc::Rc::new(LoginPanel::new(
+        cancellation.clone(),
+        registration,
+        logger.clone(),
+        Some(store.clone()),
+    ));
+
+    // The Settings dialog is built while hidden; `present` shows it on demand.
+    let dialog = SettingsDialog::new(&window, settings.clone());
+
+    // The picker appears at the top of the window (where the install tiles
+    // were) once at least one account is remembered; the WebView keeps showing
+    // its embed page below. With no account the WebView shows the login page
+    // and the grid stays hidden.
     let grid_decision: std::rc::Rc<std::cell::RefCell<Option<Sender<bool>>>> = Default::default();
     let add_result: std::rc::Rc<std::cell::RefCell<Option<Receiver<bool>>>> = Default::default();
 
@@ -626,9 +655,6 @@ fn build_window(
         let add = {
             let login_panel = login_panel.clone();
             let add_result = add_result.clone();
-            // Hand the login panel the store so a successful "add account"
-            // login records the new rider.
-            login_panel.set_store(store.clone());
             Box::new(move || {
                 // A fresh, cookie-less session: the current account's SSO cookie
                 // must not silently sign the new login back into itself.
@@ -841,36 +867,12 @@ fn build_window(
                     // The install tiles have served their purpose; the picker or
                     // the WebView login takes over the window from here.
                     install_area.set_visible(false);
-                    let remembered = {
-                        {
-                            let mut guard = store.borrow_mut();
-                            guard.load();
-                            // An install from before the picker existed has a
-                            // launch token but no account list: adopt that rider
-                            // so an upgrade does not ask them to log in again.
-                            if guard.is_empty() {
-                                if let Ok(token) = guard.launch_token() {
-                                    let claims = oauth::token_claims(&token);
-                                    match guard.import_legacy(&claims) {
-                                        Ok(Some(_)) => {
-                                            if let Err(error) = guard.save() {
-                                                eprintln!("Unable to save accounts: {error}");
-                                            }
-                                        }
-                                        Ok(None) => {}
-                                        Err(error) => {
-                                            eprintln!(
-                                                "Unable to adopt the existing login: {error}"
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        accounts_panel.has_accounts()
-                    };
+                    // The store was loaded (and a legacy install adopted) at
+                    // startup, so this only decides between the picker and the
+                    // WebView login.
+                    let remembered = accounts_panel.has_accounts();
                     if !remembered {
-                        // First run, or every account was forgotten: the WebView
+                        // No account is remembered: the WebView
                         // loads the launcher's login page. This and "add another
                         // account" are the only times the embed page is replaced;
                         // it is put back once the login succeeds. Clear the
