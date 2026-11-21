@@ -275,8 +275,29 @@ main() {
 
     # yarf exits 120 with no output when its stdout is a plain file (snap stdio
     # quirk), so let it write through a pipe into the log file instead.
-    if ! yarf --platform Mir "${YARF_SUITE_DIR}" --outdir "${YARF_OUT_DIR}" "${yarf_args[@]}" \
-        2>&1 | tee "${YARF_OUT_DIR}/yarf.log"; then
+    yarf --platform Mir "${YARF_SUITE_DIR}" --outdir "${YARF_OUT_DIR}" "${yarf_args[@]}" \
+        > >(tee "${YARF_OUT_DIR}/yarf.log") 2>&1 &
+    local yarf_pid=$!
+
+    # Fail fast when the launcher cannot start the game. The game can exit before
+    # its window appears (for example when the wine build is missing a library it
+    # needs) and the launcher then logs "Failed to start Zwift"; without this the
+    # suite grinds through its OCR timeouts against a compositor with nothing on
+    # it, turning a ten-second failure into minutes. Stop the suite as soon as
+    # that marker appears so the failure is reported at once.
+    local suite_failed=0
+    while kill -0 "${yarf_pid}" 2> /dev/null; do
+        if grep -q "Failed to start Zwift" "${YARF_OUT_DIR}/zwift.out" 2> /dev/null; then
+            echo "smoke: the launcher failed to start Zwift before the window appeared"
+            kill "${yarf_pid}" 2> /dev/null
+            suite_failed=1
+            break
+        fi
+        sleep 2
+    done
+    local yarf_status=0
+    wait "${yarf_pid}" || yarf_status=$?
+    if [[ ${suite_failed} == 1 || ${yarf_status} != 0 ]]; then
         echo "smoke: the yarf suite failed, see ${YARF_OUT_DIR}/yarf.log"
         report_failure
         exit 1
