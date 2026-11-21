@@ -537,7 +537,15 @@ fn build_window(
         let select = {
             let store = store.clone();
             let grid_decision = grid_decision.clone();
+            let title = title.clone();
+            let launch_spinner = launch_spinner.clone();
+            let install_area = install_area.clone();
             Box::new(move |id: String| {
+                // Show "Launching Zwift" immediately
+                install_area.set_visible(false);
+                launch_spinner.start();
+                title.set_text("Launching Zwift");
+                
                 {
                     let mut store = store.borrow_mut();
                     match store.select(&id) {
@@ -867,6 +875,7 @@ fn build_window(
                         continue;
                     }
                     refresh_accounts(&store, &accounts_panel, logger.as_ref());
+                    accounts_panel.clear_selection_highlight();
                     accounts_panel.refresh();
                     *grid_decision.borrow_mut() = Some(decision);
                     title.set_text("Choose a rider");

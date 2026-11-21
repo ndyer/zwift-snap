@@ -52,6 +52,7 @@ pub struct AccountsPanel {
     logger: Option<Arc<Logger>>,
     select: Rc<dyn Fn(String)>,
     add: Rc<dyn Fn()>,
+    selected_card: std::cell::RefCell<Option<gtk::Button>>,
 }
 
 impl AccountsPanel {
@@ -105,6 +106,7 @@ impl AccountsPanel {
             logger,
             select: Rc::from(handlers.select),
             add: Rc::from(handlers.add),
+            selected_card: std::cell::RefCell::new(None),
         });
 
         // The grid's height depends on the width it is given, which is only
@@ -301,9 +303,14 @@ impl AccountsPanel {
         launch.set_margin_top(6);
         launch.set_margin_bottom(6);
         let launch_id = account.id.clone();
+        let launch_button = launch.clone();
         let weak = self.weak();
         launch.connect_clicked(move |_| {
             if let Some(panel) = weak.upgrade() {
+                // Highlight the selected card immediately
+                panel.highlight_selected_card(&launch_button);
+                
+                // Call the original select callback
                 (panel.select)(launch_id.clone());
             }
         });
@@ -398,6 +405,28 @@ impl AccountsPanel {
         button
     }
 
+    /// Highlight the selected card and remove highlight from previously selected card
+    fn highlight_selected_card(&self, selected: &gtk::Button) {
+        // Remove highlight from previously selected card
+        if let Some(prev_selected) = self.selected_card.borrow().as_ref() {
+            prev_selected.remove_css_class("selected");
+        }
+        
+        // Highlight the newly selected card
+        selected.add_css_class("selected");
+        
+        // Store the reference to the newly selected card
+        *self.selected_card.borrow_mut() = Some(selected.clone());
+    }
+    
+    /// Clear the selection highlight
+    pub fn clear_selection_highlight(&self) {
+        if let Some(selected) = self.selected_card.borrow().as_ref() {
+            selected.remove_css_class("selected");
+        }
+        *self.selected_card.borrow_mut() = None;
+    }
+
     fn weak(self: &Rc<Self>) -> std::rc::Weak<AccountsPanel> {
         Rc::downgrade(self)
     }
@@ -468,6 +497,10 @@ const CSS: &str = "
 }
 .account-card:hover {
     background-color: rgba(0, 0, 0, 0.18);
+}
+.account-card.selected {
+    border: 2px solid #4A90D9;
+    background-color: rgba(74, 144, 217, 0.15);
 }
 .account-remove {
     min-width: 0;
