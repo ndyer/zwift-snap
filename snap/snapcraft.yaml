@@ -350,7 +350,7 @@ parts:
       # snap/prune-closure.sh for the closure walk. Bump this comment after
       # editing that script or Wine's prime filters, craft-parts only
       # re-runs the prime step when the script text tracked in the part state
-      # changes: v16
+      # changes: v17
       # The gschemas.compiled that Debian creates in a trigger is not part of the staged
       # packages. Without it GTK programs abort with "No GSettings schemas are installed".
       glib-compile-schemas "${CRAFT_PRIME}/usr/share/glib-2.0/schemas"
@@ -434,6 +434,10 @@ parts:
           bin/runfromprocess-rs.exe \
           usr/bin/yad \
           usr/share/icons/Adwaita \
+          usr/share/locale \
+          usr/share/man \
+          usr/share/xml/iso-codes \
+          usr/share/iso-codes \
           opt/wine-devel/bin/widl \
           opt/wine-devel/bin/winebuild \
           opt/wine-devel/bin/winegcc \

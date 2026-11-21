@@ -49,12 +49,27 @@ removed_binaries=(
 # theme (icons and cursors) arrives transitively with libgtk-4-1; the launcher
 # carries its own bundled icons in the binary (see zwsnap-gui/build.rs) and names
 # no theme icons, so the whole theme is dropped here.
+# The locale, man and iso-codes trees arrive transitively with the WebKit
+# stage-packages of the launcher (iso-codes is pulled in by libwebkitgtk-6.0-4):
+# usr/share/locale holds ~170 languages x 14 domains (WebKitGTK-6.0.mo plus 13
+# iso_* catalogs), usr/share/xml/iso-codes and usr/share/iso-codes the ISO
+# country/language/currency databases in XML and JSON form, usr/share/man the
+# man pages of the stage-packages. Nothing in the snap reads them: the launcher
+# is English-only, calls no gettext/textdomain and sets no locale environment,
+# so gettext falls back to the English msgid strings, and no code touches the
+# iso-codes data. Wine's own translations never ship (its po/*.mo are
+# build-time inputs for wrc, compiled into PE resources); wine's runtime NLS
+# data is a different tree (opt/wine-devel/share/wine/nls) and is NOT touched.
 removed_trees=(
     usr/share/perl
     usr/lib/x86_64-linux-gnu/perl
     usr/share/perl5
     usr/share/sounds
     usr/share/icons/Adwaita
+    usr/share/locale
+    usr/share/man
+    usr/share/xml/iso-codes
+    usr/share/iso-codes
 )
 
 # Library search path used to resolve DT_NEEDED entries, in ld.so order.

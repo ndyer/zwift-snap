@@ -19,6 +19,13 @@ the build on over-pruning (runtime file missing) or a stale prime directory. Bum
 `v<N>` comment there when editing `prune-closure.sh`, otherwise craft-parts will not
 re-run the prime step.
 
+`prune-closure.sh` also removes the launcher's WebKit-borne data trees:
+`usr/share/locale` (~170 languages of gettext catalogs), `usr/share/man`,
+`usr/share/xml/iso-codes` and `usr/share/iso-codes` (ISO databases in XML/JSON).
+Nothing reads them — the launcher is English-only, calls no gettext, and wine's
+own translations are build-time-only (`opt/wine-devel/share/wine/nls` is NOT
+pruned; it is wine's runtime NLS data).
+
 ## Stale prime after removing a part
 
 Both guards above say to run the `clean` action, but that reinstalls the build environment and rebuilds Wine from scratch
