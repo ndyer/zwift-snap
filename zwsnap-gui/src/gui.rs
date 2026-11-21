@@ -456,6 +456,20 @@ fn build_window(
         }
     }
 
+    // Escape quits the whole launcher regardless of where focus sits, reaching
+    // the same teardown as the window's close button via `window.close()`.
+    let shortcut_controller = gtk::ShortcutController::new();
+    if let Some(trigger) = gtk::ShortcutTrigger::parse_string("Escape") {
+        let close_target = window.clone();
+        let action = gtk::CallbackAction::new(move |_, _| {
+            close_target.close();
+            glib::Propagation::Proceed
+        });
+        let shortcut = gtk::Shortcut::new(Some(trigger), Some(action));
+        shortcut_controller.add_shortcut(shortcut);
+    }
+    window.add_controller(shortcut_controller);
+
     // --- Accounts ---------------------------------------------------------
     // The store lives for the whole session: the picker reads and writes it,
     // and the login panel records a successful "add another account" login in
@@ -879,7 +893,6 @@ fn build_window(
                         logger.as_ref(),
                         cancellation.clone(),
                     );
-                    accounts_panel.clear_selection_highlight();
                     accounts_panel.refresh();
                     *grid_decision.borrow_mut() = Some(decision);
                     title.set_text("Choose a rider");

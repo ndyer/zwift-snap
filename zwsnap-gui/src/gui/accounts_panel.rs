@@ -6,12 +6,14 @@
 //! icon beside the value, or the label and value together in text mode -
 //! and a muted line with level, FTP and weight. A slim bar under that line fills
 //! with progress toward the rider's next level when the profile carries it. The
-//! whole card is a single
-//! button: clicking anywhere on it launches that account. A small remove icon
-//! floats over the card's top-right corner and forgets the account. The card
-//! used last gets a "Last used" pill and is focused, so Enter relaunches it. An
-//! "Add another account" button, which the launcher places in the window header,
-//! adds a new account by logging in.
+//! whole card is the launch target: clicking it, or pressing Space/Enter once it
+//! is highlighted, launches that account, and the arrow keys move the highlight
+//! around the grid (native `GtkFlowBox` navigation). A small remove icon floats
+//! over the card's top-right corner and forgets the account. The card used last
+//! gets a "Last used" pill and starts highlighted and focused, so Enter
+//! relaunches it; Escape quits the launcher. An "Add another account" button,
+//! which the launcher places in the window header, adds a new account by logging
+//! in.
 //!
 //! The panel owns the [`Store`] and rebuilds the grid from it on
 //! [`AccountsPanel::refresh`]; selecting and removing are the panel's own
@@ -59,7 +61,6 @@ pub struct AccountsPanel {
     logger: Option<Arc<Logger>>,
     select: Rc<dyn Fn(String)>,
     add: Rc<dyn Fn()>,
-    selected_card: std::cell::RefCell<Option<gtk::Button>>,
 }
 
 impl AccountsPanel {
@@ -73,7 +74,6 @@ impl AccountsPanel {
         install_css();
 
         let flow = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
             .homogeneous(true)
             .max_children_per_line(4)
             .min_children_per_line(1)
@@ -113,7 +113,6 @@ impl AccountsPanel {
             logger,
             select: Rc::from(handlers.select),
             add: Rc::from(handlers.add),
-            selected_card: std::cell::RefCell::new(None),
         });
 
         // The grid's height depends on the width it is given, which is only
@@ -133,6 +132,28 @@ impl AccountsPanel {
                     logger.debug("Adding a new account from the picker");
                 }
                 (panel.add)();
+            }
+        });
+
+        // A card is activated either by a click or by Space/Enter during
+        // keyboard navigation. The native `FlowBox` handles both and reports the
+        // child here; map its index back to the account id from the store order
+        // built up in `refresh`.
+        let weak = Rc::downgrade(&panel);
+        panel.flow.connect_child_activated(move |_, child| {
+            let Some(panel) = weak.upgrade() else { return };
+            let index = child.index();
+            if index < 0 {
+                return;
+            }
+            let id = panel
+                .store
+                .borrow()
+                .accounts
+                .get(index as usize)
+                .map(|account| account.id.clone());
+            if let Some(id) = id {
+                (panel.select)(id);
             }
         });
 
@@ -171,12 +192,26 @@ impl AccountsPanel {
 
         let store = self.store.borrow();
         let last_used = store.last_used_id().map(str::to_owned);
+        // Remember where the last-used account sits so it can seed the keyboard
+        // cursor below (falling back to the first card when there is none).
+        let preferred = last_used
+            .as_deref()
+            .and_then(|id| store.accounts.iter().position(|a| a.id == id))
+            .unwrap_or(0);
         for account in &store.accounts {
             let card = self.card(&store, account, last_used.as_deref());
             // `insert(-1)` appends; the shorthand needs GTK 4.6, beyond the crate's API level.
             self.flow.insert(&card, -1);
         }
         drop(store);
+
+        // Seed both the keyboard cursor and the `:selected` highlight on the
+        // preferred card, so arrow keys and Enter work before any click. A focus
+        // on the `FlowBoxChild` runs the flow box's own selection update.
+        if let Some(child) = self.flow.child_at_index(preferred as i32) {
+            child.child_focus(gtk::DirectionType::TabForward);
+        }
+
         self.request_height_update();
     }
 
@@ -248,11 +283,12 @@ impl AccountsPanel {
         account: &Account,
         last_used: Option<&str>,
     ) -> gtk::Widget {
-        // The card is a single button: the avatar and details sit inside it and
-        // clicking anywhere on it launches the rider. The remove icon floats
-        // over the button's top-right corner as an `Overlay` child, so a click
-        // on the icon is handled by the icon alone and never also fires the
-        // launch button underneath.
+        // The card is a plain surface: the avatar and details sit inside it. The
+        // `FlowBox` reports `child-activated` (a click, or Space/Enter during
+        // keyboard navigation) and the launcher launches the rider. The remove
+        // icon floats over the card's top-right corner as an `Overlay` child, so
+        // a click on the icon is handled by the icon alone and never also
+        // activates the card underneath.
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         top.append(&self.avatar(store, account));
 
@@ -331,40 +367,17 @@ impl AccountsPanel {
 
         top.append(&info);
 
-        let launch = gtk::Button::builder()
-            .child(&top)
-            .tooltip_text(format!("Launch {}", account.name))
-            .build();
-        launch.add_css_class("account-card");
-        launch.set_margin_top(6);
-        launch.set_margin_bottom(6);
-        let launch_id = account.id.clone();
-        let launch_button = launch.clone();
-        let weak = self.weak();
-        launch.connect_clicked(move |_| {
-            if let Some(panel) = weak.upgrade() {
-                // Highlight the selected card immediately
-                panel.highlight_selected_card(&launch_button);
-
-                // Call the original select callback
-                (panel.select)(launch_id.clone());
-            }
-        });
-        if last_used == Some(account.id.as_str()) {
-            // Focus the last-used card's button, so Enter relaunches it.
-            glib::idle_add_local_once({
-                let weak = launch.downgrade();
-                move || {
-                    if let Some(button) = weak.upgrade() {
-                        button.grab_focus();
-                    }
-                }
-            });
-        }
+        // The card surface itself carries the button styling, tooltip and
+        // margins; activation is handled by the `FlowBox`'s `child-activated`
+        // signal rather than a nested button.
+        top.add_css_class("account-card");
+        top.set_margin_top(6);
+        top.set_margin_bottom(6);
+        top.set_tooltip_text(Some(&format!("Launch {}", account.name)));
 
         let overlay = gtk::Overlay::new();
         overlay.set_halign(gtk::Align::Start);
-        overlay.set_child(Some(&launch));
+        overlay.set_child(Some(&top));
         overlay.add_overlay(&self.remove_button(account));
         overlay.upcast()
     }
@@ -441,28 +454,6 @@ impl AccountsPanel {
         button
     }
 
-    /// Highlight the selected card and remove highlight from previously selected card
-    fn highlight_selected_card(&self, selected: &gtk::Button) {
-        // Remove highlight from previously selected card
-        if let Some(prev_selected) = self.selected_card.borrow().as_ref() {
-            prev_selected.remove_css_class("selected");
-        }
-
-        // Highlight the newly selected card
-        selected.add_css_class("selected");
-
-        // Store the reference to the newly selected card
-        *self.selected_card.borrow_mut() = Some(selected.clone());
-    }
-
-    /// Clear the selection highlight
-    pub fn clear_selection_highlight(&self) {
-        if let Some(selected) = self.selected_card.borrow().as_ref() {
-            selected.remove_css_class("selected");
-        }
-        *self.selected_card.borrow_mut() = None;
-    }
-
     fn weak(self: &Rc<Self>) -> std::rc::Weak<AccountsPanel> {
         Rc::downgrade(self)
     }
@@ -533,7 +524,7 @@ const CSS: &str = "
 .account-card {
     background-image: none;
     background-color: rgba(0, 0, 0, 0.10);
-    border: none;
+    border: 2px solid transparent;
     box-shadow: none;
     border-radius: 12px;
     padding: 12px;
@@ -542,7 +533,7 @@ const CSS: &str = "
 .account-card:hover {
     background-color: rgba(0, 0, 0, 0.18);
 }
-.account-card.selected {
+flowboxchild:selected .account-card {
     border: 2px solid #4A90D9;
     background-color: rgba(74, 144, 217, 0.15);
 }
