@@ -195,8 +195,8 @@ impl LoginPanel {
     /// launcher embed page. `logger` is the launcher's own log, used to record
     /// link handling.
     pub fn new(
-        cancellation: Cancellation, 
-        preview: bool, 
+        cancellation: Cancellation,
+        preview: bool,
         logger: Option<Arc<Logger>>,
         store: Option<Rc<RefCell<crate::accounts::Store>>>,
     ) -> Self {

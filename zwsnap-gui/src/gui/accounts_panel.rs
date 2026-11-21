@@ -309,7 +309,7 @@ impl AccountsPanel {
             if let Some(panel) = weak.upgrade() {
                 // Highlight the selected card immediately
                 panel.highlight_selected_card(&launch_button);
-                
+
                 // Call the original select callback
                 (panel.select)(launch_id.clone());
             }
@@ -411,14 +411,14 @@ impl AccountsPanel {
         if let Some(prev_selected) = self.selected_card.borrow().as_ref() {
             prev_selected.remove_css_class("selected");
         }
-        
+
         // Highlight the newly selected card
         selected.add_css_class("selected");
-        
+
         // Store the reference to the newly selected card
         *self.selected_card.borrow_mut() = Some(selected.clone());
     }
-    
+
     /// Clear the selection highlight
     pub fn clear_selection_highlight(&self) {
         if let Some(selected) = self.selected_card.borrow().as_ref() {

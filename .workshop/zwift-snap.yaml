@@ -67,6 +67,11 @@ actions:
     sudo snap install --dangerous "$@" "${newest}"
   lint: |
     cd /project
+    # Disallow trailing whitespace in Rust and shell source files.
+    if git grep -n -I -- '[[:space:]]$' -- '*.rs' '*.sh'; then
+      echo "ERROR: trailing whitespace found in Rust or shell files" >&2
+      exit 1
+    fi
     shellcheck -x zwsnap-runtime/*.sh snap/prune-closure.sh tests/smoke.sh tests/gtk-preview.sh \
       tests/bluetooth.sh tests/pairing.sh tests/dl-cache.sh tests/inhibit.sh tests/tools/yarf/yarf.sh \
       tests/tools/bluetooth/*.sh tests/tools/dl-cache/*.sh \

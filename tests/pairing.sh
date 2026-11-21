@@ -424,7 +424,7 @@ main() {
     bluezoo_scan_start
     start_stub
     append_cacert
-    
+
     # Determine game run duration based on explore mode
     local game_run_seconds="${RUN_SECONDS_DEFAULT}"
     if [[ ${explore_mode} == true ]]; then
