@@ -649,8 +649,9 @@ mod tests {
             .downcast::<gtk::FlowBoxChild>()
             .unwrap();
         let overlay = child.child().unwrap().downcast::<gtk::Overlay>().unwrap();
-        let button = overlay.child().unwrap().downcast::<gtk::Button>().unwrap();
-        let top = button.child().unwrap().downcast::<gtk::Box>().unwrap();
+        // The card is no longer wrapped in a button: the `FlowBox` handles
+        // activation, so the overlay's child is the card's own box.
+        let top = overlay.child().unwrap().downcast::<gtk::Box>().unwrap();
         let picture = top
             .first_child()
             .unwrap()
