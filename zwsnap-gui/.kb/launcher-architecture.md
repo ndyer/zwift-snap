@@ -95,7 +95,13 @@ token/`bluez`/GPU status and offers the maintenance actions (see
 `gui/settings.rs`); the log view is no longer part of that dialog.
 The bottom of the window is a split pane (`gtk::Paned`): a WebKitGTK 6.0 panel on
 the left and the launcher log on the right, hidden until its toggle is activated,
-so hiding it leaves the WebView the full width. The WebKit panel starts
+so hiding it leaves the WebView the full width. When the toggle reveals the log,
+`LogPanel::limit_width` moves the divider so the pane opens at no more than its
+`MAX_WIDTH` (420 px) — the log wraps, so it needs little room, and the leftover
+width goes to the WebView rather than stretching the log across a wide or
+fullscreen window. The divider keeps the login pane at least `LOGIN_WIDTH` (560
+px) and the log at least `MIN_WIDTH` (320 px), so a narrow window's split is
+unchanged; the user can still drag the divider wider. The WebKit panel starts
 on Zwift's launcher embed page and, once installation/update finishes and the login
 gate opens, navigates automatically to the OAuth sign-in page (PKCE and state
 validation protect the exchange). A successful login puts the embed page back and lets the launch continue; an

@@ -730,6 +730,9 @@ fn build_window(
     body.set_resize_end_child(false);
     body.set_shrink_end_child(false);
     body.set_vexpand(true);
+    // The log wraps, so it needs little room; reveal it at a capped width
+    // instead of letting it take the whole window minus the login pane.
+    log_panel.limit_width(&body);
 
     content.append(&header);
     content.append(&install_area);

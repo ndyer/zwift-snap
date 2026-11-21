@@ -18,6 +18,25 @@ use super::icons;
 /// oldest output, matching the limit the launcher used before the pane existed.
 const MAX_CHARS: i32 = 200_000;
 
+/// The narrowest the log pane may become, matching its `min_content_width`.
+pub const MIN_WIDTH: i32 = 320;
+
+/// The widest the log pane opens at. The log wraps, so it needs far less room
+/// than a full window; the leftover width goes to the login pane rather than
+/// stretching the log across the screen.
+pub const MAX_WIDTH: i32 = 420;
+
+/// The width the login pane keeps to the left of the divider. Not squeezing it
+/// below this is why a narrow window's split is unchanged when the log opens.
+const LOGIN_WIDTH: i32 = 560;
+
+/// The divider position that reveals the log at no more than [`MAX_WIDTH`], for
+/// a paned of the given total `width`. The login pane is never squeezed below
+/// [`LOGIN_WIDTH`] and the log never below [`MIN_WIDTH`].
+pub fn divider_position(width: i32) -> i32 {
+    (width - MAX_WIDTH).max(LOGIN_WIDTH).min(width - MIN_WIDTH)
+}
+
 /// The log pane: a scrollable, read-only, monospaced text view plus the toggle
 /// button that shows and hides it.
 pub struct LogPanel {
@@ -37,7 +56,7 @@ impl LogPanel {
         view.set_wrap_mode(gtk::WrapMode::WordChar);
 
         let scroll = gtk::ScrolledWindow::builder()
-            .min_content_width(320)
+            .min_content_width(MIN_WIDTH)
             .min_content_height(180)
             .child(&view)
             .hexpand(true)
@@ -80,6 +99,25 @@ impl LogPanel {
             let mut cutoff = buffer.iter_at_offset(buffer.char_count() - MAX_CHARS);
             buffer.delete(&mut start, &mut cutoff);
         }
+    }
+
+    /// Caps the log pane's width when the toggle reveals it. The paned keeps the
+    /// divider where it was, so without this the log would open at whatever
+    /// width the window leaves it — the whole width minus the login pane on a
+    /// wide or fullscreen window. Dragging the divider wider still works.
+    pub fn limit_width(&self, paned: &gtk::Paned) {
+        self.toggle.connect_toggled({
+            let paned = paned.clone();
+            move |button| {
+                if !button.is_active() {
+                    return;
+                }
+                let width = paned.width();
+                if width > 0 {
+                    paned.set_position(divider_position(width));
+                }
+            }
+        });
     }
 
     /// Reveals or hides the pane, and flips the button's hover text to match.
@@ -130,3 +168,30 @@ const CSS: &str = "
     color: white;
 }
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wide_windows_open_the_log_at_the_cap() {
+        // A wide window leaves room for far more than the log needs, so it opens
+        // at MAX_WIDTH and the login pane takes the rest.
+        assert_eq!(divider_position(1920), 1920 - MAX_WIDTH);
+        assert_eq!(divider_position(1280), 1280 - MAX_WIDTH);
+    }
+
+    #[test]
+    fn narrow_windows_leave_the_split_unchanged() {
+        // At an 880-wide window the log would only be its minimum anyway, so the
+        // divider stays where the login pane's preferred width puts it.
+        assert_eq!(divider_position(880), LOGIN_WIDTH);
+    }
+
+    #[test]
+    fn the_log_never_drops_below_its_minimum() {
+        // A window too small for both preferences still gives the log MIN_WIDTH,
+        // squeezing the login pane instead.
+        assert_eq!(divider_position(600), 600 - MIN_WIDTH);
+    }
+}
