@@ -60,6 +60,20 @@ to grep a trace: a `^[0-9a-f]{4}:trace` pattern hides the non-trace lines such a
 in the log, and `sc query` enumeration prints nothing in wine — read the `Group` values from
 the prefix registry instead.
 
+## Observed non-blocking shim gaps
+
+A Zwift 1.126.0 session reported these Wine shim gaps; none affected discovery, pairing, or
+the trainer's GATT connection:
+
+- `ble_device_factory_QueryInterface {5f12c06b-3bac-43e8-ad16-563271bd41c2}` returned
+  `E_NOINTERFACE` as not implemented.
+- `vccorlib:Delegate_ctor` is a stub.
+- `radios:radio_add_StateChanged` is a semi-stub.
+
+Treat these as observed compatibility gaps, not evidence of a Bluetooth transport failure.
+Recheck their impact if a future Zwift code path starts depending on the missing interface,
+delegate behavior, or radio state-change event.
+
 ## Getting a rebuilt driver into a prefix
 
 A rebuilt `winebth.sys` reaches an existing prefix by itself: the driver binary is copied into

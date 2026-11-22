@@ -60,8 +60,9 @@ wrong mode.
 With `bluetooth_debug` set, the launcher appends `+bluetooth` and `+winebth` to
 `WINEDEBUG` before starting the game, so the wine Bluetooth driver's trace is written
 wherever the game's output goes — `$SNAP_USER_COMMON/zwift.log` and the terminal. This is
-the tracing used to diagnose device discovery and pairing; it is off by default and the
-trace is verbose, so leave it off in normal use.
+the tracing used to diagnose device discovery and pairing. The snap builds Wine with
+TRACE support so this setting can enable the driver's Bluetooth traces; it is off by
+default and the trace is verbose, so leave it off in normal use.
 
 ## The Settings dialog
 

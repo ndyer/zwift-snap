@@ -159,9 +159,9 @@ parts:
       - --enable-archs=x86_64
       # nothing in the snap runs wine's test suite
       - --disable-maintainer-mode
-      - --disable-debug
       - --disable-tests
       - --disable-build-id
+      # Keep Wine TRACE support so the launcher's bluetooth_debug setting can enable Bluetooth diagnostics.
       # Only build the DLLs and programs Zwift needs: every other
       # dlls/ and programs/ subdirectory is switched off with its
       # enable_<name>=no configure assignment. Setting the variable adds
