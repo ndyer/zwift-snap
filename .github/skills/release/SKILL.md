@@ -114,16 +114,16 @@ git -C /project tag -l 'v*' | sort -V | tail -1
 ```
 
 Draft `.github/release-notes/v<X.Y>.md`. Base it on the commits since the previous tag and
-keep the house shape. **Every commit bullet carries its full 40-character SHA in
-parentheses, with no markdown link**: GitHub auto-links a bare commit SHA in the rendered
-Release body. Use the full SHA, not the abbreviated one — the short form does not autolink
-reliably.
+keep the house shape. **Each commit bullet leads with its full 40-character SHA, then a
+colon and the subject**, with no markdown link: GitHub auto-links a bare commit SHA in the
+rendered Release body. Use the full SHA, not the abbreviated one — the short form does not
+autolink reliably.
 
 ```bash
-git -C /project log --no-merges --format='- %s (%H)' "v<prev>..HEAD"
+git -C /project log --no-merges --format='- %H: %s' "v<prev>..HEAD"
 ```
 
-That produces lines like `- Add a settings dialog to the launcher (1a2b3c4d5e6f...)`.
+That produces lines like `- 1a2b3c4d5e6f...: Add a settings dialog to the launcher`.
 Write a short "Highlights" section for the user-facing changes (prose, no SHAs needed), then
 the commit list.
 **Stop and let the user edit the file.** Do not commit it until they have had a chance to
