@@ -18,6 +18,11 @@ CI runs `lint`, `test`, `gtk-preview`, `inhibit`, `build`, `install` and `blueto
 on every change to `main`, so a green run there covers those; `smoke` and `pairing` stay
 local because they need a host display (see `.github/.kb/edge-build-workflow.md`).
 
+A **tagged release** runs more: `release.yml` runs every suite above *plus* `smoke` and
+`pairing` on a virtual display before uploading the snap artifact, and `publish.yml` then
+pushes it to `latest/beta` and creates the GitHub Release (see
+`.github/.kb/release-workflow.md` and `.kb/release-procedure.md`).
+
 The BLE connection-interval override (`bt_tuning`) has no runnable end-to-end check:
 bluezoo mocks only the BlueZ D-Bus interface, not the raw kernel management socket that
 `bluetooth-control` unlocks, and the workshop's own `hci0` is rfkill-blocked. Verify it with

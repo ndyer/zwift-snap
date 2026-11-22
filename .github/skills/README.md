@@ -31,6 +31,10 @@ Only this `README.md` is tracked in git; the skill directories and the
 the fetched files** — the next launch overwrites them. To change a skill, propose the
 change upstream.
 
+`release/` is the exception: it is a **project-local** skill, tracked in git and maintained
+here. `fetch-skills.sh` only manages the three upstream skills above, so it is never
+touched by a launch — edit it freely.
+
 Because the skills are fetched during launch, they are absent in a bare checkout that has
 never launched the workshop, and in environments (e.g. GitHub-side agents) that only see
 the repository.

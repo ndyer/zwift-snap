@@ -33,6 +33,18 @@ the directory to force a fresh clone. `ZWIFT_WINE_REPO`, `ZWIFT_WINE_REF`,
 depth (0 for the full single-branch history, which the release procedure's wine
 tagging needs) and the target.
 
+`workshop run -- wine-checkout <tag-or-branch>` moves that clone to a tag or branch of the
+fork, fetching it over HTTPS because the clone's origin is SSH and the workshop has no key.
+Use it to build or test a release's exact Wine source
+(`wine-checkout wine-11.21-zwiftsnap-v0.18`) or to reproduce an older one; it dirties the
+wine part, so the next `build` is a full Wine rebuild. `release.yml` uses it after launch to
+build from the tag that matches the release. Wine tags must start with `wine-<version>-`
+(see `.kb/release-procedure.md`), because Wine reads its build version from `git describe`.
+
+There is deliberately no `gh` or other GitHub client in the workshop: releasing means
+creating tags locally and letting the user push and publish (see
+`.kb/release-procedure.md`). Do not install one or authenticate on the user's behalf.
+
 ## The Use Workshop skill
 
 The canonical agent documentation for operating Workshop is the `use-workshop` skill

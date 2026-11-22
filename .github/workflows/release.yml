@@ -1,0 +1,254 @@
+# Release build of the Zwift snap.
+#
+# Triggered by pushing a version tag (vX.Y). Runs the full test suite inside the Workshop,
+# including the visual tests the daily edge build skips (smoke and pairing), builds the snap
+# and uploads it as an artifact. It does NOT touch the Store and does NOT create a GitHub
+# Release: that is publish.yml's job, dispatched separately so it can be re-run on its own
+# without rebuilding. This split is what keeps a Store upload retryable.
+#
+# The suites run headless. tests/smoke.sh and tests/pairing.sh pick SMOKE_DISPLAY=auto, which
+# uses a virtual Mir output when no host display is available; a runner has none (Workshop
+# silently skips the non-auto-connectable desktop plug), so both render headless without any
+# extra configuration. The smoke test downloads Zwift on a cold prefix (tens of minutes) and
+# the pairing test then reuses that prefix; the smoke test's download cache lives in $HOME
+# and is deliberately not shipped to CI, so every release run pays for the download once.
+#
+# Prerequisites checked before the expensive work starts:
+#   - .github/release-notes/<tag>.md is committed on main (publish.yml reads it from there).
+#   - the wine fork has the matching tag wine-<wine-version>-zwiftsnap-<tag>, pushed
+#     separately. The wine-<version>- prefix is mandatory: Wine derives its build version
+#     from `git describe`, so a tag that does not start with the wine version makes
+#     `wine --version` and anything parsing it wrong.
+# See .github/.kb/release-workflow.md and .kb/release-procedure.md.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag to build and verify (for example v0.18)
+        required: true
+        type: string
+
+permissions:
+  # Reading the repository is all the checks and the build need; the ccache save below
+  # needs actions:write.
+  contents: read
+  actions: write
+
+# A release run is never cancelled: a cancelled run can leave a partly built artifact and
+# wastes the Zwift download. A newer push of the same tag queues behind the running one.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: build and verify
+    runs-on: ubuntu-24.04
+    # Wine, the LXD container, its snaps, Zwift's download and the build tree need more room
+    # than a stock runner has. Nothing removed below is used by the run.
+    timeout-minutes: 240
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      WINE_REPO: https://github.com/ndyer/wine.git
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.0
+        with:
+          # A tag, or the input for a manual backfill. fetch-depth 0 is required: the
+          # version-generator part derives the snap version from `git describe --tags`.
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - name: Check the release prerequisites
+        # Fail fast, before the workshop launch and the Wine build: the notes must be on main
+        # (a backfilled tag predates its notes file, so the tag tree is not the source) and
+        # the matching wine fork tag must be pushed.
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin '+refs/heads/main:refs/remotes/origin/main'
+          notes=".github/release-notes/${TAG}.md"
+          if ! git cat-file -e "origin/main:${notes}" 2>/dev/null; then
+            echo "::error::${notes} is not on main; write and commit the release notes first."
+            exit 1
+          fi
+          if ! git ls-remote --exit-code --tags "${WINE_REPO}" \
+              "refs/tags/wine-*-zwiftsnap-${TAG}" >/dev/null; then
+            echo "::error::${WINE_REPO} has no tag wine-*-zwiftsnap-${TAG}; tag and push the wine fork first."
+            exit 1
+          fi
+          echo "Release prerequisites for ${TAG} are in place."
+
+      - name: Restore the ccache cache
+        id: ccache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          # The same cache family as the daily edge build. A key carrying the run id never
+          # matches, so the save always writes an entry and restore-keys pulls the newest.
+          key: ccache-ubuntu-26.04-${{ github.run_id }}
+          restore-keys: |
+            ccache-ubuntu-26.04-
+
+      - name: Free up disk space
+        run: |
+          set -x
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+          df -h /
+
+      - name: Launch the workshop
+        uses: canonical/launch-workshop@v1
+        # The launch runs the SDK hooks: setup-base installs the build and test dependencies
+        # and setup-project fetches the agent skills and clones the Wine source.
+
+      - name: Show how the workshop is wired up
+        run: |
+          workshop info
+          workshop warnings || true
+
+      - name: Let root run git in the checked-out project
+        # version-generator runs `git describe` under sudo, and git refuses a repository owned
+        # by another user ("dubious ownership"), which would silently version the snap
+        # "unknown".
+        run: workshop exec -- sudo git config --global --add safe.directory /project
+
+      - name: Check out the Wine release tag
+        # setup-project clones the wine fork's branch tip, which is not reproducible. This
+        # moves the tree the wine part builds from to the tag that matches this release, so
+        # the binary is built from exactly the pushed source. The tag is
+        # wine-<version>-zwiftsnap-<tag>, where <version> is the fork's Wine version (read
+        # from its VERSION file); the wine- prefix is what lets Wine parse its own version
+        # from `git describe`. It dirties the wine part, which the build would do anyway on
+        # a fresh runner.
+        run: |
+          set -euo pipefail
+          wine_version="$(workshop exec -- sed -n 's/^Wine version //p' /project/wine-src/VERSION)"
+          if [[ -z ${wine_version} ]]; then
+            echo "::error::Could not read the Wine version from /project/wine-src/VERSION" >&2
+            exit 1
+          fi
+          wine_tag="wine-${wine_version}-zwiftsnap-${TAG}"
+          echo "Building from $wine_tag"
+          workshop run -- wine-checkout "${wine_tag}"
+          # Prove Wine will report itself correctly, which is the whole point of the prefix.
+          describe="$(workshop exec -- git -C /project/wine-src describe --tags)"
+          case "${describe}" in
+            wine-${wine_version}-*) echo "wine describes itself as ${describe}" ;;
+            *)
+              echo "::error::wine-src describes itself as '${describe}', not wine-${wine_version}-*" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Lint
+        run: workshop run -- lint
+
+      - name: Unit tests
+        run: workshop run -- test
+
+      - name: GTK preview tests
+        run: workshop run -- gtk-preview
+
+      - name: Screensaver inhibitor test
+        run: workshop run -- inhibit
+
+      - name: Build the snap
+        run: workshop run -- build
+
+      - name: Make the ccache readable and report its stats
+        if: always()
+        # The workshop builds as root, which writes ccache files only root can read; the save
+        # below runs as the runner user. A failed build still produced cacheable objects.
+        run: |
+          workshop exec -- sudo sh -c 'mkdir -p /project/.ccache && chmod -R a+rX /project/.ccache' || true
+          workshop exec -- sudo env CCACHE_DIR=/project/.ccache ccache -s || true
+
+      - name: Save the ccache cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ccache-ubuntu-26.04-${{ github.run_id }}
+
+      - name: Check the snap got a real version
+        # version-generator falls back to "unknown" when `git describe` fails, which would
+        # publish a revision nobody can identify. Catch it here rather than in the Store.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          snaps=(zwift_*_amd64.snap)
+          if (( ${#snaps[@]} == 0 )); then
+            echo "The build produced no snap." >&2
+            exit 1
+          fi
+          for snap in "${snaps[@]}"; do
+            case "${snap}" in
+              zwift_unknown_*)
+                echo "${snap} has no version: git describe failed (see the safe.directory step)." >&2
+                exit 1
+                ;;
+            esac
+          done
+          printf 'Built %s\n' "${snaps[@]}"
+
+      - name: Install the snap
+        run: workshop run -- install
+
+      - name: Connect the bluez interface
+        # snapd does not auto-connect bluez, and the Bluetooth tests fail with a confinement
+        # error instead of a useful message without it.
+        run: workshop exec -- sudo snap connect zwift:bluez
+
+      - name: Bluetooth plumbing test
+        run: workshop run -- bluetooth
+
+      - name: Smoke test
+        # Renders headless (see the header). Downloads Zwift on this cold prefix.
+        run: workshop run -- smoke
+
+      - name: Pairing-screen test
+        # Runs after smoke so it reuses the prefix smoke downloaded Zwift into. Needs the
+        # bluez plug connected above and the bluezoo mock setup-base installs.
+        run: workshop run -- pairing
+
+      - name: Upload the snap
+        uses: actions/upload-artifact@v7
+        with:
+          # publish.yml downloads this artifact by name to upload to the Store and attach to
+          # the GitHub Release.
+          name: zwift-snap
+          path: zwift_*_amd64.snap
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Collect artifacts from a failed run
+        if: failure()
+        # The tests write inside the workshop, which the runner cannot see, so copy what they
+        # left into the workspace for the upload below.
+        run: |
+          set -x
+          workshop exec -- sudo sh -c '
+            mkdir -p /project/ci-artifacts
+            cp -a /root/.local/state/snapcraft/log /project/ci-artifacts/ 2>/dev/null || true
+            cp -a /home/*/zwift-bt-out /project/ci-artifacts/ 2>/dev/null || true
+            cp -a /home/*/zwift-smoke-out /project/ci-artifacts/ 2>/dev/null || true
+            cp -a /home/*/zwift-pairing-out /project/ci-artifacts/ 2>/dev/null || true
+            cp -a /home/*/zwift-gtk-preview.* /project/ci-artifacts/ 2>/dev/null || true
+            chmod -R a+rX /project/ci-artifacts
+          ' || true
+          ls -lR ci-artifacts || true
+
+      - name: Upload artifacts from a failed run
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-run-artifacts
+          path: ci-artifacts/
+          if-no-files-found: ignore
+          retention-days: 7

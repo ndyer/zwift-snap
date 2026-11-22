@@ -1,0 +1,201 @@
+# Publish a release: upload the snap to the Store and create the GitHub Release.
+#
+# Kept separate from release.yml so it can be re-run on its own. If the Store upload or the
+# Release creation fails, fix the cause and dispatch this again against the same build
+# artifact; nothing is rebuilt and the suites do not run again. It is idempotent: an existing
+# Release has its notes updated and assets are re-uploaded with --clobber.
+#
+# Inputs:
+#   tag         the version tag to publish (required)
+#   run-id      the release.yml run to take the snap artifact from; defaults to the latest
+#               successful release run for the tag
+#   notes-only  backfill: create the GitHub Release from the notes file alone, with no snap
+#               asset and no Store upload. Historical tags predate CI and are already in the
+#               Store, so this is how their Release history is filled in.
+#
+# The notes are always read from main, never from the tag: a backfilled tag predates its
+# notes file, and for a fresh release the notes commit is on main before the tag is made.
+#
+# Publishing needs SNAPCRAFT_STORE_CREDENTIALS in the latest/beta environment: the contents
+# of a `snapcraft export-login` file. When it is absent the Store upload is skipped with a
+# notice and the GitHub Release is still created. snapcraft.yaml has `grade: devel`, which
+# restricts releases to the edge and beta channels.
+#
+# See .github/.kb/release-workflow.md and .kb/release-procedure.md.
+name: publish release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag to publish (for example v0.18)
+        required: true
+        type: string
+      run-id:
+        description: release.yml run to take the snap from (default - latest successful run for the tag)
+        required: false
+        type: string
+      notes-only:
+        description: Create the GitHub Release from the notes only (no Store upload, no snap asset)
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  # Creating and editing the Release needs contents:write; finding the build run needs
+  # actions:read.
+  contents: write
+  actions: read
+
+# Two publishes of the same tag never overlap; a re-dispatch queues behind a running one.
+concurrency:
+  group: publish-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish to the Store and GitHub
+    runs-on: ubuntu-24.04
+    # Holds SNAPCRAFT_STORE_CREDENTIALS. One-time setup, see .github/.kb/release-workflow.md.
+    environment: latest/beta
+    timeout-minutes: 30
+    env:
+      TAG: ${{ inputs.tag }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Check out main for the release notes
+        uses: actions/checkout@v7.0.0
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Check the release notes
+        run: |
+          set -euo pipefail
+          notes=".github/release-notes/${TAG}.md"
+          if [[ ! -f ${notes} ]]; then
+            echo "::error::${notes} does not exist on main; write and commit the release notes first."
+            exit 1
+          fi
+          echo "Using ${notes}"
+
+      - name: Find the release build
+        id: build
+        if: ${{ !inputs.notes-only }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_RUN_ID: ${{ inputs.run-id }}
+        run: |
+          set -euo pipefail
+          run_id="${SOURCE_RUN_ID}"
+          if [[ -z ${run_id} ]]; then
+            # The head branch of a tag-triggered run is the tag name.
+            run_id="$(gh run list --workflow release.yml --branch "${TAG}" --status success \
+              --limit 1 --json databaseId --jq '.[0].databaseId // ""')"
+          fi
+          if [[ -z ${run_id} ]]; then
+            echo "::error::No successful release.yml run found for ${TAG}; pass run-id." >&2
+            exit 1
+          fi
+          echo "run-id=${run_id}" >> "${GITHUB_OUTPUT}"
+          echo "Publishing the snap from run ${run_id}"
+
+      - name: Download the snap
+        if: ${{ !inputs.notes-only }}
+        uses: actions/download-artifact@v8
+        with:
+          name: zwift-snap
+          path: artifacts
+          run-id: ${{ steps.build.outputs.run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+
+      - name: Check Store publishing credentials
+        id: store
+        if: ${{ !inputs.notes-only }}
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          if [[ -n ${SNAPCRAFT_STORE_CREDENTIALS} ]]; then
+            echo "publish=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::notice::SNAPCRAFT_STORE_CREDENTIALS is not configured; skipping Store publishing."
+            echo "publish=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Install snapcraft
+        if: steps.store.outputs.publish == 'true'
+        run: sudo snap install snapcraft --classic
+
+      - name: Publish to the Store
+        if: steps.store.outputs.publish == 'true'
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          snaps=(artifacts/zwift_*_amd64.snap)
+          if (( ${#snaps[@]} == 0 )); then
+            echo "No snap in the downloaded artifact; release.yml should have uploaded one." >&2
+            exit 1
+          fi
+          for snap in "${snaps[@]}"; do
+            echo "Uploading ${snap} to latest/beta"
+            snapcraft upload --verbosity=brief "${snap}" --release latest/beta
+          done
+
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          notes=".github/release-notes/${TAG}.md"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} exists; updating its notes."
+            gh release edit "${TAG}" --notes-file "${notes}"
+          else
+            gh release create "${TAG}" --title "Zwift snap ${TAG#v}" --notes-file "${notes}"
+          fi
+
+      - name: Attach the snap to the Release
+        if: ${{ !inputs.notes-only }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          snaps=(artifacts/zwift_*_amd64.snap)
+          if (( ${#snaps[@]} == 0 )); then
+            echo "No snap to attach." >&2
+            exit 1
+          fi
+          for snap in "${snaps[@]}"; do
+            # GitHub caps a release asset at 2 GiB.
+            size=$(stat -c %s "${snap}")
+            if (( size > 2 * 1024 * 1024 * 1024 )); then
+              echo "::notice::${snap} is over GitHub's 2 GiB asset limit; not attaching it."
+              continue
+            fi
+            gh release upload "${TAG}" "${snap}" --clobber
+          done
+
+      - name: Summary
+        env:
+          NOTES_ONLY: ${{ inputs.notes-only }}
+          PUBLISHED: ${{ steps.store.outputs.publish }}
+        run: |
+          {
+            echo "### Published ${TAG}"
+            echo
+            if [[ ${NOTES_ONLY} == "true" ]]; then
+              echo "- Store: skipped (notes-only backfill)"
+            elif [[ ${PUBLISHED} == "true" ]]; then
+              echo "- Store: latest/beta"
+            else
+              echo "- Store: skipped (no credentials)"
+            fi
+            echo "- Release: ${GITHUB_SERVER_URL}/${REPO}/releases/tag/${TAG}"
+          } >> "${GITHUB_STEP_SUMMARY}"

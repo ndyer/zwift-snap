@@ -55,6 +55,49 @@ actions:
   clean: |
     cd /project
     sudo snapcraft clean --destructive-mode
+  wine-checkout: |
+    cd /project
+    # Point the local Wine tree (/project/wine-src) at a tag or branch of the fork. The
+    # snap's wine part builds from this tree, so moving it dirties the part and the next
+    # build is a full Wine rebuild. The clone fetch-wine.sh makes is shallow (depth 1,
+    # single branch) and has no tags, and its origin is the SSH URL the workshop cannot
+    # reach, so fetch the ref over HTTPS and check it out detached.
+    #   workshop run -- wine-checkout wine-11.21-zwiftsnap-v0.18   a release's Wine tag
+    #   workshop run -- wine-checkout zwift-radios-rebased          the head of the branch
+    # Wine tags must start with wine-<version>- (see .kb/release-procedure.md): Wine reads
+    # its own build version from `git describe`.
+    ref="${1:-}"
+    if [[ -z ${ref} ]]; then
+      echo "usage: workshop run -- wine-checkout <tag-or-branch>" >&2
+      echo "current: $(git -C /project/wine-src log -1 --format='%h %s')" >&2
+      exit 1
+    fi
+    repo="${ZWIFT_WINE_REPO:-https://github.com/ndyer/wine.git}"
+    wine=/project/wine-src
+    # Try the name as a tag first, then as a branch. Writing the explicit refspec creates
+    # the local tag or remote-tracking branch so a later `git log` on the name works; the
+    # depth stays 1 because this tree is only ever read, never pushed from.
+    if git -C "${wine}" fetch --quiet --depth 1 "${repo}" \
+        "+refs/tags/${ref}:refs/tags/${ref}" 2>/dev/null; then
+      target="refs/tags/${ref}"
+    elif git -C "${wine}" fetch --quiet --depth 1 "${repo}" \
+        "+refs/heads/${ref}:refs/remotes/origin/${ref}" 2>/dev/null; then
+      target="refs/remotes/origin/${ref}"
+    else
+      echo "wine-checkout: '${ref}' is neither a tag nor a branch of ${repo}" >&2
+      exit 1
+    fi
+    git -C "${wine}" checkout --quiet --detach "${target}"
+    # Wine reads its own build version from `git describe`, so a release tag must start
+    # with the Wine version; warn here rather than ship a confusing `wine --version`.
+    if [[ ${target} == refs/tags/* && ${ref} != wine-* ]]; then
+      echo "wine-checkout: warning: tag '${ref}' does not start with 'wine-<version>-';" >&2
+      echo "wine-checkout: Wine will report an odd build version. See .kb/release-procedure.md." >&2
+    fi
+    printf 'wine-checkout: %s at %s (%s)\n' "${ref}" \
+      "$(git -C "${wine}" rev-parse --short HEAD)" \
+      "$(git -C "${wine}" log -1 --format=%s)"
+    echo "wine-checkout: the wine part is now dirty; run 'workshop run -- build' to rebuild it"
   install: |
     cd /project
     # Build timestamps, not version strings, identify the latest local artifact.
@@ -90,7 +133,8 @@ actions:
       .workshop/zwift-snap-sdk/workshop
     yamllint -d '{extends: relaxed, rules: {line-length: {max: 140}}}' \
       snap/snapcraft.yaml .workshop/zwift-snap.yaml .workshop/zwift-snap-sdk/sdk.yaml \
-      .github/workflows/edge-build.yml
+      .github/workflows/edge-build.yml .github/workflows/release.yml \
+      .github/workflows/publish.yml
     cargo fmt --manifest-path zwsnap-gui/Cargo.toml --check
     cargo clippy --manifest-path zwsnap-gui/Cargo.toml --features gtk-ui --all-targets -- -D warnings
     # The Windows helpers only compile for their real target; checking them for

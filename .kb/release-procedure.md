@@ -1,29 +1,38 @@
 # Preface
 
-The release checklist for both tagged repositories. Follow it exactly — the wine
-tag and the main-repository tag must stay in step, and the pack step in between
-is what validates the pairing.
+Where the release procedure lives, and the conventions it depends on. Read this to find the
+right document; the procedure itself is not repeated here.
 
 IMPORTANT: Read the `.kb/agents.md` file.
 
 
 # Concepts
 
-## Release Procedures
+## Where the procedure lives
 
-- Tags in the main repository `/project` follow semantic versioning: `v0.10`, `v0.11`, `v0.12`
-- Wine source tags in `/project/wine-src` use the pattern: `zwift-snap-v0.12`
-- When releasing a new version:
-  1. Ensure both repositories are clean, don't proceed otherwise.
-  2. Figure out the next version in sequence.
-  3. Tag wine-src.
-  4. Tag main repository
-  6. Move/re-tag main repository's v0.12 to point to the final commit
+- `.github/skills/release/SKILL.md` — the step-by-step procedure: preflight, local
+  pre-validation, release notes, local tagging, and the hand-off to the user.
+- `.github/.kb/release-workflow.md` — how `release.yml` and `publish.yml` work: the
+  build/publish split, the prerequisites gate, the Store environment and artefact hand-off.
+- `.github/release-notes/` — one tracked notes file per version, read from `main` by both
+  workflows and used verbatim as the GitHub Release body.
 
-A tag is not the only way a revision reaches the Store: the daily edge build
-workflow publishes `main` to `latest/edge` on its own (see
-`.github/.kb/edge-build-workflow.md`). Its Wine source comes from the workshop's
-`setup-project` hook, which clones shallowly and therefore without tags, so step 3
-needs `ZWIFT_WINE_DEPTH=0` in a fresh workshop.
+The tags are created locally and pushed by the user; the agent holds no GitHub credentials.
 
-The intention in the future is that a github workflow will be added to run full tests including smoke and promote tagged builds to beta.
+## Conventions
+
+- Main repository tags: `v0.8`, `v0.9`, ... `v0.17`. Wine tags:
+  `wine-<wine-version>-zwiftsnap-v<version>` (for example `wine-11.21-zwiftsnap-v0.18`).
+- **Wine tags must start with the Wine version.** `wine --version` prints the `git describe`
+  output verbatim, so a tag that does not begin with `wine-<version>-` (for example the old
+  `zwift-snap-v0.12`) makes Wine's own reported version wrong. Read the version from
+  `wine-src/VERSION`; `release.yml` derives it too and fails if `git describe` does not start
+  with `wine-<version>-`.
+- The snap version comes from `git describe --tags` (the `version-generator` part), so the
+  main tag must exist before the snap is built.
+- One version, one tag: the Store rejects an already-published version, so a re-tag means a
+  new version number.
+- `wine-src` is a shallow clone from the workshop hook; tag its synced branch tip. Delete it
+  and relaunch with `ZWIFT_WINE_DEPTH=0` if a full clone is ever needed.
+- The wine fork's `zwift-snap-*` tags were not pushed before this pipeline existed; from now
+  on the wine tag is part of a release and `release.yml` refuses to build without it.
