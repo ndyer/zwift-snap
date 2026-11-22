@@ -9,9 +9,12 @@
 # when that side connects.
 #
 # Services, modelled on a Wahoo KICKR:
-#   Fitness Machine (FTMS, 0x1826), Cycling Power (0x1818), Device Information (0x180A),
-#   supporting standard services, and the Zwift custom service seen on the real trainer.
-# The custom service exposes the write path for crash reproduction, not a protocol emulator.
+#   Fitness Machine (FTMS, 0x1826), Cycling Power (0x1818), Device Information (0x180A)
+#   and the other standard services a trainer exposes.
+# It deliberately does NOT expose the Zwift Play custom service (0000000{1,2,3,4}-19ca-...):
+#   that is a controller service a trainer does not have, and advertising it makes Zwift
+#   run the Play handshake against the trainer and hang on "Connecting...". See
+#   .kb/pairing-test.md.
 # While a client has notifications on, fake ride data (~150 W, ~85 rpm) is sent every
 # second. Every read, write and notification start/stop is logged to stdout, which the
 # tests assert on. Runs in the bluezoo venv (it needs sdbus) until it is killed.
@@ -43,10 +46,6 @@ GENERIC_ATTRIBUTE = uuid16(0x1801)
 BATTERY_SERVICE = uuid16(0x180F)
 CYCLING_SPEED_CADENCE = uuid16(0x1816)
 LOCATION_NAVIGATION = uuid16(0x1819)
-ZWIFT_SERVICE = "00000001-19ca-4651-86e5-fa29dcdd09d1"
-ZWIFT_ASYNC = "00000002-19ca-4651-86e5-fa29dcdd09d1"
-ZWIFT_SYNC_RX = "00000003-19ca-4651-86e5-fa29dcdd09d1"
-ZWIFT_SYNC_TX = "00000004-19ca-4651-86e5-fa29dcdd09d1"
 # The GAP appearance of a cycling power sensor.
 APPEARANCE_CYCLING_POWER_SENSOR = 0x0484
 
@@ -220,10 +219,6 @@ class Trainer:
         response = bytes((0x80, value[0], 0x01))
         self.pending_indications.append((char, response))
 
-    def on_zwift_write(self, char: Characteristic, value: bytes) -> None:
-        log(f"{char.name}: Zwift protocol responses are not emulated")
-        raise sdbus.DbusNotSupportedError("Zwift protocol responses are not emulated")
-
     def export(self) -> None:
         self.manager.export_to_dbus(APP_PATH, self.bus)
         # Service 0: Generic Access (0x1800) - matches real DI device
@@ -282,13 +277,14 @@ class Trainer:
             # Sensor Location: rear hub.
             (0x2A5D, ["read"], "sensor-location", bytes((13,))),
         ])
-        # The real crash selects sync-rx immediately before creating a DataWriter.
-        self.add_service(8, ZWIFT_SERVICE, [
-            (ZWIFT_ASYNC, ["notify"], "zwift-async", b""),
-            (ZWIFT_SYNC_RX, ["write"], "zwift-sync-rx", b""),
-            (ZWIFT_SYNC_TX, ["indicate"], "zwift-sync-tx", b""),
-        ], on_write=self.on_zwift_write)
-        # The custom service is discovered over GATT after connecting.
+        # No Zwift custom service: 0000000{1,2,3,4}-19ca-... is the Zwift Play
+        # controller service, which a real trainer does not expose. It was added
+        # only to reproduce the vccorlib140 GetIBoxArrayVtable crash, which the
+        # wine fork now implements. Advertising it makes Zwift run the Play
+        # "RideOn" handshake against the trainer and then wait for sync-tx
+        # responses a trainer never sends, so the device stays "Connecting..."
+        # even though the BLE link is up. See .kb/pairing-test.md.
+        # The advertisement lists the standard trainer services only.
         self.advertisement = Advertisement(self.name, [
             FTMS, CYCLING_POWER, GENERIC_ACCESS, GENERIC_ATTRIBUTE,
             DEVICE_INFORMATION, BATTERY_SERVICE, CYCLING_SPEED_CADENCE, LOCATION_NAVIGATION

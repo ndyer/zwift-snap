@@ -18,6 +18,8 @@ ${SCREEN_TIMEOUT}    240
 ${DEVICE_TIMEOUT}    60
 # a returning profile reconnects its saved trainer on its own within this time
 ${RECONNECT_TIMEOUT}    20
+# how many times to click the POWER SOURCE tile before giving up on the dialog opening
+${CLICK_ATTEMPTS}    6
 ${TRAINER}           KICKR
 
 *** Test Cases ***
@@ -46,16 +48,30 @@ Wait For The Pairing Screen
     ...    covered, appears on every pairing layout, and is what Pair The Trainer clicks.
     Match Text    POWER SOURCE    ${SCREEN_TIMEOUT}
 
+Open Device List
+    [Documentation]    Click the POWER SOURCE tile until the pair-device dialog opens. A single
+    ...    click can be lost (the press and release land between two game frames, or the tile is
+    ...    still settling), so retry and confirm the dialog opened by its CLOSE button, which the
+    ...    pairing screen behind it does not have. The dialog's own title is not usable: OCR reads
+    ...    it as PAIRED DEVICES, the screen behind it.
+    FOR    ${attempt}    IN RANGE    ${CLICK_ATTEMPTS}
+        Sleep    1s
+        Click Zwift Target    POWER SOURCE
+        ${open}=    Run Keyword And Return Status    Match Text    CLOSE    5
+        IF    ${open}    RETURN
+        Log    the pair-device dialog did not open yet, clicking POWER SOURCE again
+    END
+    Fail    the pair-device dialog did not open after clicking POWER SOURCE
+
 Pair The Trainer
     [Documentation]    Pair the mock trainer as the power source. A returning profile reconnects the trainer it
     ...    paired before by itself, and clicking a connected tile would unpair it, so first give
     ...    the reconnect a chance. Clicking the trainer in the dialog toggles it: click it once.
-    ...    Matching the trainer is what tells the pair dialog apart: the reconnect check above
-    ...    established it is not on the pairing screen, and the dialog's own title is not usable
-    ...    (OCR reads it as PAIRED DEVICES, the screen behind it).
+    ...    Open Device List confirms the dialog is up (its CLOSE button) before the trainer is
+    ...    clicked, then the trainer is clicked and CLOSE closes the dialog.
     ${reconnected}=    Run Keyword And Return Status    Match Text    ${TRAINER}    ${RECONNECT_TIMEOUT}
     IF    not ${reconnected}
-        Click Zwift Target    POWER SOURCE
+        Open Device List
         Match Text    ${TRAINER}    ${DEVICE_TIMEOUT}
         Click Zwift Target    ${TRAINER}
         Sleep    3s

@@ -81,6 +81,12 @@ and Controllable Trainer show up on some layouts or after re-selecting, so they 
 required. Zwift reports the connection asynchronously, so `check_trainer` polls the log for
 the connected status (30 s) instead of sampling it once.
 
+The log's location differs by Zwift build: 1.126 writes user data (prefs.xml, `Logs/`,
+`Workouts/`) under `Documents/Zwift`, while older builds used `AppData/Local/Zwift`. The
+`game_log` helper in `tests/pairing.sh` resolves it lazily to whichever the running build
+created (and the file only exists once the game has started), so do not hard-code either
+path.
+
 The last assertion is the shutdown disconnect: `stop_game` stops the winedevice group
 (`pairing-stop.sh`, see `.kb/wine-fork-bluetooth.md`) before killing the prefix, because that is the
 only path that reaches winebth's device-removal disconnect. A `wineserver -k` on its own
@@ -153,6 +159,14 @@ made, with request bodies redacted), `bluezoo.log`, `trainer.log`, `scan.log`, `
   frame cost ~32 s of CPU. `tests/tools/yarf/yarf_ocr.py`, imported as a Robot `Library` by both
   suites (and staged next to them), caps it at 4 intra-op threads (~6 s CPU, faster wall time).
   yarf's own match loops already sleep at least 0.1 s per iteration.
+- `tests/tools/yarf/yarf_ocr.py` also raises RapidOCR's `Det.limit_side_len` from the default 736
+  to 1280. The detector downscales a frame so its longer side is at most that value, so at the
+  default the 1280-wide frame becomes 736 wide and the pair-device dialog's device row (the
+  trainer name on a white row) is dropped entirely while the dialog chrome around it is still
+  read. `Match Text KICKR` then times out with the dialog open and KICKR plainly on screen. This
+  was long-standing flakiness (not tied to a Zwift version): the same frames OCR read KICKR on
+  once the frame is left unscaled. If the pairing suite fails with the dialog open but no device
+  name, suspect this before the click or Bluetooth.
 - `tests/tools/yarf/yarf.sh` (the `yarf` action) sends pointer/keyboard input and takes screenshots
   of the running compositor (yarf's own wayland clients inside the yarf snap), for exploring the
   screens by hand when updating the suite for a new Zwift version.

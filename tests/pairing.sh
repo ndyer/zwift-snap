@@ -34,8 +34,6 @@ readonly YARF_SUITE_DIR="${HOME}/zwift-pairing-suite"
 readonly OUT_DIR="${HOME}/zwift-pairing-out"
 readonly PREFIX="${HOME}/snap/zwift/common/.wine"
 readonly CACERT="${PREFIX}/drive_c/Program Files (x86)/Zwift/data/cacert.pem"
-readonly ZWIFT_USER_DIR="${PREFIX}/drive_c/users/${USER}/AppData/Local/Zwift"
-readonly GAME_LOG="${ZWIFT_USER_DIR}/Logs/Log.txt"
 readonly RUN_SCRIPT="${HOME}/snap/zwift/common/pairing-run.sh"
 readonly STOP_SCRIPT="${HOME}/snap/zwift/common/pairing-stop.sh"
 readonly TOKEN_FILE="${HOME}/snap/zwift/common/pairing-token.json"
@@ -93,6 +91,24 @@ connected() {
 # shellcheck source=tests/tools/bluetooth/bluezoo.sh
 source "${ROOT}/tests/tools/bluetooth/bluezoo.sh"
 
+# game_log: path to the game's Log.txt. Zwift 1.126 writes its user data (prefs.xml,
+# Logs/, Workouts/) under Documents/Zwift; older builds used AppData/Local/Zwift. The file
+# does not exist until the game has started, so resolve it lazily to whichever location the
+# running build created, falling back to the modern one so a caller's first grep is a miss
+# rather than an error.
+game_log() {
+    local candidate
+    for candidate in \
+        "${PREFIX}/drive_c/users/${USER}/Documents/Zwift/Logs/Log.txt" \
+        "${PREFIX}/drive_c/users/${USER}/AppData/Local/Zwift/Logs/Log.txt"; do
+        if [[ -f ${candidate} ]]; then
+            printf '%s\n' "${candidate}"
+            return
+        fi
+    done
+    printf '%s\n' "${PREFIX}/drive_c/users/${USER}/Documents/Zwift/Logs/Log.txt"
+}
+
 report_failure() {
     echo "pairing: FAILED, artifacts in ${OUT_DIR} (log.html shows the screenshots)"
     if [[ -d ${OUT_DIR}/frames ]]; then
@@ -102,7 +118,9 @@ report_failure() {
     for log in stub/requests.log yarf.log; do
         [[ -f ${OUT_DIR}/${log} ]] && { echo "pairing: tail of ${log}:"; tail -15 "${OUT_DIR}/${log}"; }
     done
-    [[ -f ${GAME_LOG} ]] && { echo "pairing: last game states:"; grep -aE "ZSF_|GameFlowState" "${GAME_LOG}" | tail -8; }
+    local log
+    log=$(game_log)
+    [[ -f ${log} ]] && { echo "pairing: last game states:"; grep -aE "ZSF_|GameFlowState" "${log}" | tail -8; }
     if [[ -f ${OUT_DIR}/game.log ]]; then
         grep -aE 'wine: Call .*unimplemented function|Unhandled exception' "${OUT_DIR}/game.log" || true
     fi
@@ -239,7 +257,7 @@ start_stub() {
 check_trainer() {
     local characteristic devices waited=0
     # Zwift reports the connection asynchronously, so poll instead of sampling the log once
-    until grep -aq "Device: \"${BLUEZOO_TRAINER_NAME}\" has new connection status: connected" "${GAME_LOG}" 2> /dev/null; do
+    until grep -aq "Device: \"${BLUEZOO_TRAINER_NAME}\" has new connection status: connected" "$(game_log)" 2> /dev/null; do
         ((waited += 1))
         [[ ${waited} -lt 30 ]] \
             || { report_failure; die "Zwift did not connect the mock trainer ${BLUEZOO_TRAINER_NAME}"; }
@@ -255,7 +273,7 @@ check_trainer() {
     # The last device list in the log is the current assignment (captured first: grep -q would
     # close the pipe early and pipefail would report tac's SIGPIPE as a failure)
     while :; do
-        devices=$(tac "${GAME_LOG}" | sed -n '/^\[[0-9:]*\] Device List:/q;p')
+        devices=$(tac "$(game_log)" | sed -n '/^\[[0-9:]*\] Device List:/q;p')
         if [[ ${devices} == *"Power: ${BLUEZOO_TRAINER_NAME} "* ]]; then
             break
         fi
@@ -264,7 +282,7 @@ check_trainer() {
             || { report_failure; die "Zwift did not assign the mock trainer the power role"; }
         sleep 1
     done
-    for characteristic in indoor-bike-data cycling-power-measurement ftms-control-point zwift-async zwift-sync-tx; do
+    for characteristic in indoor-bike-data cycling-power-measurement ftms-control-point; do
         grep -q "start notify ${characteristic}" "${OUT_DIR}/trainer.log" \
             || { report_failure; die "Zwift did not subscribe to the trainer's ${characteristic}"; }
     done
@@ -356,11 +374,21 @@ set -uo pipefail
 # winebth is in the WinePlugPlay load-order group; winebus, winehid, wineusb and the
 # System Bus Extender drivers are in the others.
 export WINEPREFIX="${SNAP_USER_COMMON}/.wine"
-for n in 1 2 3 4 5 6; do
-    wine sc stop "Winedevice${n}" > /dev/null 2>&1
+# services.exe numbers the synthesised group services Winedevice<N> from a static,
+# monotonically increasing counter (see dlls/.../programs/services/services.c,
+# add_winedevice_service), so N is not bounded by the small number of load-order groups:
+# every driver start during the session (BLE connect/disconnect and PnP re-enumeration
+# each start one) advances it. A fixed 1..6 sweep misses winebth's group once the session
+# has churned through more than six, and then 'wineserver -k' SIGKILLs the prefix with the
+# driver still loaded, so the disconnect-on-removal never runs. Sweep a wide range and log
+# which names the prefix actually has, so a miss is visible instead of silent.
+for n in $(seq 1 40); do
+    if wine sc stop "Winedevice${n}" > /dev/null 2>&1; then
+        echo "pairing-stop: stopped Winedevice${n}"
+    fi
 done
 # give the driver time to disconnect the trainer over D-Bus, which waits for its event loop
-sleep 5
+sleep 8
 wineserver -k || true
 EOF
     # shellcheck disable=SC2016
@@ -435,7 +463,7 @@ main() {
     # the game needs a moment to come up before yarf starts matching the pairing screen
     echo "pairing: waiting for the Zwift window"
     local waited=0
-    until grep -aq "ZSF_UNINITIALIZED -> ZSF_LOGIN\|ZSF_TOKEN_LOGIN" "${GAME_LOG}" 2> /dev/null; do
+    until grep -aq "ZSF_UNINITIALIZED -> ZSF_LOGIN\|ZSF_TOKEN_LOGIN" "$(game_log)" 2> /dev/null; do
         ((waited += 1))
         [[ ${waited} -lt 120 ]] || { report_failure; die "Zwift did not begin login"; }
         sleep 1
@@ -454,7 +482,7 @@ main() {
 
     if [[ ${explore_mode} == false ]]; then
         # yarf judges the screen; confirm the game actually reached the pairing state
-        grep -aq "ZSF_PAIRING_SCREEN" "${GAME_LOG}" 2> /dev/null \
+        grep -aq "ZSF_PAIRING_SCREEN" "$(game_log)" 2> /dev/null \
             || { report_failure; die "the yarf suite passed but the game did not reach ZSF_PAIRING_SCREEN"; }
 
         check_trainer
@@ -477,7 +505,7 @@ main() {
         echo "pairing: use 'tests/tools/yarf/yarf.sh screenshot -s ${WAYLAND_SOCKET} [FILE.png]' to view the screen"
         echo "pairing: use 'tests/tools/yarf/yarf.sh input -s ${WAYLAND_SOCKET} <actions>' to interact"
         echo "pairing: tail the logs with: tail -f ~/zwift-pairing-out/bluezoo.log ~/snap/zwift/common/zwift.log"
-        echo "pairing: game log at: ${GAME_LOG}"
+        echo "pairing: game log at: $(game_log)"
         echo "pairing: bluezoo log at: ${OUT_DIR}/bluezoo.log, mock trainer log at: ${OUT_DIR}/trainer.log"
         echo "pairing: captured frames at: ${OUT_DIR}/frames (replay: tests/tools/yarf/yarf.sh ocr ${OUT_DIR}/frames -g KICKR)"
         # Wait for the game to finish or user interruption
