@@ -210,6 +210,16 @@ parts:
       #    half-built and ZwiftApp exits before its window ever appears.
       #    atl100, gameinput, windows.media.speech, wmadmod and wpcap
       #    therefore stay built.
+      #  - WinRT activatable classes, which RoGetActivationFactory finds by
+      #    class name at runtime, not by import, so neither the loaddll
+      #    trace nor the import closure sees them. wintypes implements
+      #    Windows.Storage.Streams.Buffer/DataReader/DataWriter and
+      #    Windows.Foundation.PropertyValue/PropertySet, and
+      #    windows.devices.bluetooth needs Buffer to build advertisement
+      #    event args (its absence also breaks Zwift's own DataWriter use).
+      #    Pruning wintypes made the pairing screen silent with
+      #    REGDB_E_CLASSNOTREG, so wintypes (and windows.storage, whose
+      #    Buffer-adjacent types the same path reaches) stay built.
       # To regenerate: recompute keep = trace + closure, disable = all
       # dirs - keep, and map each disabled dir to its enable_* variable
       # via the wine_fn_config_makefile lines in wine's configure.
@@ -648,7 +658,8 @@ parts:
       - enable_sane_ds=no
       - enable_sapi=no
       - enable_sas=no
-      - enable_sc=no
+      # sc.exe stays built: tests/pairing.sh stops the winedevice service group with
+      # 'wine sc stop' to exercise winebth's disconnect-on-removal. Zwift never runs it.
       - enable_scarddlg=no
       - enable_scardsvr=no
       - enable_sccbase=no
@@ -782,7 +793,6 @@ parts:
       - enable_windows_perception_stub=no
       - enable_windows_security_authentication_onlineid=no
       - enable_windows_security_credentials_ui_userconsentverifier=no
-      - enable_windows_storage=no
       - enable_windows_storage_applicationdata=no
       - enable_windows_system_profile_systemid=no
       - enable_windows_system_profile_systemmanufacturers=no
@@ -823,7 +833,6 @@ parts:
       - enable_winsta=no
       - enable_wintab32=no
       - enable_wintab=no
-      - enable_wintypes=no
       - enable_winusb=no
       - enable_winver=no
       - enable_wlanapi=no
