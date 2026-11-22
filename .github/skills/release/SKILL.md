@@ -94,14 +94,19 @@ prefix (see `.kb/verification.md`):
 sudo snap remove --purge zwift
 workshop run -- install
 workshop exec -- sudo snap connect zwift:bluez
+workshop run -- dl-cache stage   # restore Zwift from ~/zwift-cache into the purged prefix
 workshop run -- bluetooth
 workshop run -- smoke      # warm via ~/zwift-cache; auto-selects headless without a display
 workshop run -- pairing    # reuses the prefix smoke downloaded Zwift into
 ```
 
-`smoke` and `pairing` are exactly what CI runs in `release.yml`, so a green local run is a
-strong predictor of a green release run. They need no special display setup: with no host
-display both use a virtual Mir output.
+`snap remove --purge` deletes the prefix (under `~/snap/zwift`), so without staging, `smoke`
+would re-download Zwift (tens of minutes). **Stage the download cache first** with
+`workshop run -- dl-cache stage` (the cache lives in `~/zwift-cache`, survives the purge, and
+`smoke` keeps it current; see `tests/.kb/dl-cache.md`). It is a no-op notice when the prefix
+already holds the cached version. `smoke` and `pairing` are exactly what CI runs in
+`release.yml`, so a green local run is a strong predictor of a green release run. They need
+no special display setup: with no host display both use a virtual Mir output.
 
 Do **not** proceed if any suite is red.
 
