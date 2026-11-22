@@ -113,20 +113,19 @@ Next version is one past the highest tag:
 git -C /project tag -l 'v*' | sort -V | tail -1
 ```
 
-Draft `.github/release-notes/v<X.Y>.md`. Base it on the commits since the previous tag and
-keep the house shape. **Each commit bullet leads with its full 40-character SHA, then a
-space and the subject**, with no markdown link and no punctuation after the SHA: GitHub
-auto-links a bare commit SHA in the rendered Release body, and a trailing colon stops it
-formatting as a link. Use the full SHA, not the abbreviated one — the short form does not
-autolink reliably.
+Draft `.github/release-notes/v<X.Y>.md` with two sections: a short "Highlights" section
+for the user-facing changes, and a "Changes" section that is a single link to GitHub's
+**compare page** for the release — no per-commit list:
 
-```bash
-git -C /project log --no-merges --format='- %H %s' "v<prev>..HEAD"
+```markdown
+## Changes
+
+[Full diff and commit list since v<prev>](https://github.com/ndyer/zwift-snap/compare/v<prev>...v<X.Y>)
 ```
 
-That produces lines like `- 1a2b3c4d5e6f... Add a settings dialog to the launcher`.
-Write a short "Highlights" section for the user-facing changes (prose, no SHAs needed), then
-the commit list.
+For the first release (no previous tag), link the commit list instead:
+`[All commits in v<X.Y>](https://github.com/ndyer/zwift-snap/commits/v<X.Y>)`.
+
 **Stop and let the user edit the file.** Do not commit it until they have had a chance to
 rewrite it — the notes become the GitHub Release body verbatim.
 
