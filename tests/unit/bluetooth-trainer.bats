@@ -2,14 +2,12 @@
 
 load test_helper
 
-@test "trainer exposes standard FTMS control and the real trainer's Zwift custom write path" {
+@test "trainer exposes standard FTMS control on a real-trainer service set" {
     run /opt/bluezoo/bin/python - "${ROOT}/tests/tools/bluetooth/bluetooth-trainer.py" <<'PY'
 import importlib.util
 import struct
 import sys
 from unittest.mock import Mock, patch
-
-import sdbus
 
 spec = importlib.util.spec_from_file_location("bluetooth_trainer", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
@@ -24,12 +22,9 @@ exported = {
     call.args[0]: call.args[1]
     for call in trainer.manager.export_with_manager.call_args_list
 }
-assert exported[f"{module.APP_PATH}/service8"].uuid == module.ZWIFT_SERVICE
 for name, uuid, flags in (
-    ("zwift-async", module.ZWIFT_ASYNC, ["notify"]),
-    ("zwift-sync-rx", module.ZWIFT_SYNC_RX, ["write"]),
-    ("zwift-sync-tx", module.ZWIFT_SYNC_TX, ["indicate"]),
     ("ftms-control-point", module.uuid16(0x2AD9), ["write", "indicate"]),
+    ("cycling-power-measurement", module.uuid16(0x2A63), ["notify"]),
 ):
     char = trainer.characteristic(name)
     assert char.uuid == uuid
@@ -42,7 +37,10 @@ assert trainer.characteristic("ftms-feature").value == struct.pack(
 assert len(trainer.advertisement.uuids) == 8
 assert module.FTMS in trainer.advertisement.uuids
 assert module.CYCLING_POWER in trainer.advertisement.uuids
-assert module.ZWIFT_SERVICE not in trainer.advertisement.uuids
+# The Zwift Play custom service is deliberately absent: a real trainer does not
+# advertise it, and doing so makes Zwift hang on the Play handshake. See the
+# harness header and .kb/pairing-test.md.
+assert not any(c.name.startswith("zwift-") for c in trainer.characteristics)
 
 control = trainer.characteristic("ftms-control-point")
 for request in (b"\x00", b"\x05\x96\x00", b"\x11" + b"\x00" * 6):
@@ -50,14 +48,6 @@ for request in (b"\x00", b"\x05\x96\x00", b"\x11" + b"\x00" * 6):
 assert trainer.pending_indications == [
     (control, bytes((0x80, opcode, 0x01))) for opcode in (0x00, 0x05, 0x11)
 ]
-
-sync_rx = trainer.characteristic("zwift-sync-rx")
-try:
-    sync_rx.on_write(sync_rx, b"RideOn")
-except sdbus.DbusNotSupportedError:
-    pass
-else:
-    raise AssertionError("an unimplemented Zwift handshake must not silently succeed")
 PY
     assert_success
 }
