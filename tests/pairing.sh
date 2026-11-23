@@ -211,6 +211,12 @@ start_mir() {
         mir_args+=(--platform-display-libs mir:virtual --virtual-output "${MIR_VIRTUAL_OUTPUT}")
         echo "pairing: starting a headless Mir compositor (${MIR_VIRTUAL_OUTPUT})"
     fi
+    # PAIRING_MIR_ARGS appends extra demo-server options, for experimenting with the headless
+    # rendering path (e.g. '--platform-rendering-libs mir:virtual' or a smaller
+    # '--virtual-output'). Word-split on purpose so several options can be given.
+    # shellcheck disable=SC2206
+    [[ -z ${PAIRING_MIR_ARGS:-} ]] || mir_args+=(${PAIRING_MIR_ARGS})
+    echo "pairing: mir args: ${mir_args[*]}"
     export WAYLAND_DISPLAY="${WAYLAND_SOCKET}"
     # snap run writes nothing when its stdout is a plain file, so mir's output goes through a
     # pipe; that also keeps its abort message ("Failed to read Wayland events: Broken pipe")
@@ -286,6 +292,33 @@ check_trainer() {
         grep -q "start notify ${characteristic}" "${OUT_DIR}/trainer.log" \
             || { report_failure; die "Zwift did not subscribe to the trainer's ${characteristic}"; }
     done
+}
+
+# apply_graphics_profile PROFILE: choose the game's graphics preset before it starts. The
+# pairing test drives the game directly and never goes through the launcher's graphics-profile
+# code (zwsnap-gui/src/graphics.rs), so the game runs on whatever it picks for itself (16x MSAA
+# at 1280x720 here). 'basic' writes a low-end preset into the game's active config files (no
+# MSAA, 512 shadows, 4 AI bikes); 'default' leaves them alone. It is cheap insurance, not the
+# headless fix: measuring showed it does not move the game's reported FPS (see
+# .kb/pairing-test.md, the headless CPU-bound load is the cost). The bundled
+# data/configs/{basic,medium,high,ultra}.txt presets are identical placeholders in this build, so
+# they cannot be selected directly; the game reads data/configs/currentconfig.txt and
+# profile.txt, which is what is rewritten here. Must run after any dl-cache stage (which
+# restores the cached game tree) and before the game launches.
+apply_graphics_profile() {
+    local profile="${1:-basic}"
+    local dir="${PREFIX}/drive_c/Program Files (x86)/Zwift/data/configs"
+    [[ -d ${dir} ]] || { echo "pairing: note: no game configs dir, leaving graphics alone"; return; }
+    if [[ ${profile} == default ]]; then
+        echo "pairing: graphics left at the game default"
+        return
+    fi
+    if [[ ${profile} != basic ]]; then
+        echo "pairing: note: only 'basic' graphics is implemented, using basic" >&2
+    fi
+    printf 'res 1280x720(0x)\ntime 14:30\nsres 512\nset nAIBikes=4\n' > "${dir}/currentconfig.txt"
+    printf 'res 1280x720(0x)\nsres 512x512\ntime 4:30pm\n' > "${dir}/profile.txt"
+    echo "pairing: graphics profile set to basic (no MSAA, 512 shadows, 4 AI bikes)"
 }
 
 # start_game: drive the game directly with the stub's fake OAuth token, inside the snap
@@ -458,19 +491,28 @@ main() {
     if [[ ${explore_mode} == true ]]; then
         game_run_seconds="${RUN_SECONDS_EXPLORE}"
     fi
+    # a cheap preset keeps the software-composited virtual display from crawling; opt out with
+    # PAIRING_GRAPHICS=default
+    apply_graphics_profile "${PAIRING_GRAPHICS:-basic}"
     start_game "${game_run_seconds}"
 
-    # the game needs a moment to come up before yarf starts matching the pairing screen
+    # Start yarf as soon as the game process is up ("Initialized" is logged within a second
+    # of launch, ~13 s before login), so it is already polling the screen when the pairing
+    # screen appears instead of starting after login. yarf's own SCREEN_TIMEOUT covers a slow
+    # start, and the login check still fails fast if the game never comes up.
     echo "pairing: waiting for the Zwift window"
     local waited=0
-    until grep -aq "ZSF_UNINITIALIZED -> ZSF_LOGIN\|ZSF_TOKEN_LOGIN" "$(game_log)" 2> /dev/null; do
+    until grep -aq "Initialized\|ZSF_UNINITIALIZED -> ZSF_LOGIN\|ZSF_TOKEN_LOGIN" "$(game_log)" 2> /dev/null; do
         ((waited += 1))
         [[ ${waited} -lt 120 ]] || { report_failure; die "Zwift did not begin login"; }
         sleep 1
     done
 
-    # yarf exits 120 with no output when its stdout is a plain file, so pipe it through tee
-    if ! yarf --platform Mir "${YARF_SUITE_DIR}" --outdir "${OUT_DIR}" "${yarf_args[@]}" 2>&1 | tee "${OUT_DIR}/yarf.log"; then
+    # yarf exits 120 with no output when its stdout is a plain file, so pipe it through tee.
+    # PYTHONUNBUFFERED keeps yarf's progress lines (Looking for ...) appearing live through
+    # the pipe: without it Python block-buffers stdout, so the output lags far behind the
+    # screen and the pairing screen looks idle for a long time before yarf reports it.
+    if ! PYTHONUNBUFFERED=1 yarf --platform Mir "${YARF_SUITE_DIR}" --outdir "${OUT_DIR}" "${yarf_args[@]}" 2>&1 | tee "${OUT_DIR}/yarf.log"; then
         # explore mode is for watching a failing run live, so it carries on to the wait below
         if [[ ${explore_mode} == true ]]; then
             echo "pairing: note: the yarf suite failed; continuing in explore mode"

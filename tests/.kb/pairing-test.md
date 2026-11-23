@@ -129,6 +129,31 @@ compositor. With either missing, `SMOKE_DISPLAY=nested` fails and prints the `wo
 commands instead of quietly falling back to a virtual display; only `SMOKE_DISPLAY=auto` falls
 back, and `SMOKE_DISPLAY=headless` asks for the virtual display on purpose.
 
+## Headless (virtual output) rendering: why it is slow, and what not to bother trying
+
+Headless starts Mir as `--platform-display-libs mir:virtual --virtual-output 1280x1024`. On a
+host with a GPU the compositor still renders on the real device (log shows `GL renderer: Mesa
+Intel(R) Arc ...`), but the gbm-kms/generic-egl buffer allocator logs `Failed to bind EGL
+Display to Wayland display, falling back to software buffers` because this Mesa lacks
+`EGL_WL_bind_wayland_display`. That fallback is **not** the throttle, and it cannot be removed
+with an option: measured both the autodetected `mir:gbm-kms` and a forced
+`--platform-rendering-libs mir:egl-generic`, and the game's FPS was identical (~0.36) — so there
+is no Mir rendering-config win here. (`mir:virtual` is a display driver only; forcing it as a
+rendering lib fails with `undefined symbol: probe_rendering_platform`.) The virtual output is
+60 Hz.
+
+The real cost is Zwift's own load on a software-composited virtual display: it takes ~4 minutes
+to get from the game window to the pairing screen, almost all in `POST_LOGIN_INIT` (economy,
+missing-log upload, challenges, racing score), while the game throttles rendering on the static
+loading screen (so its FPS counter reads ~0.36 and its frame counters look frozen — it is
+progressing, just slowly, not hung). `${SCREEN_TIMEOUT}` in `pairing.robot` is therefore 600 s,
+not 240. Nested returns as soon as the text matches, so the larger limit is free there. Do not
+raise it further to paper over a genuine regression; check the game log's `ZSF_` transitions
+first to confirm it is still advancing.
+
+`PAIRING_MIR_ARGS` appends extra `demo-server` options (for experiments like a smaller
+`--virtual-output`); it is a debugging aid, not needed for normal runs.
+
 ## The Zwift custom GATT service (crash surface)
 
 The Zwift custom service (`00000001-19ca-4651-86e5-fa29dcdd09d1`) exposes async notifications

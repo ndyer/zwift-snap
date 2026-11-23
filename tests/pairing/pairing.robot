@@ -12,12 +12,18 @@ Library           yarf_ocr.py
 Library           yarf_frames.py
 
 *** Variables ***
-# how long to wait for a screen that must appear
-${SCREEN_TIMEOUT}    240
+# how long to wait for a screen that must appear. Headless (software-composited virtual
+# output) takes ~4 minutes just to reach the pairing screen on a slow/busy host, mostly in
+# Zwift's POST_LOGIN_INIT, so a 240 s limit times out right at the boundary; nested reaches it
+# in seconds and returns as soon as the text matches, so the larger limit costs nothing there.
+${SCREEN_TIMEOUT}    600
 # how long the pairing dialog may take to list the trainer (bluezoo reports it every second)
 ${DEVICE_TIMEOUT}    60
 # a returning profile reconnects its saved trainer on its own within this time
 ${RECONNECT_TIMEOUT}    20
+# how long to wait for the pair-device dialog (its CLOSE button) once a tile is clicked;
+# headless can take many seconds to open it
+${DIALOG_TIMEOUT}    30
 # how many times to click the POWER SOURCE tile before giving up on the dialog opening
 ${CLICK_ATTEMPTS}    6
 ${TRAINER}           KICKR
@@ -50,16 +56,17 @@ Wait For The Pairing Screen
 
 Open Device List
     [Documentation]    Click the POWER SOURCE tile until the pair-device dialog opens. A single
-    ...    click can be lost (the press and release land between two game frames, or the tile is
-    ...    still settling), so retry and confirm the dialog opened by its CLOSE button, which the
-    ...    pairing screen behind it does not have. The dialog's own title is not usable: OCR reads
-    ...    it as PAIRED DEVICES, the screen behind it.
+    ...    click can be lost (press and release land between two game frames, or the tile is
+    ...    still settling), and in headless the dialog can take many seconds to appear, so retry
+    ...    until the dialog's CLOSE button shows. Finding the tile label for the click is
+    ...    best-effort: once a dialog is opening it covers the label, so OCR may split it (POWE /
+    ...    NSOR) or miss it, and that must not abort the wait for CLOSE that follows. The
+    ...    dialog's own title is unusable: OCR reads it as PAIRED DEVICES, the screen behind it.
     FOR    ${attempt}    IN RANGE    ${CLICK_ATTEMPTS}
-        Sleep    1s
-        Click Zwift Target    POWER SOURCE
-        ${open}=    Run Keyword And Return Status    Match Text    CLOSE    5
+        ${clicked}=    Run Keyword And Return Status    Click Zwift Target    POWER SOURCE
+        ${open}=    Run Keyword And Return Status    Match Text    CLOSE    ${DIALOG_TIMEOUT}
         IF    ${open}    RETURN
-        Log    the pair-device dialog did not open yet, clicking POWER SOURCE again
+        Log    the pair-device dialog is not open yet (clicked=${clicked}), clicking POWER SOURCE again
     END
     Fail    the pair-device dialog did not open after clicking POWER SOURCE
 
