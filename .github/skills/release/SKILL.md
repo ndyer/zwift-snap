@@ -36,17 +36,26 @@ failed Store upload retryable without rebuilding.
 
 ## 1. Preflight
 
+Both remotes are **SSH** (`git@github.com:...`) and the workshop has no key, so
+`git fetch origin` fails with `Permission denied (publickey)`. That is expected, not a
+broken checkout. Compare against the remote with an **unauthenticated HTTPS fetch**
+instead (the repositories are public, so a read needs no credentials).
+
 Run these and stop with a clear report if anything is off:
 
 ```bash
 git -C /project status --porcelain          # must be empty (build artefacts are gitignored)
-git -C /project fetch origin
-git -C /project rev-parse HEAD origin/main  # must match, or say so and stop
-git -C /project/wine-src fetch origin
-git -C /project/wine-src rev-parse HEAD origin/zwift-radios-rebased  # must match
+# SSH fetch is unreachable here; fetch the branch over HTTPS and compare against FETCH_HEAD
+git -C /project fetch https://github.com/ndyer/zwift-snap.git main
+git -C /project rev-parse HEAD FETCH_HEAD   # must match, or say so and stop
+git -C /project/wine-src fetch --depth=1 https://github.com/ndyer/wine.git zwift-radios-rebased
+git -C /project/wine-src rev-parse HEAD FETCH_HEAD  # must match
 ```
 
-`wine-src` is a **shallow** clone (depth 1). `git fetch origin` works, but if it is
+Do not try to "fix" the SSH remote or add a key: HTTPS read-only fetches are enough for the
+preflight, and pushing is the user's job (see step 5).
+
+`wine-src` is a **shallow** clone (depth 1). The HTTPS fetch works, but if it is
 diverged or in a detached state from a previous `wine-checkout`, do not force anything:
 delete `wine-src` and relaunch the workshop with `ZWIFT_WINE_DEPTH=0` (see
 `.workshop/.kb/workshop-usage.md`). With `ZWIFT_WINE_DEPTH=0`, `wine-src` is a full clone
@@ -169,15 +178,23 @@ If the tag already exists locally, stop: a release version is never reused. See
 
 ## 5. Hand off to the user
 
-Print this block with the real version substituted, and stop — do not run any of it:
+Print this block with the real version substituted, and stop — do not run any of it.
+
+**Write the commands as the user will run them: from inside their own clones of the two
+repositories, on their own machine.** The workshop's `/project` path does not exist
+outside it, so do not prefix the commands with `-C /project`; instead name the repository
+each command belongs in. The notes commit and the main tag live in the zwift-snap clone,
+the wine tag in the wine clone:
 
 ```text
-Push the notes commit and both tags, in this order (from wherever you normally push;
-each repository's remote is `origin`):
+Push the notes commit and both tags, in this order.
 
-  git -C /project push origin main
-  git -C /project push origin refs/tags/v<X.Y>
-  git -C /project/wine-src push origin refs/tags/wine-<version>-zwiftsnap-v<X.Y>
+In your zwift-snap clone:
+  git push origin main
+  git push origin refs/tags/v<X.Y>
+
+In your wine clone:
+  git push origin refs/tags/wine-<version>-zwiftsnap-v<X.Y>
 
 The tag push starts the release workflow:
   https://github.com/ndyer/zwift-snap/actions/workflows/release.yml
@@ -186,10 +203,10 @@ When it is green, dispatch the publish workflow with tag v<X.Y>:
   https://github.com/ndyer/zwift-snap/actions/workflows/publish.yml
 ```
 
-If the user pushes from inside the workshop, the SSH remotes are unreachable (no key), so
-they need the HTTPS URLs and their own credentials:
-`git push https://github.com/ndyer/zwift-snap.git ...` and
-`https://github.com/ndyer/wine.git`. Do not run either yourself.
+If the user instead has only the workshop and no local clones, they can push from inside it,
+but the workshop's SSH remotes are unreachable (no key), so they need the HTTPS URLs with
+their own credentials: `git -C /project push https://github.com/ndyer/zwift-snap.git ...`
+and `https://github.com/ndyer/wine.git`. Do not run either yourself.
 
 Explain what each does: `release.yml` runs the suites, builds and uploads the artifact;
 `publish.yml` uploads that artifact to the Store's `latest/beta` and creates the GitHub
