@@ -10,6 +10,7 @@ IMPORTANT: Read the `.kb/agents.md` file.
 - [.kb/building-the-snap.md](.kb/building-the-snap.md) - Building, snap try iteration and installing the snap.
 - [.kb/verification.md](.kb/verification.md) - Which checks to run before declaring a task done.
 - [.kb/conventions.md](.kb/conventions.md) - Coding, logging and YAML conventions.
+- [.kb/alternatives-comparison.md](.kb/alternatives-comparison.md) - How this snap compares to other Zwift-on-Linux projects, and how to keep the README table current.
 - [.kb/release-procedure.md](.kb/release-procedure.md) - Where the release procedure lives and the tag/version conventions.
 - [.github/.kb/edge-build-workflow.md](.github/.kb/edge-build-workflow.md) - The daily edge build workflow: what it runs, skips and publishes.
 - [.github/.kb/release-workflow.md](.github/.kb/release-workflow.md) - The release and publish workflows: build-and-verify, then Store upload and GitHub Release.
