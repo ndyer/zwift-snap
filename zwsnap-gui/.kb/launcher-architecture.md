@@ -24,9 +24,10 @@ before moving it into place, and `sync.rs` diffs the installed files against the
 served manifest so an update transfers only what changed. `ZWIFT_CDN_BASE` points
 the launcher at another CDN root (`file://` in the tests) and `ZWIFT_DOWNLOAD_JOBS`
 caps the number of parallel transfers (default 32); with `download_adapt` on (the
-default in `settings.json`) the pool grows toward that ceiling until the link
-saturates instead of running a fixed count. See `.kb/zwift-cdn-sync.md` for the full
-description.
+default in `settings.json`) the pool probes up toward that ceiling one transfer at a
+time until the link saturates, backing off on a probe that buys too little, a
+per-file latency spike, or transport pressure (429, 503, a reset connection), instead
+of running a fixed count. See `.kb/zwift-cdn-sync.md` for the full description.
 
 ## Install progress
 

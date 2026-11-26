@@ -17,7 +17,7 @@
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 
@@ -73,6 +73,71 @@ impl Expect {
     /// Whether a file of this size and checksum satisfies the expectation.
     pub fn matches(&self, length: u64, checksum: u32) -> bool {
         self.length == length && self.checksum.is_none_or(|want| want == checksum)
+    }
+}
+
+/// A transport-level pressure signal from the CDN.
+///
+/// These are the failures that mean "the link or the server is unhappy", as opposed
+/// to a wrong manifest or a corrupted file. A transfer reports one even when the
+/// attempt is retried and later succeeds, because the pressure is real either way;
+/// the adaptive transfer-count controller uses it to shrink the pool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pressure {
+    /// HTTP 429: the server is explicitly asking us to slow down.
+    RateLimited,
+    /// HTTP 503: the server is temporarily unavailable.
+    Unavailable,
+    /// The connection was reset or otherwise dropped mid-transfer.
+    Reset,
+}
+
+/// What a running transfer reports back to the pool.
+///
+/// The pool's worker implements this over a set of shared counters, so the transfer
+/// layer can feed the adaptive controller without knowing about it. The default
+/// [`Fetcher::fetch_file_observed`] forwards only [`bytes`](Self::bytes), which is
+/// what sources that cannot stream (and every test double) need.
+pub trait TransferObserver: Sync {
+    /// `delta` more bytes were written to the staging file.
+    fn bytes(&self, delta: u64);
+
+    /// The time from starting a request to its first body byte: the file's
+    /// time-to-first-byte, a cheap latency probe for the controller.
+    fn ttfb(&self, elapsed: Duration);
+
+    /// A transport-level [`Pressure`] signal, reported even if the attempt is
+    /// retried and later succeeds.
+    fn pressure(&self, pressure: Pressure);
+}
+
+/// A [`TransferObserver`] that keeps only the byte stream, for callers that do not
+/// care about latency or pressure.
+struct BytesOnly<'a>(&'a (dyn Fn(u64) + Sync));
+
+impl TransferObserver for BytesOnly<'_> {
+    fn bytes(&self, delta: u64) {
+        (self.0)(delta);
+    }
+
+    fn ttfb(&self, _elapsed: Duration) {}
+
+    fn pressure(&self, _pressure: Pressure) {}
+}
+
+/// A failed request or body read, carrying the [`Pressure`] signal it exposed, if
+/// any.
+struct FetchError {
+    message: String,
+    pressure: Option<Pressure>,
+}
+
+impl FetchError {
+    fn new(message: String) -> FetchError {
+        FetchError {
+            message,
+            pressure: None,
+        }
     }
 }
 
@@ -217,20 +282,43 @@ impl Remote {
         expect: Expect,
         on_bytes: &(dyn Fn(u64) + Sync),
     ) -> Result<(), String> {
+        self.fetch_file_observed(url, dest, expect, &BytesOnly(on_bytes))
+    }
+
+    /// Download one file to `dest`, verified against `expect`, reporting bytes,
+    /// time-to-first-byte and transport [`Pressure`] through `observer`.
+    ///
+    /// A retried attempt reports its [`Pressure`] even when it later succeeds: the
+    /// server's throttling or the dropped connection is real either way, and the
+    /// adaptive transfer-count controller needs to see it.
+    pub fn fetch_file_observed(
+        &self,
+        url: &str,
+        dest: &Path,
+        expect: Expect,
+        observer: &dyn TransferObserver,
+    ) -> Result<(), String> {
         let deadline = MIN_FILE_TIMEOUT.max(Duration::from_secs(expect.length / CHUNK_BYTES));
         let mut last = String::new();
         for attempt in 0..ATTEMPTS {
+            let started = Instant::now();
             match self.get_stream(url, deadline) {
-                Ok(reader) => match copy_verified(reader, dest, expect, on_bytes) {
+                Ok(reader) => match copy_verified(reader, dest, expect, observer, started) {
                     Ok(()) => return Ok(()),
                     Err(error) => {
-                        last = format!("{url}: {error}");
+                        if let Some(pressure) = error.pressure {
+                            observer.pressure(pressure);
+                        }
+                        last = format!("{url}: {}", error.message);
                         let _ = fs::remove_file(dest);
                         self.backoff(attempt);
                     }
                 },
                 Err(error) => {
-                    last = error;
+                    if let Some(pressure) = error.pressure {
+                        observer.pressure(pressure);
+                    }
+                    last = error.message;
                     self.backoff(attempt);
                 }
             }
@@ -247,7 +335,9 @@ impl Remote {
 
     /// Read a whole small object, refusing anything larger than `max`.
     fn get_small(&self, url: &str, max: u64) -> Result<Box<[u8]>, String> {
-        let mut reader = self.get_stream(url, MIN_FILE_TIMEOUT)?;
+        let mut reader = self
+            .get_stream(url, MIN_FILE_TIMEOUT)
+            .map_err(|e| e.message)?;
         let mut bytes = Vec::new();
         // One byte over the limit distinguishes "exactly at the limit" from "too big".
         reader
@@ -261,20 +351,25 @@ impl Remote {
         Ok(bytes.into_boxed_slice())
     }
 
-    /// Open a response body, mapping the transport's errors to text.
-    fn get_stream(&self, url: &str, timeout: Duration) -> Result<Box<dyn Read>, String> {
+    /// Open a response body, carrying the transport's [`Pressure`] signal, if any.
+    fn get_stream(&self, url: &str, timeout: Duration) -> Result<Box<dyn Read>, FetchError> {
         match &self.source {
             Source::Http(agent) => {
-                let response = agent
-                    .get(url)
-                    .timeout(timeout)
-                    .call()
-                    .map_err(|error| describe(url, error))?;
+                let response =
+                    agent
+                        .get(url)
+                        .timeout(timeout)
+                        .call()
+                        .map_err(|error| FetchError {
+                            pressure: pressure_of_ureq(&error),
+                            message: describe(url, error),
+                        })?;
                 Ok(Box::new(response.into_reader()))
             }
             Source::Local(root) => {
-                let path = local_path(root, url)?;
-                let file = fs::File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let path = local_path(root, url).map_err(FetchError::new)?;
+                let file = fs::File::open(&path)
+                    .map_err(|e| FetchError::new(format!("{}: {e}", path.display())))?;
                 Ok(Box::new(file))
             }
         }
@@ -318,6 +413,23 @@ pub trait Fetcher: Sync {
     ) -> Result<(), String> {
         self.fetch_file(url, dest, expect)
     }
+
+    /// Download one file to `dest`, reporting byte, latency and pressure events to
+    /// `observer`.
+    ///
+    /// The default forwards only the byte stream to
+    /// [`fetch_file_with_progress`](Self::fetch_file_with_progress), so a source that
+    /// cannot report latency or pressure needs no change; [`Remote`] overrides it.
+    fn fetch_file_observed(
+        &self,
+        url: &str,
+        dest: &Path,
+        expect: Expect,
+        observer: &dyn TransferObserver,
+    ) -> Result<(), String> {
+        let bytes = |delta: u64| observer.bytes(delta);
+        self.fetch_file_with_progress(url, dest, expect, &bytes)
+    }
 }
 
 impl Fetcher for Remote {
@@ -350,6 +462,16 @@ impl Fetcher for Remote {
     ) -> Result<(), String> {
         Remote::fetch_file_with_progress(self, url, dest, expect, on_bytes)
     }
+
+    fn fetch_file_observed(
+        &self,
+        url: &str,
+        dest: &Path,
+        expect: Expect,
+        observer: &dyn TransferObserver,
+    ) -> Result<(), String> {
+        Remote::fetch_file_observed(self, url, dest, expect, observer)
+    }
 }
 
 /// Render a `ureq` failure. The status is kept because 404 and 503 mean different
@@ -359,6 +481,32 @@ fn describe(url: &str, error: ureq::Error) -> String {
         ureq::Error::Status(code, _) => format!("{url}: HTTP {code}"),
         other => format!("{url}: {other}"),
     }
+}
+
+/// The [`Pressure`] a `ureq` failure exposes, if any: the signals that mean "the
+/// link or the server is unhappy" rather than "the manifest is wrong".
+fn pressure_of_ureq(error: &ureq::Error) -> Option<Pressure> {
+    match error {
+        ureq::Error::Status(429, _) => Some(Pressure::RateLimited),
+        ureq::Error::Status(503, _) => Some(Pressure::Unavailable),
+        ureq::Error::Transport(_) => {
+            let text = error.to_string().to_ascii_lowercase();
+            (text.contains("reset") || text.contains("broken pipe")).then_some(Pressure::Reset)
+        }
+        _ => None,
+    }
+}
+
+/// The [`Pressure`] an interrupted read exposes: a dropped connection, not a
+/// corrupted body.
+fn pressure_of_io(kind: io::ErrorKind) -> Option<Pressure> {
+    matches!(
+        kind,
+        io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::BrokenPipe
+    )
+    .then_some(Pressure::Reset)
 }
 
 /// Map a URL back to a file under a `file://` root.
@@ -400,49 +548,59 @@ fn percent_decode(text: &str) -> Option<String> {
 
 /// Stream a body into `dest`, hashing as it goes, and verify it afterwards.
 ///
-/// Each chunk just written is reported through `on_bytes`, so a caller can measure
-/// throughput without re-reading the file.
+/// Each chunk just written is reported through `observer`, so a caller can measure
+/// throughput without re-reading the file; the first chunk also reports the file's
+/// time-to-first-byte, measured from `started`.
 fn copy_verified(
     mut reader: Box<dyn Read>,
     dest: &Path,
     expect: Expect,
-    on_bytes: &(dyn Fn(u64) + Sync),
-) -> Result<(), String> {
+    observer: &dyn TransferObserver,
+    started: Instant,
+) -> Result<(), FetchError> {
     if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        fs::create_dir_all(parent)
+            .map_err(|e| FetchError::new(format!("{}: {e}", parent.display())))?;
     }
-    let file = fs::File::create(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+    let file =
+        fs::File::create(dest).map_err(|e| FetchError::new(format!("{}: {e}", dest.display())))?;
     let mut writer = io::BufWriter::new(file);
     let mut hasher = crc32fast::Hasher::new();
     let mut buffer = vec![0u8; CHUNK_BYTES as usize];
     let mut total = 0u64;
+    let mut first = true;
     // One byte over the expected length catches a server that ignores the range.
     let mut limited = reader.by_ref().take(expect.length + 1);
     loop {
-        let read = limited
-            .read(&mut buffer)
-            .map_err(|e| format!("read failed after {total} bytes: {e}"))?;
+        let read = limited.read(&mut buffer).map_err(|e| FetchError {
+            message: format!("read failed after {total} bytes: {e}"),
+            pressure: pressure_of_io(e.kind()),
+        })?;
         if read == 0 {
             break;
+        }
+        if first {
+            observer.ttfb(started.elapsed());
+            first = false;
         }
         hasher.update(&buffer[..read]);
         writer
             .write_all(&buffer[..read])
-            .map_err(|e| format!("{}: {e}", dest.display()))?;
+            .map_err(|e| FetchError::new(format!("{}: {e}", dest.display())))?;
         total += read as u64;
-        on_bytes(read as u64);
+        observer.bytes(read as u64);
     }
     writer
         .flush()
-        .map_err(|e| format!("{}: {e}", dest.display()))?;
+        .map_err(|e| FetchError::new(format!("{}: {e}", dest.display())))?;
     drop(writer);
     let checksum = hasher.finalize();
     if !expect.matches(total, checksum) {
-        return Err(format!(
+        return Err(FetchError::new(format!(
             "expected {} bytes / {:#010x}, got {total} bytes / {checksum:#010x}",
             expect.length,
             expect.checksum.unwrap_or(0)
-        ));
+        )));
     }
     Ok(())
 }
@@ -460,6 +618,24 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn a_dropped_read_is_classified_as_reset_pressure() {
+        // The connection errors that mean "the link is unhappy", and nothing else.
+        assert_eq!(
+            pressure_of_io(io::ErrorKind::ConnectionReset),
+            Some(Pressure::Reset)
+        );
+        assert_eq!(
+            pressure_of_io(io::ErrorKind::ConnectionAborted),
+            Some(Pressure::Reset)
+        );
+        assert_eq!(
+            pressure_of_io(io::ErrorKind::BrokenPipe),
+            Some(Pressure::Reset)
+        );
+        assert_eq!(pressure_of_io(io::ErrorKind::NotFound), None);
     }
 
     #[test]

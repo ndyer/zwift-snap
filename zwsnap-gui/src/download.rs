@@ -16,14 +16,15 @@
 //!   once, not the whole plan. A full first install is several GiB and must not need
 //!   twice that.
 //!
-//! With [`Adaptive`] the pool also grows and shrinks while it runs: it measures the
-//! throughput of each window as a *rate* (bytes per second, over the window's real
-//! elapsed time rather than its raw byte total), smooths it with an exponential
-//! moving average, adds a worker while the rate still improves, and trims the count
-//! back once several windows in a row decline. Measuring a rate is what makes this stable:
-//! a window that merely lasted longer, or a stalled patch of the plan, can no longer
-//! be misread as the link slowing down, so the count settles where the link is
-//! saturated instead of being guessed up front or ratcheting down toward one.
+//! With [`Adaptive`] the pool also grows and shrinks while it runs. Growth is a
+//! probe: it adds one transfer and keeps it only if the mean rate over the windows
+//! after the probe rose by at least [`MARGINAL_GAIN`] over the mean before it — a
+//! search for the point where the link saturates, rather than a guess up front. It
+//! shrinks on things a saturated link actually does: a probe that bought too little,
+//! a spike in per-file time-to-first-byte, or the transport reporting pressure (HTTP
+//! 429, 503, a reset connection). Judging each probe on a *mean* rate, not one window,
+//! is what keeps this stable: the plan's file-size mix no longer looks like a change
+//! in the link, and a quiet patch cannot ratchet the count down toward one.
 
 use std::fs;
 use std::path::Path;
@@ -32,7 +33,7 @@ use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::cancel::Cancellation;
-use crate::cdn::{Expect, Fetcher};
+use crate::cdn::{Expect, Fetcher, Pressure, TransferObserver};
 use crate::logging::Logger;
 use crate::manifest::{FileEntry, RelPath};
 
@@ -60,10 +61,10 @@ pub struct DownloadConfig<'a> {
 
 /// Parameters for the adaptive transfer count.
 ///
-/// The count starts at `start`, grows by one while a window's throughput improves,
-/// and is trimmed back once several windows in a row decline: the additive-increase,
-/// multiplicative-decrease response to a saturated link. It never exceeds the
-/// [`DownloadConfig::jobs`] ceiling.
+/// The count starts at `start` and probes upward one transfer at a time, keeping a
+/// transfer only while it buys throughput; it is trimmed back sooner, and harder, on
+/// a probe that bought too little, a latency spike, or transport pressure. It never
+/// exceeds the [`DownloadConfig::jobs`] ceiling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Adaptive {
     /// Transfers to begin with. Clamped to `1..=jobs`.
@@ -111,9 +112,10 @@ pub fn download(
     // A shared cursor into `files`, so workers pull work without a channel.
     let next = AtomicUsize::new(0);
     let done = AtomicU64::new(0);
-    // Network bytes consumed during the current sampling window, summed by the
-    // workers through `on_bytes` and drained by the controller each window.
-    let bytes = AtomicU64::new(0);
+    // The current sampling window's signals — bytes, per-file time-to-first-byte and
+    // transport pressure — summed by the workers through the observer and drained by
+    // the controller each window.
+    let counters = WindowCounters::new();
     // The most recent rate the controller measured, as `f64` bits, so a worker's
     // per-file tick can repeat it instead of dropping the display back to a bare
     // percentage between windows. NaN until the first window, meaning "unknown".
@@ -139,7 +141,7 @@ pub fn download(
             // likes are `Copy`, so the `move` closure only has to own its `id`.
             let next = &next;
             let done = &done;
-            let bytes = &bytes;
+            let counters = &counters;
             let last_rate = &last_rate;
             let failure = &failure;
             let cancellation = &cancellation;
@@ -153,7 +155,7 @@ pub fn download(
                     total,
                     next,
                     done,
-                    bytes,
+                    counters,
                     last_rate,
                     failure,
                     cancellation,
@@ -176,13 +178,13 @@ pub fn download(
                     break;
                 }
                 let elapsed = started.elapsed().as_secs_f64();
-                let now = bytes.swap(0, Ordering::Relaxed);
                 if elapsed <= 0.0 {
                     continue;
                 }
                 // Bytes over the window's *real* duration, so an uneven or stalled
                 // window is compared on the same footing as any other.
-                let rate = now as f64 / elapsed;
+                let sample = counters.drain(elapsed);
+                let rate = sample.rate;
                 let completed = done.load(Ordering::Relaxed);
                 // Remember the rate for the workers' own ticks, and publish it with
                 // the bytes so the UI can show the transfer speed.
@@ -192,20 +194,25 @@ pub fn download(
                 // Near the end of the plan there is too little left to keep the pool
                 // busy, so throughput falls for reasons that say nothing about the
                 // link: hold instead of reading the tail as a loss.
-                let wanted = if total.saturating_sub(completed) < tail_bytes(rate, elapsed) {
-                    before
+                let decision = if total.saturating_sub(completed) < tail_bytes(rate, elapsed) {
+                    Decision {
+                        desired: before,
+                        reason: None,
+                    }
                 } else {
-                    controller.observe(rate)
+                    controller.observe(&sample)
                 };
-                if wanted != before {
+                if decision.desired != before {
                     logger.debug(&format!(
-                        "Download concurrency {before} -> {wanted} ({}) using {} bytes in {:.2}s",
+                        "Download concurrency {before} -> {} ({}; {}) using {} bytes in {:.2}s",
+                        decision.desired,
+                        decision.reason.unwrap_or("adaptive"),
                         crate::stats::rate(rate),
-                        now,
+                        sample.bytes,
                         elapsed
                     ));
-                    peak.fetch_max(wanted, Ordering::Relaxed);
-                    pool.set_desired(wanted);
+                    peak.fetch_max(decision.desired, Ordering::Relaxed);
+                    pool.set_desired(decision.desired);
                 }
             }
         }
@@ -229,6 +236,93 @@ pub fn download(
     Ok(files.len())
 }
 
+/// The shared counters a window's transfer signals are summed into.
+///
+/// Workers report into these through the [`TransferObserver`] implementation below;
+/// the adaptive controller drains them once per sampling window. Keeping them in one
+/// place means the transfer layer never learns the controller exists.
+struct WindowCounters {
+    bytes: AtomicU64,
+    ttfb_nanos: AtomicU64,
+    ttfb_count: AtomicU64,
+    rate_limited: AtomicU64,
+    unavailable: AtomicU64,
+    reset: AtomicU64,
+}
+
+impl WindowCounters {
+    fn new() -> WindowCounters {
+        WindowCounters {
+            bytes: AtomicU64::new(0),
+            ttfb_nanos: AtomicU64::new(0),
+            ttfb_count: AtomicU64::new(0),
+            rate_limited: AtomicU64::new(0),
+            unavailable: AtomicU64::new(0),
+            reset: AtomicU64::new(0),
+        }
+    }
+
+    /// Take everything accumulated since the last drain, as one window's signals.
+    /// `elapsed` is the window's real duration in seconds, and is positive.
+    fn drain(&self, elapsed: f64) -> Window {
+        let bytes = self.bytes.swap(0, Ordering::Relaxed);
+        let ttfb_count = self.ttfb_count.swap(0, Ordering::Relaxed);
+        let ttfb_nanos = self.ttfb_nanos.swap(0, Ordering::Relaxed);
+        Window {
+            rate: bytes as f64 / elapsed,
+            bytes,
+            ttfb: (ttfb_count > 0).then(|| Duration::from_nanos(ttfb_nanos / ttfb_count)),
+            rate_limited: self.rate_limited.swap(0, Ordering::Relaxed) as u32,
+            unavailable: self.unavailable.swap(0, Ordering::Relaxed) as u32,
+            reset: self.reset.swap(0, Ordering::Relaxed) as u32,
+        }
+    }
+}
+
+impl TransferObserver for WindowCounters {
+    fn bytes(&self, delta: u64) {
+        self.bytes.fetch_add(delta, Ordering::Relaxed);
+    }
+
+    fn ttfb(&self, elapsed: Duration) {
+        self.ttfb_nanos
+            .fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+        self.ttfb_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn pressure(&self, pressure: Pressure) {
+        let counter = match pressure {
+            Pressure::RateLimited => &self.rate_limited,
+            Pressure::Unavailable => &self.unavailable,
+            Pressure::Reset => &self.reset,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// One sampling window's worth of transfer signals.
+struct Window {
+    /// Throughput in bytes per second over the window's real elapsed time.
+    rate: f64,
+    /// Raw bytes transferred, for the log line.
+    bytes: u64,
+    /// Mean time-to-first-byte across the files that started in this window.
+    ttfb: Option<Duration>,
+    /// Files the server answered with HTTP 429.
+    rate_limited: u32,
+    /// Files the server answered with HTTP 503.
+    unavailable: u32,
+    /// Transfers whose connection was reset.
+    reset: u32,
+}
+
+/// The controller's verdict for the next window.
+struct Decision {
+    desired: usize,
+    /// Why the count changed, for the log line; `None` when it did not.
+    reason: Option<&'static str>,
+}
+
 /// One pool worker: claim the next file and fetch it, until the plan is claimed or
 /// something fails.
 ///
@@ -244,16 +338,13 @@ fn run_worker(
     total: u64,
     next: &AtomicUsize,
     done: &AtomicU64,
-    bytes: &AtomicU64,
+    counters: &WindowCounters,
     last_rate: &AtomicU64,
     failure: &Mutex<Option<String>>,
     cancellation: &Cancellation,
     pool: &Pool,
     progress: ByteProgress<'_>,
 ) {
-    let on_bytes = |delta: u64| {
-        bytes.fetch_add(delta, Ordering::Relaxed);
-    };
     loop {
         if !pool.wait_turn(id) {
             break;
@@ -285,7 +376,7 @@ fn run_worker(
             pool.close();
             break;
         };
-        if let Err(error) = fetch_one(fetcher, config, path, entry, &on_bytes) {
+        if let Err(error) = fetch_one(fetcher, config, path, entry, counters) {
             // Another worker may have failed first; keep that error.
             failure
                 .lock()
@@ -370,9 +461,26 @@ impl Pool {
     }
 }
 
-/// The smoothed throughput must rise by this fraction of the previous window to
-/// add a transfer.
-const GROWTH_FRACTION: f64 = 0.05;
+/// The throughput gain a probe must buy to keep the transfer it added: the mean rate
+/// over [`PROBE_WINDOWS`] windows after the probe, against the mean over
+/// [`BASELINE_WINDOWS`] before it. Below this the link is saturated and the transfer
+/// is given back.
+const MARGINAL_GAIN: f64 = 0.05;
+
+/// Windows averaged to estimate the steady rate a probe is compared against. One
+/// window swings with the plan's file-size mix even on a steady link, so judging a
+/// probe on a single window reads that noise as signal; a mean of several does not.
+const BASELINE_WINDOWS: usize = 3;
+
+/// Windows averaged, after the settle, to estimate the rate a probe bought. The
+/// before and after means cover the same number of windows, so the comparison is
+/// symmetric and neither side is noisier than the other.
+const PROBE_WINDOWS: u32 = 3;
+
+/// Windows swallowed after a probe opens its connection before measuring begins: the
+/// first window is mostly the new connection's slow start, not the link's steady
+/// state, so folding it into the mean would bias the gain down.
+const PROBE_SETTLE: u32 = 1;
 
 /// Decode the rate a worker's per-file tick should report from the bits the
 /// controller last stored. `None` until the first window has measured a rate, so a
@@ -382,41 +490,114 @@ fn tick_rate(bits: u64) -> Option<f64> {
     rate.is_finite().then_some(rate)
 }
 
-/// The smoothed throughput must fall by this fraction to count as a decline.
-const DECLINE_FRACTION: f64 = 0.10;
-
-/// Consecutive declining windows before the transfer count is trimmed back.
-const DECLINE_RUN: u32 = 4;
-
-/// How much of the pool survives a cutback, as a fraction (`DECLINE_KEEP / 4`): a
-/// quarter given up rather than half, so one bad patch costs far less additive
-/// growth to recover from.
+/// How much of the pool survives a pressure cutback, as a fraction
+/// (`DECLINE_KEEP / 4`): a quarter given up, not half.
 const DECLINE_KEEP: usize = 3;
 
-/// The weight the newest window carries in the smoothed throughput.
-const SMOOTHING: f64 = 0.4;
+/// A window's mean time-to-first-byte above this multiple of the baseline counts as
+/// a latency spike: the link is queueing rather than flowing.
+const TTFB_SPIKE_FACTOR: f64 = 2.0;
 
-/// The adaptive transfer-count controller: additive increase, multiplicative
-/// decrease, but driven by a smoothed *rate* and only after a run of declines.
+/// Consecutive spiking windows before the transfer count is eased back. A single
+/// busy window is noise — the file-size mix alone swings the mean — so reacting to
+/// each one would walk the pool down toward one on a healthy link. Only a sustained
+/// rise counts.
+const LATENCY_RUN: u32 = 3;
+
+/// The weight the newest window carries in the time-to-first-byte baseline.
+const TTFB_SMOOTHING: f64 = 0.3;
+
+/// Windows to wait before probing again after a 429, which is the server explicitly
+/// asking us to slow down.
+const RATE_LIMIT_COOLDOWN: u32 = 4;
+
+/// Windows to wait before probing again after a 503 or a reset connection.
+const PRESSURE_COOLDOWN: u32 = 2;
+
+/// Windows to wait before probing again after a latency spike.
+const SPIKE_COOLDOWN: u32 = 3;
+
+/// Windows to wait before probing again after a probe bought less than
+/// [`MARGINAL_GAIN`]: the link is saturated, so stop pushing it.
+const SATURATED_COOLDOWN: u32 = 8;
+
+/// The adaptive transfer-count controller.
 ///
-/// Measuring a rate (bytes per second, over each window's real elapsed time) instead
-/// of the window's raw byte total removes the old rule's main failure: a window that
-/// merely lasted longer, or one the plan stalled through, no longer looks like a
-/// loss. Smoothing the rate and requiring several windows in a row to decline removes
-/// the other: a single noisy dip no longer shrinks the pool, so the count cannot
-/// ratchet itself down toward one.
+/// It grows the pool one transfer at a time and keeps a transfer only if it bought at
+/// least [`MARGINAL_GAIN`] more throughput — a probe-and-commit search for the point
+/// where the link saturates. The gain is judged on the *mean* rate over the windows on
+/// each side of the probe ([`BASELINE_WINDOWS`] before, [`PROBE_WINDOWS`] after a
+/// settle), not on one window, so the plan's file-size mix cannot pass for a real gain
+/// or loss. It backs off a little sooner when the transfer layer reports a reason to: a
+/// sustained per-file latency spike costs one transfer, and transport pressure (429,
+/// 503, a reset connection) costs a quarter or more.
 struct Controller {
     /// The transfer count to run for the next window.
     desired: usize,
     /// The ceiling: the plan's file count, or the configured `jobs`.
     max: usize,
-    /// The smoothed throughput in bytes per second, or `None` until the first window.
-    smoothed: Option<f64>,
-    /// Windows in a row whose smoothed throughput fell by at least [`DECLINE_FRACTION`].
-    declines: u32,
-    /// Set for the single window after a change, to absorb the slow start of the
-    /// connections that change opened.
-    settle: bool,
+    /// The mean of the last few window rates: the baseline a probe is compared against.
+    recent: RateWindow,
+    /// An in-flight probe, if any.
+    probe: Option<Probe>,
+    /// Windows remaining before another probe is allowed.
+    cooldown: u32,
+    /// The smoothed time-to-first-byte in seconds, spiking windows excluded.
+    ttfb_baseline: Option<f64>,
+    /// Consecutive spiking windows seen, reset by any calm or skipped window.
+    spike_run: u32,
+}
+
+/// A transfer added to test whether it buys throughput.
+#[derive(Clone, Copy)]
+struct Probe {
+    /// The mean steady-window rate before the transfer was added.
+    baseline_rate: f64,
+    /// Windows left to swallow before measuring, so the new connection's slow start is
+    /// not mistaken for the link's steady state.
+    settle_left: u32,
+    /// The sum of the post-settle window rates measured so far.
+    sum: f64,
+    /// How many post-settle windows have been measured.
+    samples: u32,
+}
+
+/// The mean of the last [`BASELINE_WINDOWS`] window rates.
+///
+/// A probe judges its gain against a mean rather than a single window, because one
+/// window's rate swings with the plan's file-size mix even on a steady link.
+struct RateWindow {
+    samples: [f64; BASELINE_WINDOWS],
+    next: usize,
+    filled: usize,
+}
+
+impl RateWindow {
+    fn new() -> RateWindow {
+        RateWindow {
+            samples: [0.0; BASELINE_WINDOWS],
+            next: 0,
+            filled: 0,
+        }
+    }
+
+    fn push(&mut self, rate: f64) {
+        self.samples[self.next] = rate;
+        self.next = (self.next + 1) % BASELINE_WINDOWS;
+        self.filled = (self.filled + 1).min(BASELINE_WINDOWS);
+    }
+
+    /// Whether a full window of samples has been seen, so the mean is a stable basis
+    /// for a probe.
+    fn is_full(&self) -> bool {
+        self.filled == BASELINE_WINDOWS
+    }
+
+    /// The mean of the samples seen so far, or `None` before the first.
+    fn mean(&self) -> Option<f64> {
+        (self.filled > 0)
+            .then(|| self.samples[..self.filled].iter().sum::<f64>() / self.filled as f64)
+    }
 }
 
 impl Controller {
@@ -426,71 +607,162 @@ impl Controller {
         Controller {
             desired: start.clamp(1, max),
             max,
-            smoothed: None,
-            declines: 0,
-            settle: false,
+            recent: RateWindow::new(),
+            probe: None,
+            cooldown: 0,
+            ttfb_baseline: None,
+            spike_run: 0,
         }
     }
 
-    /// Fold one window's `rate` (bytes per second) into the average and return the
-    /// transfer count to run for the next window.
-    fn observe(&mut self, rate: f64) -> usize {
-        let smoothed = match self.smoothed {
-            Some(previous) => SMOOTHING * rate + (1.0 - SMOOTHING) * previous,
-            None => rate,
-        };
-        let previous = self.smoothed.replace(smoothed);
-
-        // The window right after a change is mostly its new connections' slow start,
-        // not the link's steady state, so it only feeds the average.
-        if self.settle {
-            self.settle = false;
-            return self.desired;
+    /// Fold one `window`'s signals in and decide the transfer count for the next.
+    fn observe(&mut self, window: &Window) -> Decision {
+        let rate = window.rate;
+        self.recent.push(rate);
+        if self.cooldown > 0 {
+            self.cooldown -= 1;
         }
 
-        let Some(previous) = previous else {
-            // Nothing to compare the first window against; if bytes moved, spend the
-            // next window trying one more transfer.
-            return if smoothed > 0.0 {
-                self.change(self.desired + 1)
+        // Transport pressure first: the server is telling us to slow down, and no
+        // throughput reading matters until we have.
+        if window.rate_limited > 0 {
+            self.probe = None;
+            self.spike_run = 0;
+            self.cooldown = self.cooldown.max(RATE_LIMIT_COOLDOWN);
+            // A 429 is explicit, so give up half the pool, not a quarter.
+            return self.change(self.desired / 2, "429 rate limited");
+        }
+        if window.unavailable > 0 || window.reset > 0 {
+            self.probe = None;
+            self.spike_run = 0;
+            self.cooldown = self.cooldown.max(PRESSURE_COOLDOWN);
+            let reason = if window.unavailable > 0 {
+                "503 unavailable"
             } else {
-                self.desired
+                "connection reset"
             };
-        };
-        if previous <= 0.0 {
-            return self.desired;
+            return self.change(self.desired * DECLINE_KEEP / 4, reason);
         }
 
-        let change = smoothed / previous - 1.0;
-        if change >= GROWTH_FRACTION {
-            // Still buying throughput: add one transfer and clear any decline run.
-            self.declines = 0;
-            self.change(self.desired + 1)
-        } else if change <= -DECLINE_FRACTION {
-            // Worse, but only give transfers up once the fall is sustained.
-            self.declines += 1;
-            if self.declines >= DECLINE_RUN {
-                self.declines = 0;
-                self.change((self.desired * DECLINE_KEEP / 4).max(1))
+        // A latency spike, but only a *sustained* one: the file-size mix swings the
+        // mean TTFB window to window, so a single busy window is noise and reacting to
+        // each would ratchet the pool down toward one. The window a change opened (its
+        // settle window) is skipped too: a freshly opened connection's first byte is
+        // dominated by its handshake, not by link queueing.
+        if let Some(ttfb) = window.ttfb {
+            let seconds = ttfb.as_secs_f64();
+            let settling = self.probe.is_some_and(|probe| probe.settle_left > 0);
+            if !settling && self.spike(Some(ttfb)) {
+                self.spike_run += 1;
+                if self.spike_run >= LATENCY_RUN {
+                    self.spike_run = 0;
+                    self.probe = None;
+                    self.cooldown = self.cooldown.max(SPIKE_COOLDOWN);
+                    // Adopt the elevated level as the new normal, so a level shift the
+                    // link (not our concurrency) caused does not keep firing.
+                    self.ttfb_baseline = Some(seconds);
+                    return self.change(self.desired.saturating_sub(1), "latency spike");
+                }
+                // Still climbing toward a run: leave the baseline calm, so the next
+                // window is compared against it rather than against the spike.
             } else {
-                self.desired
+                self.spike_run = 0;
+                self.ttfb_baseline = Some(match self.ttfb_baseline {
+                    Some(previous) => TTFB_SMOOTHING * seconds + (1.0 - TTFB_SMOOTHING) * previous,
+                    None => seconds,
+                });
             }
-        } else {
-            // Flat: the link is saturated, or the wobble is inside the noise band.
-            self.declines = 0;
-            self.desired
+        }
+
+        // Resolve an in-flight probe: swallow its settle, then average the windows it
+        // opened before judging whether the extra transfer paid for itself.
+        if let Some(probe) = self.probe.take() {
+            if probe.settle_left > 0 {
+                self.probe = Some(Probe {
+                    settle_left: probe.settle_left - 1,
+                    ..probe
+                });
+                return Decision {
+                    desired: self.desired,
+                    reason: None,
+                };
+            }
+            let sum = probe.sum + rate;
+            let samples = probe.samples + 1;
+            if samples < PROBE_WINDOWS {
+                self.probe = Some(Probe {
+                    sum,
+                    samples,
+                    ..probe
+                });
+                return Decision {
+                    desired: self.desired,
+                    reason: None,
+                };
+            }
+            let measured = sum / samples as f64;
+            let gain = if probe.baseline_rate > 0.0 {
+                measured / probe.baseline_rate - 1.0
+            } else {
+                0.0
+            };
+            if gain >= MARGINAL_GAIN {
+                // The extra transfer paid off; keep it and allow another probe.
+                return Decision {
+                    desired: self.desired,
+                    reason: None,
+                };
+            }
+            // Marginal: give the transfer back and stop probing for a while.
+            self.cooldown = self.cooldown.max(SATURATED_COOLDOWN);
+            self.spike_run = 0;
+            return self.change(self.desired.saturating_sub(1), "saturated");
+        }
+
+        // Otherwise probe for one more transfer, once a full baseline window and no
+        // cooldown allow it.
+        if self.cooldown == 0 && self.desired < self.max && self.recent.is_full() {
+            if let Some(baseline_rate) = self.recent.mean() {
+                self.probe = Some(Probe {
+                    baseline_rate,
+                    settle_left: PROBE_SETTLE,
+                    sum: 0.0,
+                    samples: 0,
+                });
+                return self.change(self.desired + 1, "probing");
+            }
+        }
+        Decision {
+            desired: self.desired,
+            reason: None,
         }
     }
 
-    /// Adopt `desired` (clamped to `1..=max`), arming the settle window only when it
-    /// actually moves.
-    fn change(&mut self, desired: usize) -> usize {
+    /// Whether `ttfb` is a spike against the current baseline.
+    fn spike(&self, ttfb: Option<Duration>) -> bool {
+        match (ttfb, self.ttfb_baseline) {
+            (Some(ttfb), Some(baseline)) if baseline > 0.0 => {
+                ttfb.as_secs_f64() > baseline * TTFB_SPIKE_FACTOR
+            }
+            _ => false,
+        }
+    }
+
+    /// Adopt `desired` (clamped to `1..=max`) and report why, when it moved.
+    fn change(&mut self, desired: usize, reason: &'static str) -> Decision {
         let desired = desired.clamp(1, self.max);
         if desired != self.desired {
             self.desired = desired;
-            self.settle = true;
+            Decision {
+                desired,
+                reason: Some(reason),
+            }
+        } else {
+            Decision {
+                desired,
+                reason: None,
+            }
         }
-        self.desired
     }
 }
 
@@ -507,7 +779,7 @@ fn fetch_one(
     config: &DownloadConfig<'_>,
     path: &RelPath,
     entry: &FileEntry,
-    on_bytes: &(dyn Fn(u64) + Sync),
+    observer: &dyn TransferObserver,
 ) -> Result<(), String> {
     let staged = config.staging_dir.join(path.as_str());
     let url = fetcher.file_url(config.folder, path);
@@ -515,7 +787,7 @@ fn fetch_one(
         length: entry.length,
         checksum: entry.checksum,
     };
-    fetcher.fetch_file_with_progress(&url, &staged, expect, on_bytes)?;
+    fetcher.fetch_file_observed(&url, &staged, expect, observer)?;
     // The manifest's timestamp is the game's own bookkeeping: set it before the file
     // is visible under its real name, so nothing ever observes the wrong mtime.
     if let Some(modified) = entry.modified {
@@ -556,6 +828,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
 
     /// A CDN that serves a fixed map of path -> bytes, counts fetches, and can be
     /// told to fail one path or to cancel the launcher mid-transfer.
@@ -856,66 +1129,155 @@ mod tests {
         assert!(!install.join("b").exists());
     }
 
-    #[test]
-    fn the_controller_grows_while_throughput_improves() {
-        let mut controller = Controller::new(2, 8);
-        // Doubling the rate every window keeps driving the count up, one transfer at
-        // a time (a window is absorbed after each change, see the settle test below),
-        // until it reaches the ceiling and stays there.
-        let mut rate = 100.0;
-        for _ in 0..24 {
-            controller.observe(rate);
-            rate *= 2.0;
+    /// A window carrying only a throughput rate.
+    fn window(rate: f64) -> Window {
+        Window {
+            rate,
+            bytes: 0,
+            ttfb: None,
+            rate_limited: 0,
+            unavailable: 0,
+            reset: 0,
         }
-        assert_eq!(controller.desired, 8);
     }
 
-    #[test]
-    fn the_controller_holds_a_flat_rate() {
-        let mut controller = Controller::new(4, 16);
-        // The first window with traffic spends one more transfer; the next is the
-        // settle window for that change.
-        controller.observe(1_000.0);
-        controller.observe(1_000.0);
-        let settled = controller.desired;
-        // Flat throughput is saturated: it must not keep growing, nor shrink.
-        for _ in 0..10 {
-            controller.observe(1_000.0);
+    /// A window carrying a rate and a mean per-file time-to-first-byte.
+    fn window_with_ttfb(rate: f64, ttfb: Duration) -> Window {
+        Window {
+            ttfb: Some(ttfb),
+            ..window(rate)
         }
-        assert_eq!(controller.desired, settled);
+    }
+
+    /// Drive the controller for `rounds` windows against a link whose throughput
+    /// depends on the transfer count the controller currently wants, as a real link's
+    /// does. The rate sampled for each window uses the count before that window's
+    /// `observe`, so a probe sees the throughput its extra transfer actually bought.
+    fn drive(controller: &mut Controller, rounds: usize, link: impl Fn(usize) -> f64) {
+        for _ in 0..rounds {
+            let rate = link(controller.desired);
+            controller.observe(&window(rate));
+        }
     }
 
     #[test]
-    fn the_controller_trims_only_after_a_sustained_decline() {
-        let mut controller = Controller::new(8, 16);
-        controller.observe(1_000.0);
-        controller.observe(1_000.0);
-        let steady = controller.desired;
-        assert!(steady > 8);
-
-        // A single slow window is smoothed away and must not shrink the pool.
-        controller.observe(10.0);
-        assert_eq!(controller.desired, steady);
-
-        // Only a sustained run of declines is a real loss of throughput, and even
-        // then the cutback is a quarter, not a half.
-        controller.observe(10.0);
-        controller.observe(10.0);
-        controller.observe(10.0);
-        assert_eq!(controller.desired, (steady * DECLINE_KEEP / 4).max(1));
-    }
-
-    #[test]
-    fn the_controller_never_trims_below_one() {
+    fn the_controller_climbs_a_link_that_still_improves() {
         let mut controller = Controller::new(2, 16);
-        // Run the count up on a healthy window, then pull the rate down in a long,
-        // steep slide. Repeated cutbacks reach the floor of one transfer and stop
-        // there rather than falling to zero.
-        controller.observe(1_000_000.0);
-        for step in 0..50 {
-            controller.observe(1_000_000.0 / (step as f64 + 2.0));
+        // Every extra transfer adds 25% of the base: well above MARGINAL_GAIN, so each
+        // probe pays for itself and the count walks up to the ceiling.
+        drive(&mut controller, 200, |n| {
+            40_000_000.0 + 10_000_000.0 * n as f64
+        });
+        assert_eq!(controller.desired, 16);
+    }
+
+    #[test]
+    fn the_controller_settles_a_saturated_link() {
+        let mut controller = Controller::new(2, 16);
+        // Throughput stops rising past six transfers: an extra one buys nothing, so
+        // the controller should hover at the knee, well below the ceiling, not run to
+        // it. The resting count is six; seven is the transient of the probe it keeps
+        // trying and giving back. A single noisy-window judgement thrashes here instead.
+        drive(&mut controller, 300, |n| {
+            60_000_000.0_f64.min(10_000_000.0 * n as f64)
+        });
+        assert!(
+            (6..=7).contains(&controller.desired),
+            "desired = {}",
+            controller.desired
+        );
+    }
+
+    #[test]
+    fn a_flat_link_never_grows() {
+        let mut controller = Controller::new(2, 16);
+        // A flat link buys nothing from an extra transfer, so every probe is given
+        // back and the count never leaves its starting point.
+        drive(&mut controller, 200, |_| 50_000_000.0);
+        assert_eq!(controller.desired, 2);
+    }
+
+    #[test]
+    fn a_rate_limit_halves_the_pool() {
+        let mut controller = Controller::new(8, 16);
+        let mut w = window(100.0);
+        w.rate_limited = 1;
+        let decision = controller.observe(&w);
+        assert_eq!(decision.reason, Some("429 rate limited"));
+        assert_eq!(controller.desired, 4);
+    }
+
+    #[test]
+    fn a_503_or_a_reset_gives_up_a_quarter() {
+        let mut controller = Controller::new(8, 16);
+        let mut unavailable = window(100.0);
+        unavailable.unavailable = 1;
+        let decision = controller.observe(&unavailable);
+        assert_eq!(decision.reason, Some("503 unavailable"));
+        assert_eq!(controller.desired, 6);
+
+        let mut controller = Controller::new(8, 16);
+        let mut reset = window(100.0);
+        reset.reset = 1;
+        let decision = controller.observe(&reset);
+        assert_eq!(decision.reason, Some("connection reset"));
+        assert_eq!(controller.desired, 6);
+    }
+
+    #[test]
+    fn pressure_never_trims_below_one() {
+        let mut controller = Controller::new(4, 16);
+        // A long run of 429s reaches the floor of one transfer and stops there
+        // rather than falling to zero.
+        for _ in 0..32 {
+            let mut w = window(100.0);
+            w.rate_limited = 1;
+            controller.observe(&w);
         }
         assert_eq!(controller.desired, 1);
+    }
+
+    #[test]
+    fn a_sustained_latency_spike_costs_one_transfer() {
+        // `max == start`, so the controller never probes and only the spike moves it.
+        let mut controller = Controller::new(4, 4);
+        let baseline = Duration::from_millis(100);
+        for _ in 0..5 {
+            controller.observe(&window_with_ttfb(1_000.0, baseline));
+        }
+        assert_eq!(controller.desired, 4);
+        // One spiking window is noise (the file-size mix swings the mean) and must not
+        // move the count.
+        let decision = controller.observe(&window_with_ttfb(1_000.0, Duration::from_millis(300)));
+        assert_eq!(decision.reason, None);
+        assert_eq!(controller.desired, 4);
+        // Nor do two: only a run of LATENCY_RUN of them is a real loss of the link.
+        let decision = controller.observe(&window_with_ttfb(1_000.0, Duration::from_millis(300)));
+        assert_eq!(decision.reason, None);
+        assert_eq!(controller.desired, 4);
+        let decision = controller.observe(&window_with_ttfb(1_000.0, Duration::from_millis(300)));
+        assert_eq!(decision.reason, Some("latency spike"));
+        assert_eq!(controller.desired, 3);
+        // The elevated level is adopted, so a window at the same latency is no longer
+        // a spike: the count cannot ratchet down on a level shift it did not cause.
+        let decision = controller.observe(&window_with_ttfb(1_000.0, Duration::from_millis(300)));
+        assert_eq!(decision.reason, None);
+        assert_eq!(controller.desired, 3);
+    }
+
+    #[test]
+    fn a_latency_spike_does_not_raise_the_baseline_until_it_is_acted_on() {
+        let mut controller = Controller::new(4, 4);
+        for _ in 0..5 {
+            controller.observe(&window_with_ttfb(1_000.0, Duration::from_millis(100)));
+        }
+        // A spiking window is not folded into the baseline, so the next spike still
+        // reads as a spike rather than as the new normal, and the run can reach three.
+        controller.observe(&window_with_ttfb(1_000.0, Duration::from_millis(500)));
+        let decision = controller.observe(&window_with_ttfb(1_000.0, Duration::from_millis(500)));
+        assert_eq!(decision.reason, None);
+        let decision = controller.observe(&window_with_ttfb(1_000.0, Duration::from_millis(500)));
+        assert_eq!(decision.reason, Some("latency spike"));
     }
 
     #[test]

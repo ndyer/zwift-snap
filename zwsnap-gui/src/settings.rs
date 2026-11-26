@@ -26,8 +26,9 @@ pub struct Settings {
     pub graphics: GraphicsSetting,
     pub disable_egl: bool,
     pub bluetooth_debug: bool,
-    /// Grow the CDN download's parallelism until the link saturates, instead of a
-    /// fixed pool. On by default; see [`crate::download::Adaptive`].
+    /// Probe the CDN download's parallelism up until the link saturates, and back
+    /// off on server pressure, instead of a fixed pool. On by default; see
+    /// [`crate::download::Adaptive`].
     pub download_adapt: bool,
     pub verbosity: u8,
     /// Draw the launcher's controls as text labels instead of icons. Off by default.

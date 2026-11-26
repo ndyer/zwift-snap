@@ -161,8 +161,9 @@ impl SettingsDialog {
         let download_adapt = gtk::CheckButton::with_label("Adaptive download concurrency");
         download_adapt.set_active(settings.download_adapt);
         download_adapt.set_tooltip_text(Some(
-            "Grow the number of parallel downloads until the connection saturates, instead \
-             of a fixed pool. Off uses ZWIFT_DOWNLOAD_JOBS as a fixed count.",
+            "Probe the number of parallel downloads up until the connection saturates, and \
+             back off on server pressure, instead of a fixed pool. Off uses \
+             ZWIFT_DOWNLOAD_JOBS as a fixed count.",
         ));
         grid.attach(&download_adapt, 0, 4, 2, 1);
 

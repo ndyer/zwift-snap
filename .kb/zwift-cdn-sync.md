@@ -50,17 +50,40 @@ Two environment variables, both parsed in `application.rs`, configure it:
 checks) and `ZWIFT_DOWNLOAD_JOBS` caps the number of parallel transfers (default 32).
 
 The transfer count is also adaptive by default: unless `download_adapt` is turned off in
-`settings.json`, `download.rs` starts below the `ZWIFT_DOWNLOAD_JOBS` ceiling and grows the
-pool by one while throughput keeps improving, so the count settles where the link
-saturates rather than being guessed up front. It measures throughput as a *rate* over the
-real elapsed time of the sampling window (not raw bytes, which vary with a stalled window),
-smooths it with an exponential moving average, and only trims the pool back after a
-sustained run of declines (four windows in a row each down at least a tenth, and then by a
-quarter, not a half) so one noisy patch cannot ratchet the count down toward one. A window
-is skipped after any change so the next reading reflects it, and near the end of the
-transfer a tail guard stops adapting once the remaining bytes are less than about two
-windows' payload. Each change is logged with the current rate in MB/s, and the workers'
-per-file ticks repeat the last measured rate so the GUI's progress bar keeps showing it.
+`settings.json`, `download.rs` starts below the `ZWIFT_DOWNLOAD_JOBS` ceiling and probes
+upward one transfer at a time, keeping a transfer only if it bought enough throughput, so
+the count settles where the link saturates rather than being guessed up front. Growth is a
+*probe-and-commit*: it adds one transfer, skips one window so the new connection's slow
+start is absorbed (`PROBE_SETTLE`), then keeps the transfer only if the **mean** rate over
+`PROBE_WINDOWS` (3) windows after the probe rose by at least `MARGINAL_GAIN` (5%) over the
+**mean** over `BASELINE_WINDOWS` (3) windows before it. Both sides are a mean, measured over
+the same number of windows, because one window's rate swings with the plan's file-size mix
+even on a steady link and a single-window comparison reads that noise as signal — that is
+what made an earlier single-window version revert a probe that had actually bought the
+run's highest rate. A probe that bought less is given back and growth pauses for several
+windows (`SATURATED_COOLDOWN`) so the count cannot oscillate around the saturation point.
+Rates are per second over each window's real elapsed time, so an uneven or stalled window is
+compared on the same footing as any other.
+
+Reduction has three triggers, checked in this order each window:
+
+- **Transport pressure**, which `cdn.rs` reports even when a retried attempt later
+  succeeds: HTTP 429 costs half the pool, HTTP 503 or a reset connection costs a quarter
+  (`DECLINE_KEEP / 4`). The server has said to slow down, so no throughput reading matters.
+- **A latency spike**: the window's mean per-file time-to-first-byte above
+  `TTFB_SPIKE_FACTOR` (2×) its smoothed baseline, sustained for `LATENCY_RUN` (3)
+  consecutive windows, costs one transfer and pauses growth. A single busy window is
+  noise — the file-size mix alone swings the mean — so a run is required, and the
+  window a change opened is skipped because a freshly opened connection's first byte
+  is handshake-dominated. Once it acts, the elevated level is adopted as the new
+  normal, so a level shift the link caused cannot keep firing.
+- **A probe that bought less than `MARGINAL_GAIN`**: the link is saturated, so the transfer
+  is given back and growth stops for a while.
+
+Near the end of the transfer a tail guard stops adapting once the remaining bytes are less
+than about two windows' payload, because too little is left to keep the pool busy. Each
+change is logged with its reason and the current rate in MB/s, and the workers' per-file
+ticks repeat the last measured rate so the GUI's progress bar keeps showing it.
 
 Because a window's throughput depends on the sizes in flight, and `diff` returns the plan
 in manifest (path) order, which clusters similar-sized files together, `sync.rs` reorders
