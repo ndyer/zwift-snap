@@ -47,15 +47,16 @@ IMPORTANT: Read the `.kb/agents.md` file.
 - **bpauli/zwift-bootstrap** — A native Rust CLI (no sandbox). Its defining trait,
   shared with this snap, is installing/updating the game directly from the Zwift CDN
   and skipping the Windows launcher. Uses system wine-staging, bridges BLE through
-  BlueZ from the game's pairing screen, and is the only one with ANT+ support (via the
-  USB stick's serial device).
+  BlueZ from the game's pairing screen, and supports ANT+ (via the USB stick's serial
+  device).
 - **linuxundich/tretlager** — A Flatpak with a guided-setup assistant UI (PySide6 +
   Kirigami). Runs the official installer and handles .NET/WebView2 itself, signs in
   outside the launcher via Zwift's web page + desktop keyring, and ships a local BLE
   sensor bridge speaking Wahoo's Direct Connect (DIRCON) protocol.
 - **This snap** — Strict-confinement snap on `core26`, amd64 only. Rust GTK4 launcher.
   Fetches the game from the Zwift CDN manifest (never the installer), builds Wine from
-  the `ndyer/wine` fork with BLE support so the game talks to sensors directly.
+  the `ndyer/wine` fork with BLE support so the game talks to sensors directly, and
+  supports ANT+ via a `serial-port` plug against snapd's hotplug slot for the USB stick.
 
 ## Dimensions that matter
 
@@ -64,7 +65,9 @@ IMPORTANT: Read the `.kb/agents.md` file.
 - **Wine**: stock (netbrain, tretlager-built, zwift-bootstrap uses wine-staging) vs
   patched (this snap adds BLE GATT / Windows.Devices.Radios).
 - **Sensors**: Companion-app bridge, BlueZ-direct, an external BLE bridge (DIRCON), or
-  patched Wine. ANT+ exists only in zwift-bootstrap.
+  patched Wine. ANT+ exists in zwift-bootstrap and in this snap (via a `serial-port`
+  plug against snapd's hotplug slot for the USB stick); netbrain and tretlager do not
+  support it.
 - **Sandbox**: none (zwift-bootstrap), container (netbrain), Flatpak (tretlager), strict
   snap (this project — the tightest, and the reason for the `--devmode`/`snappy-debug`
   troubleshooting path).

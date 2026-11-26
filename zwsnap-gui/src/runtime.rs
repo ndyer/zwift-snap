@@ -418,6 +418,8 @@ mod tests {
         let shim = dir.join("snap/bin/ZwiftLauncher.exe");
         fs::create_dir_all(shim.parent().unwrap()).unwrap();
         fs::write(&shim, "shim").unwrap();
+        let ant_shim = dir.join("snap/bin/libusb0.dll");
+        fs::write(&ant_shim, "ant").unwrap();
         let tools = Tools {
             wine: dir.join("wine"),
             winepath: dir.join("winepath"),
@@ -493,6 +495,7 @@ mod tests {
             wine_prefix: &prefix,
             install_dir: &game,
             launcher_shim: &shim,
+            ant_shim: &ant_shim,
             wait_for_window: &window,
             tools: &tools,
             game_args: &[],

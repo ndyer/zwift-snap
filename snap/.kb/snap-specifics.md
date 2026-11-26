@@ -78,10 +78,12 @@ launcher just to order pruning: this invalidates Wine's build on every launcher 
 ## Windows binaries
 
 `zwsnap-helpers/` is cross-compiled by the `zwsnap-helpers`
-part (rustup's `x86_64-pc-windows-gnu` target, not snapcraft's Rust plugin, which
-builds for the host). The binaries land in `bin/` and are on `runtime-prune`'s
-must-exist list, so removing one there fails the build instead of shipping a snap
-whose launcher cannot start the game.
+part. The two Rust helpers use rustup's `x86_64-pc-windows-gnu` target (not
+snapcraft's Rust plugin, which builds for the host); `libusb0.dll` (the ANT+
+shim) is compiled from C with `x86_64-w64-mingw32-gcc` in the same part. The
+binaries land in `bin/` and are on `runtime-prune`'s must-exist list, so removing
+one there fails the build instead of shipping a snap whose launcher cannot start
+the game or bridge ANT+.
 
 ## Do not prune
 
@@ -201,6 +203,39 @@ The `zwift` app additionally declares the `bluetooth-control` plug (a snapd buil
 zwift:bluetooth-control`) and grants `CAP_NET_ADMIN`, which the launcher's `bt_tuning`
 module uses to re-tighten the LE connection interval of a freshly connected heart-rate belt
 (see `zwsnap-gui/.kb/bluetooth-connection-interval.md`).
+
+## Serial port (ANT+)
+
+The `zwift` app declares the `serial-port` plug (a snapd built-in,
+`deny-auto-connection: true`) on its own `plugs` list, *not* the shared `&plugs`
+anchor, for the same reason as `bluetooth-control`: only the launcher starts the
+game, and only the game reads the ANT+ USB stick. It is strictly opt-in.
+
+Unlike Bluetooth, the slot is **not declared in this snap** and cannot be: `serial-port`
+slots may only come from a gadget or, on classic Ubuntu, from snapd's hotplug subsystem.
+The ANT+ stick is a USB serial device (`/dev/ttyUSB*`, `/dev/ttyACM*`), which
+`serial_port.go`'s `HotplugDeviceDetected` recognises and turns into a host-provided slot
+whose name snapd derives from the stick's USB model. Hotplug is off by default, so the
+host must run `sudo snap set system experimental.hotplug=true` (classic; `core` on Ubuntu
+Core) once, then the stick must be plugged in and the slot connected:
+
+```shell
+snap interface serial-port          # list the slot snapd created for the stick
+sudo snap connect zwift:serial-port snapd:<slot-name>
+```
+
+The connection is remembered for the stick across replugging, but not across a snap
+reinstall. There is no gadget/static slot path, so hotplug is the only way the stick
+works. See `README.md` §ANT+ and `.kb/verification.md` for the manual-only test.
+
+Reaching the device is only half of it: Zwift's ANT+ stack is `ANT_DLL.dll`, built
+against the libusb-win32 0.1 API, which Wine has no driver for. The snap therefore
+ships `libusb0.dll` (see `zwsnap-helpers/.kb/windows-helpers.md`) that answers those
+`usb_*` calls over the stick's serial device and is copied next to `ZwiftApp.exe` at
+launch. It selects the device from `ANT_PORT` and defaults to
+`/dev/serial/by-id/usb-Dynastream_Innovations_*` ((see `shim/libusb0.c`)); set
+`ANT_PORT=/dev/ttyUSB0` to point it at a specific device when the stick is not
+Dynastream-manufactured.
 
 ## Screen inhibit
 

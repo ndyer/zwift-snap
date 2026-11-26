@@ -23,6 +23,9 @@ pub struct LaunchConfig<'a> {
     /// The snap's `ZwiftLauncher.exe`, copied into the install directory before
     /// every launch so a patcher or an older snap cannot leave a stale copy.
     pub launcher_shim: &'a Path,
+    /// The snap's `libusb0.dll` (the ANT+ shim), likewise copied next to
+    /// `ZwiftApp.exe` so `ANT_DLL.dll` finds it when the game starts.
+    pub ant_shim: &'a Path,
     pub wait_for_window: &'a Path,
     pub tools: &'a Tools,
     pub game_args: &'a [String],
@@ -158,22 +161,27 @@ fn stop_background_tasks(config: &LaunchConfig<'_>, logger: &Logger, keep_launch
     }
 }
 
-/// Copy the snap's `ZwiftLauncher.exe` into the install directory.
-///
-/// The game needs it there next to `ZwiftApp.exe`, and the launcher's
-/// `installed()` check requires it, so it is refreshed on every launch: a snap
-/// update then replaces the shim without a reinstall. Only the content decides,
-/// so an unchanged shim is not rewritten and the patcher has nothing to notice.
-pub fn ensure_launcher_shim(install_dir: &Path, shim: &Path) -> io::Result<()> {
-    let contents = std::fs::read(shim)
-        .map_err(|error| io::Error::other(format!("Unable to read {}: {error}", shim.display())))?;
-    let target = install_dir.join("ZwiftLauncher.exe");
+/// Copy a snap helper into the install directory, leaving an unchanged copy
+/// alone: only the content decides, so a snap update replaces a stale helper
+/// without a reinstall and the patcher's mtime checks see no change.
+fn ensure_shim(install_dir: &Path, source: &Path, target_name: &str) -> io::Result<()> {
+    let contents = std::fs::read(source).map_err(|error| {
+        io::Error::other(format!("Unable to read {}: {error}", source.display()))
+    })?;
+    let target = install_dir.join(target_name);
     if std::fs::read(&target).is_ok_and(|existing| existing == contents) {
         return Ok(());
     }
     std::fs::create_dir_all(install_dir)?;
     std::fs::write(&target, contents)
         .map_err(|error| io::Error::other(format!("Unable to write {}: {error}", target.display())))
+}
+
+/// Copy the snap's `ZwiftLauncher.exe` into the install directory. The game
+/// needs it there next to `ZwiftApp.exe`, and the launcher's `installed()` check
+/// requires it, so install also calls this and launch refreshes it.
+pub fn ensure_launcher_shim(install_dir: &Path, shim: &Path) -> io::Result<()> {
+    ensure_shim(install_dir, shim, "ZwiftLauncher.exe")
 }
 
 /// Read the OAuth token from the source and turn it into a `--token=<json>`
@@ -212,6 +220,7 @@ pub fn start(
     let token_args = token_arguments(config.token)?;
     let directory = wine_directory(config, logger)?;
     ensure_launcher_shim(config.install_dir, config.launcher_shim)?;
+    ensure_shim(config.install_dir, config.ant_shim, "libusb0.dll")?;
     progress(95, "Starting Zwift");
     logger.info("Starting Zwift using wine");
     let mut game = wine(config);
@@ -278,6 +287,8 @@ mod tests {
         dir: PathBuf,
         /// The snap's helper, the source of the copy in the install directory.
         shim: PathBuf,
+        /// The snap's ANT+ shim, likewise copied into the install directory.
+        ant: PathBuf,
         tools: Tools,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
@@ -344,9 +355,12 @@ esac
             let shim = dir.join("bin/ZwiftLauncher.exe");
             fs::create_dir_all(shim.parent().unwrap()).unwrap();
             fs::write(&shim, "shim").unwrap();
+            let ant = dir.join("bin/libusb0.dll");
+            fs::write(&ant, "ant").unwrap();
             Self {
                 dir,
                 shim,
+                ant,
                 tools,
                 _lock: lock,
             }
@@ -357,6 +371,7 @@ esac
                 wine_prefix: &self.dir,
                 install_dir: &self.dir,
                 launcher_shim: &self.shim,
+                ant_shim: &self.ant,
                 wait_for_window: &self.dir,
                 tools: &self.tools,
                 game_args: &[],
@@ -429,6 +444,17 @@ esac
             fs::metadata(&installed).unwrap().modified().unwrap(),
             modified
         );
+    }
+
+    #[test]
+    fn the_ant_shim_is_copied_into_the_install_directory() {
+        let fixture = Fixture::new("ant-copy");
+        let installed = fixture.dir.join("libusb0.dll");
+        fs::write(&installed, "stale").unwrap();
+        // A successful run is all this test needs: the ant shim is copied by
+        // start() next to ZwiftApp.exe, before the game is launched.
+        fixture.run(false).0.unwrap();
+        assert_eq!(fs::read_to_string(&installed).unwrap(), "ant");
     }
 
     #[test]

@@ -1,14 +1,28 @@
 name: zwift-snap-sdk
 version: "0.1"
-summary: Desktop display access for the zwift snap workshop
+summary: Desktop display and host-device access for the zwift snap workshop
 description: |
-  In-project SDK that carries the workshop desktop interface plug. Connected to the
-  system:desktop slot it gives processes in this workshop access to the host display,
-  which the yarf smoke test (tests/smoke.sh) uses to render its Mir compositor on the
-  host desktop when one is available. Without a connected display the smoke test runs
-  its compositor on a headless virtual output instead.
+  In-project SDK that carries the workshop desktop and gpu interface plugs, plus an
+  ant-radio custom-device plug for passing a host ANT+ USB serial stick through. The
+  desktop plug, connected to the system:desktop slot, gives processes in this workshop
+  access to the host display, which the yarf smoke test (tests/smoke.sh) uses to render
+  its Mir compositor on the host desktop when one is available. Without a connected
+  display the smoke test runs its compositor on a headless virtual output instead.
 plugs:
   desktop:
     interface: desktop
   gpu:
     interface: gpu
+  # ANT+ USB serial stick. The custom-device interface matches host devices by their
+  # kernel subsystem; a stick enumerates as /dev/ttyUSB* (or /dev/ttyACM*) in the `tty`
+  # subsystem, which is what the snap's libusb0.dll shim opens. custom-device never
+  # auto-connects (security), so after launch/refresh run:
+  #   workshop connect zwift-snap/zwift-snap-sdk:ant-radio :custom-device
+  # Narrowed to the Dynastream ANTUSB2 Stick (idVendor 0fcf, idProduct 1008) that the
+  # shim's usb_init pins by default. Ids are hex strings, no "0x" prefix, and are matched
+  # against the host's ID_VENDOR_ID / ID_MODEL_ID udev properties.
+  ant-radio:
+    interface: custom-device
+    subsystem: tty
+    vendorid: "0fcf"
+    productid: "1008"

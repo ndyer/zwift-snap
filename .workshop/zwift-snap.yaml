@@ -17,6 +17,10 @@ connections:
   # The desktop interface is not connected automatically at launch, spell it out here.
   # References use the bare SDK name: the project- prefix of the sdks entry only
   # selects the source and is not part of the name.
+  # The ant-radio custom-device plug (see .workshop/zwift-snap-sdk/sdk.yaml) is
+  # deliberately absent: custom-device never auto-connects, and a connections: entry
+  # cannot override that. Connect it manually after launch/refresh:
+  #   workshop connect zwift-snap/zwift-snap-sdk:ant-radio :custom-device
   - plug: zwift-snap-sdk:desktop
     slot: system:desktop
   - plug: zwift-snap-sdk:gpu

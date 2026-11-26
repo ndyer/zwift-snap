@@ -32,6 +32,32 @@ which uses more power, so it is never connected automatically:
 sudo snap connect zwift:bluetooth-control
 ```
 
+### ANT+
+
+An ANT+ USB stick (e.g. a Garmin or Wahoo stick) shows up as a serial device
+(`/dev/ttyUSB0`) and reaches the game through snapd's `serial-port` hotplug feature.
+Hotplug is disabled by default, so enable it once, plug in the stick, then connect the
+slot snapd publishes for it:
+
+```shell
+sudo snap set system experimental.hotplug=true
+# plug in the ANT+ stick, then list the slot snapd created for it
+snap interface serial-port
+sudo snap connect zwift:serial-port snapd:<slot-name>
+```
+
+Use the slot name printed by `snap interface serial-port` (snapd derives it from the
+stick's USB model) in the **snap connect** command. The connection is remembered for the
+stick, but re-run the connect step after reinstalling the snap.
+
+Reaching `/dev/ttyUSB0` is only half the bridge: Zwift talks ANT+ through its own
+`ANT_DLL.dll`, which expects the Windows libusb-win32 USB API. The snap ships a
+`libusb0.dll` shim (ported from `zwift-bootstrap`, MIT/Apache-2.0) that implements
+that API over the stick's serial device and is copied next to the game at launch. It
+defaults to `/dev/serial/by-id/usb-Dynastream_Innovations_*`; for a stick it does not
+match, point it at the device explicitly via a launcher environment override:
+`ANT_PORT=/dev/ttyUSB0`.
+
 ## Troubleshooting
 
 The snap uses strict confinement. To debug confinement problems, install the local snap
@@ -67,7 +93,7 @@ current.
 | Game files | Pre-installed image | Zwift CDN | Official `ZwiftSetup.exe` | Zwift CDN |
 | Windows launcher + .NET/WebView2 | Yes | No | Yes | No |
 | Bluetooth sensors | Companion app | BlueZ (pairing screen) | Built-in BLE bridge (DIRCON) or Companion app | Patched Wine BLE |
-| ANT+ | No | Yes | No | No |
+| ANT+ | No | Yes | No | Yes |
 | Sign-in | In-game | In-game | Web sign-in + keyring | Launcher + per-account sessions |
 | Sandbox | Container | None | Flatpak | Strict snap |
 

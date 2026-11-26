@@ -26,6 +26,7 @@ impl Fixture {
         // The snap's own ZwiftLauncher.exe (the zwsnap-helpers part), which the
         // launcher copies into the game directory before starting it.
         fs::write(fixture.root.join("bin/ZwiftLauncher.exe"), "shim").unwrap();
+        fs::write(fixture.root.join("bin/libusb0.dll"), "ant shim").unwrap();
         let game = fixture
             .root
             .join("common/.wine/drive_c/Program Files (x86)/Zwift");

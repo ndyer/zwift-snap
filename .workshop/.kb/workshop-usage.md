@@ -69,6 +69,27 @@ because the `project-` prefix only selects the source and is not part of the nam
 The workshop desktop and gpu interfaces are NOT auto-connected, the `connections:`
 entries are required.
 
+## ANT+ USB stick passthrough
+
+The `ant-radio` plug (in `.workshop/zwift-snap-sdk/sdk.yaml`) is a `custom-device`
+plug matching the `tty` kernel subsystem and narrowed to one USB identity
+(`vendorid "0fcf"`, `productid "1008"` = Dynastream ANTUSB2 Stick), so only that
+stick — enumerating as `/dev/ttyUSB*` or `/dev/ttyACM*` — shows up inside the workshop
+for the snap's `libusb0.dll` shim to open. A different ANT+ stick (FTDI `0403`, Silabs
+`10c4`) won't match; widen or change the filter in `sdk.yaml` to support it.
+`custom-device` never auto-connects (security), so after `workshop launch` or an applied
+`workshop refresh` that added or changed the plug, wire it by hand:
+
+    workshop connect zwift-snap/zwift-snap-sdk:ant-radio :custom-device
+
+While connected, matching hosts devices are hot-pluggable: a stick added or removed on
+the host appears/disappears inside the workshop. The workshop name is required here
+because this is a multi-workshop project. Confirm the device is visible with
+`ls -l /dev/tty*` inside the workshop, then drive the game's ANT+ stack through it
+(`ANT_PORT=/dev/ttyUSB0` for a non-Dynastream stick; see README.md). A manual
+connection survives `workshop refresh` unless the plug's filter attributes change.
+`workshop restore` (or `workshop disconnect`) drops it.
+
 ## ccache
 
 `setup-base` installs ccache and, in `/usr/local/lib/ccache`, symlinks named after

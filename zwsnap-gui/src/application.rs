@@ -206,6 +206,7 @@ pub fn run(
     let tools = Tools::default();
     let wineboot = PathBuf::from("wineboot");
     let launcher_shim = config.snap.join("bin/ZwiftLauncher.exe");
+    let ant_shim = config.snap.join("bin/libusb0.dll");
     // In-flight transfers live on the same filesystem as the game, so a verified
     // file can be renamed into place instead of copied.
     let staging = config.common.join("download");
@@ -232,6 +233,7 @@ pub fn run(
             wine_prefix: &config.prefix,
             install_dir: &install_dir,
             launcher_shim: &launcher_shim,
+            ant_shim: &ant_shim,
             wait_for_window: &window,
             tools: &tools,
             game_args: args,

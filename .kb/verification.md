@@ -30,6 +30,14 @@ the unit tests in `bt_tuning.rs` (`cargo test`), plus — on real BLE hardware �
 `sudo snap connect zwift:bluetooth-control` and a `btmon` capture showing the override land
 after BlueZ's 0x2a04 update.
 
+The ANT+ `serial-port` path (see `snap/.kb/snap-specifics.md` §Serial port) likewise has no
+runnable end-to-end check here: hotplug slots need a real USB serial stick and the host
+snapd's `experimental.hotplug` flag, neither of which the workshop provides. Verify it on a
+desktop host — `sudo snap set system experimental.hotplug=true`, plug in the stick, confirm a
+slot appears under `snap interface serial-port`, `sudo snap connect zwift:serial-port
+snapd:<slot>`, and that `/dev/ttyUSB0` opens from the game. It is implicit in the
+`serial-port` interface unit tests in snapd, not in this repo.
+
 ## Screensaver inhibitor
 
 The inhibitor's D-Bus marshalling is checked by `workshop run -- inhibit`, which fakes
