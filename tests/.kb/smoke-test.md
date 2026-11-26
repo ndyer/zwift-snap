@@ -18,6 +18,11 @@ Settings control by its text label (the launcher runs with `--text-ui`, so the
 controls carry text rather than icons), test 2 requires the Zwift SIGN UP screen
 through OCR. The first run on a fresh wine prefix installs wine prerequisites
 and downloads Zwift (tens of minutes), later runs are quick. No login is performed.
+Before starting, the harness clears leftover state that would change what the suite
+sees: the wine prefix's cached `prefs.xml`, and the launcher's remembered accounts
+(`accounts.json` plus `accounts/<id>/`). The latter matters because the launcher opens
+its `?registration=true` page (the SIGN UP screen) only when no account is
+remembered, so a rider logged in by hand would otherwise send it to the plain page.
 Extra arguments to the `smoke` action are passed to yarf (for example,
 `--variant light`). The harness installs `yarf` and `mir-test-tools` and connects
 `zwift:gpu-2604` to `mesa-2604` when needed.

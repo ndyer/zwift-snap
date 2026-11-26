@@ -33,7 +33,9 @@ readonly MIR_START_TIMEOUT=60
 # $HOME and the suite is staged there.
 readonly YARF_SUITE_DIR="${HOME}/zwift-smoke-suite"
 readonly YARF_OUT_DIR="${HOME}/zwift-smoke-out"
-readonly ZWIFT_LOG="${HOME}/snap/zwift/common/zwift.log"
+# the launcher's common directory: the wine prefix, the account store and the log
+readonly ZWIFT_COMMON="${SNAP_USER_COMMON:-${HOME}/snap/zwift/common}"
+readonly ZWIFT_LOG="${ZWIFT_COMMON}/zwift.log"
 
 # the download cache helper, sourced for its DL_CACHE_* variables and functions
 # shellcheck source=tests/tools/dl-cache/dl-cache.sh
@@ -126,9 +128,20 @@ clear_stale_socket() {
 
 # clear_prefs: reset cached Zwift login details (prefs.xml) from previous runs
 clear_prefs() {
-    local prefs_file="${SNAP_USER_COMMON:-$HOME/snap/zwift}/.wine/drive_c/users/workshop/AppData/Local/Zwift/prefs.xml"
+    local prefs_file="${ZWIFT_COMMON}/.wine/drive_c/users/workshop/AppData/Local/Zwift/prefs.xml"
     rm -f "${prefs_file}" 2>/dev/null || true
     echo "smoke: cleared cached prefs from previous run"
+}
+
+# clear_logins: purge the launcher's remembered accounts so a run never picks up a
+# rider who logged in by hand. Each account owns a WebKit cookie jar under
+# accounts/<id>/ (the remembered login itself) recorded in accounts.json.
+# Removing both empties the store, which makes the launcher load its
+# "?registration=true" WebView page (the one the suite's SIGN UP match relies on)
+# instead of the plain page it opens when an account is remembered.
+clear_logins() {
+    rm -rf "${ZWIFT_COMMON}/accounts" "${ZWIFT_COMMON}/accounts.json" 2>/dev/null || true
+    echo "smoke: purged remembered logins from ${ZWIFT_COMMON}"
 }
 
 # prepare_install FRESH: put the cached game tree into the wine prefix so the
@@ -242,6 +255,7 @@ main() {
     ensure_snaps
     clear_stale_socket
     clear_prefs
+    clear_logins
     prepare_install "${fresh}"
     stage_suite
 
