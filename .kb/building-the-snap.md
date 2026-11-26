@@ -49,12 +49,20 @@ run from the prime tree:
 
 1. Refresh the prime tree (rebuilds only changed parts, e.g. the launcher):
    `sudo snapcraft prime --destructive-mode`
-2. Mount it: `sudo snap try /project/prime`. `snap list zwift` then shows the
-   revision marked `try` (mounted from `/project/prime`).
+2. Mount it: `sudo snap try /project/prime`. `snap list zwift` then shows `try` in
+   the Notes column (mounted from `/project/prime`).
 3. Run it: `snap run zwift`. Check `~/snap/zwift/common/zwift.log` for the launcher's log.
 
 Notes:
 
+- A local revision number (`x<n>` in `snap list`'s Rev column) does **not** mean
+  `try`. Both a `snap try` mount and a snap installed from a `.snap` file with
+  `--dangerous` get one, because neither has a Store revision; here `snap list
+  zwift` shows `x1` for a plain `--dangerous` install, whose files live in the
+  squashfs mounted at `/snap/zwift/x1`. The discriminator is the **Notes column**:
+  a `try` mount shows `try` there, a `--dangerous` install leaves it empty. `snap
+  info zwift` reports the same thing, so check that (not the `x1`) to tell a try
+  mount from an ordinary local install.
 - Run `snap try` only after a successful `snapcraft prime`. An empty or missing
   prime tree fails with a missing `snap.yaml`.
 - Running the dev build directly (`cargo run`) outside the snap fails with
