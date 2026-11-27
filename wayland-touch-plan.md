@@ -79,9 +79,13 @@ Implemented and committed on the wine fork branch **`zwift-wayland-touch`**
 (commit `0d90c2d`), based on `a898c65` (the tip of `zwift-radios-rebased`, which
 already includes the axis-scroll → wheel change).
 
-- Not yet built or verified.
-- The `WS_TOUCH` field reset in `wayland_touch.c` is deliberately field-by-field
+- **Built and manually verified working** (2026-11-27): the snap built from this
+  branch was installed and touch input drove the game as expected.
+- The contact-state reset in `wayland_touch.c` is deliberately field-by-field
   (not `memset`): the mutex must be preserved and `primary_id` must be `-1`.
+- Not yet pushed. Edge/CI clones `ndyer/wine` at `zwift-radios-rebased`
+  (`fetch-wine.sh`), so this branch is invisible to CI until it is pushed and
+  lands on that branch (or `ZWIFT_WINE_REF` is overridden).
 
 ## Testing
 
