@@ -6,6 +6,7 @@ pub mod auth;
 pub mod bt_tuning;
 pub mod cancel;
 pub mod cdn;
+pub mod crash;
 pub mod display;
 pub mod download;
 pub mod gpu_test;

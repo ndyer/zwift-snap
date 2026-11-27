@@ -6,6 +6,9 @@ use std::path::PathBuf;
 use zwsnap_gui::settings::Settings;
 
 fn main() -> ExitCode {
+    // A fatal signal would otherwise leave no trace inside a snap (see the
+    // module docs); print a backtrace to stderr if the launcher crashes.
+    zwsnap_gui::crash::install();
     // The launcher's own switches come before the optional "--" separator, everything
     // after it is handed to the game.
     let args: Vec<String> = std::env::args().skip(1).collect();
