@@ -81,19 +81,32 @@ pub fn copy_realm_cookies(from: &webkit6::NetworkSession, to: webkit6::NetworkSe
     let Some(source) = from.cookie_manager() else {
         return;
     };
+    // Hold a reference to the source session for the whole (asynchronous) read.
+    let from = from.clone();
     let cancellable = gtk::gio::Cancellable::new();
     // The cookies are copied as-is: `soup::Cookie` carries its own expiry, which
-    // `add_cookie` preserves when WebKit writes the persistent store. `to` is
-    // owned by the callback, keeping the session (and its persistent store) alive
-    // until WebKit has written the cookies.
+    // `add_cookie` preserves when WebKit writes the persistent store.
     source.cookies(COOKIE_URI, Some(&cancellable), move |result| {
-        if let Ok(cookies) = result {
-            if let Some(target) = to.cookie_manager() {
-                for cookie in cookies {
-                    target.add_cookie(&cookie, gtk::gio::Cancellable::NONE, |_| {});
-                }
-            }
+        let Ok(cookies) = result else {
+            return;
+        };
+        let Some(target) = to.cookie_manager() else {
+            return;
+        };
+        for cookie in cookies {
+            // Each `add_cookie` is asynchronous. The session owns the cookie
+            // store its cookie task runs against, so it must outlive the write.
+            // It must also not be finalised from *inside* that task's completion
+            // callback (WebKit then tears the task down while dispatching it, a
+            // use-after-free), so the last reference is released on a later
+            // main-loop iteration.
+            let to = to.clone();
+            target.add_cookie(&cookie, gtk::gio::Cancellable::NONE, move |_| {
+                glib::idle_add_local_once(move || drop(to));
+            });
         }
+        // The read is complete; release the source on a later iteration too.
+        glib::idle_add_local_once(move || drop(from));
     });
 }
 

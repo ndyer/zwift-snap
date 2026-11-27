@@ -565,7 +565,15 @@ fn check_remember_me_cookie(
     id: &str,
     logger: Option<Arc<Logger>>,
 ) {
-    let Some(cookie_manager) = webview.network_session().and_then(|s| s.cookie_manager()) else {
+    // Hold the session as well as its cookie manager: WebKit tears the cookie
+    // store down with the session, and the read below is asynchronous, so the
+    // cookie manager must not outlive the session it belongs to.
+    let Some(session) = webview.network_session() else {
+        eprintln!("Warning: unable to read the session cookies; keeping the login");
+        apply_remember(webview, store, id, true, logger.as_ref());
+        return;
+    };
+    let Some(cookie_manager) = session.cookie_manager() else {
         eprintln!("Warning: unable to read the session cookies; keeping the login");
         apply_remember(webview, store, id, true, logger.as_ref());
         return;
@@ -575,6 +583,11 @@ fn check_remember_me_cookie(
     let store = store.clone();
     let id = id.to_owned();
     cookie_manager.cookies(session::COOKIE_URI, Some(&cancellable), move |result| {
+        // Release the session on a later main-loop iteration: dropping it here,
+        // inside the cookie task's own completion, finalises it (and the cookie
+        // store the task runs against) while WebKit is still dispatching that
+        // task, which is a use-after-free.
+        glib::idle_add_local_once(move || drop(session));
         let remember = match result {
             Ok(cookies) => cookies
                 .into_iter()
